@@ -57,8 +57,13 @@ func TestSystemdProcessUsesFixedNonInteractiveLifecycleCommands(t *testing.T) {
 		}
 		last := executor.commands[len(executor.commands)-1]
 		expected := recordedCommand{
-			name:      "sudo",
-			arguments: []string{"-n", "systemctl", operation.action, managedServiceName},
+			name: sudoPath,
+			arguments: []string{
+				"-n",
+				systemctlPath,
+				operation.action,
+				managedServiceName,
+			},
 		}
 		if !reflect.DeepEqual(last, expected) {
 			t.Fatalf("%s command = %#v, want %#v", operation.action, last, expected)

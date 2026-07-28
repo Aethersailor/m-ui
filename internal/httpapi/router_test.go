@@ -34,6 +34,19 @@ func TestHealth(t *testing.T) {
 	if got := response.Header().Get("Content-Type"); got != "application/json" {
 		t.Fatalf("Content-Type = %q, want application/json", got)
 	}
+	expectedHeaders := map[string]string{
+		"Cross-Origin-Opener-Policy":   "same-origin",
+		"Cross-Origin-Resource-Policy": "same-origin",
+		"Permissions-Policy":           "camera=(), geolocation=(), microphone=()",
+		"Referrer-Policy":              "no-referrer",
+		"X-Content-Type-Options":       "nosniff",
+		"X-Frame-Options":              "DENY",
+	}
+	for name, expected := range expectedHeaders {
+		if actual := response.Header().Get(name); actual != expected {
+			t.Errorf("%s = %q, want %q", name, actual, expected)
+		}
+	}
 	var body healthResponse
 	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
 		t.Fatalf("decode response: %v", err)

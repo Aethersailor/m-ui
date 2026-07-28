@@ -2,6 +2,9 @@
 
 set -eu
 
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+
 purge=0
 assume_yes=0
 

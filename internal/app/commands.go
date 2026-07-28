@@ -242,7 +242,7 @@ func Doctor(
 			run: func() error {
 				command := exec.CommandContext(
 					ctx,
-					"systemctl",
+					"/usr/bin/systemctl",
 					"show",
 					"--property=LoadState",
 					"--value",
@@ -263,7 +263,7 @@ func Doctor(
 			run: func() error {
 				command := exec.CommandContext(
 					ctx,
-					"sudo",
+					"/usr/bin/sudo",
 					"-n",
 					"-l",
 					"/usr/bin/systemctl",

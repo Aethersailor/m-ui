@@ -2,6 +2,9 @@
 
 set -eu
 
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+
 M_UI_REPOSITORY="${M_UI_REPOSITORY:-Aethersailor/m-ui}"
 M_UI_VERSION="${M_UI_VERSION:-}"
 M_UI_ARCHIVE="${M_UI_ARCHIVE:-}"

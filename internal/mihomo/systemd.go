@@ -11,7 +11,12 @@ import (
 	"github.com/Aethersailor/m-ui/internal/redact"
 )
 
-const managedServiceName = "mihomo.service"
+const (
+	managedServiceName = "mihomo.service"
+	systemctlPath      = "/usr/bin/systemctl"
+	journalctlPath     = "/usr/bin/journalctl"
+	sudoPath           = "/usr/bin/sudo"
+)
 
 type SystemdProcess struct {
 	executor commandExecutor
@@ -29,7 +34,7 @@ func (process *SystemdProcess) IsActive(ctx context.Context) (bool, error) {
 		ctx,
 		5*time.Second,
 		defaultOutputLimit,
-		"systemctl",
+		systemctlPath,
 		"is-active",
 		"--quiet",
 		managedServiceName,
@@ -67,7 +72,7 @@ func (process *SystemdProcess) RecentLogs(ctx context.Context, limit int) ([]Log
 		ctx,
 		5*time.Second,
 		256*1024,
-		"journalctl",
+		journalctlPath,
 		"-u",
 		managedServiceName,
 		"-n",
@@ -94,9 +99,9 @@ func (process *SystemdProcess) lifecycle(ctx context.Context, action string) err
 		ctx,
 		20*time.Second,
 		defaultOutputLimit,
-		"sudo",
+		sudoPath,
 		"-n",
-		"systemctl",
+		systemctlPath,
 		action,
 		managedServiceName,
 	)

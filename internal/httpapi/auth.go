@@ -401,7 +401,14 @@ func securityHeaders(next http.Handler) http.Handler {
 				"img-src 'self' data:; connect-src 'self'; object-src 'none'; "+
 				"base-uri 'none'; frame-ancestors 'none'; form-action 'self'",
 		)
+		response.Header().Set("Cross-Origin-Opener-Policy", "same-origin")
+		response.Header().Set("Cross-Origin-Resource-Policy", "same-origin")
+		response.Header().Set(
+			"Permissions-Policy",
+			"camera=(), geolocation=(), microphone=()",
+		)
 		response.Header().Set("X-Content-Type-Options", "nosniff")
+		response.Header().Set("X-Frame-Options", "DENY")
 		response.Header().Set("Referrer-Policy", "no-referrer")
 		next.ServeHTTP(response, request)
 	})
