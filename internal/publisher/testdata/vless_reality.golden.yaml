@@ -1,0 +1,45 @@
+mode: rule
+log-level: info
+ipv6: true
+external-controller: 127.0.0.1:9090
+secret: controller-test-secret
+listeners:
+  - name: alpha
+    type: vless
+    listen: 0.0.0.0
+    port: 443
+    users:
+      - username: alice
+        uuid: 2c8dd707-c97c-400a-b343-86c9df5504bb
+        flow: xtls-rprx-vision
+      - username: zed
+        uuid: 3503f9ac-2f35-44f1-83ae-fd4f27d36a70
+        flow: xtls-rprx-vision
+    udp: true
+    packet-encoding: xudp
+    reality-config:
+      dest: www.example.com:443
+      private-key: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+      short-id:
+        - 0123456789abcdef
+      server-names:
+        - www.example.com
+  - name: zeta
+    type: vless
+    listen: '::'
+    port: 8443
+    users:
+      - username: zed
+        uuid: aa8e5cf6-2ca0-4fd6-873c-9971b28a76b5
+        flow: xtls-rprx-vision
+    udp: false
+    packet-encoding: xudp
+    reality-config:
+      dest: zeta.example.com:443
+      private-key: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+      short-id:
+        - fedcba9876543210
+      server-names:
+        - zeta.example.com
+rules:
+  - MATCH,DIRECT
