@@ -15,8 +15,10 @@ import (
 const DefaultPath = "/etc/m-ui/config.toml"
 
 type Config struct {
-	Server  Server  `toml:"server"`
-	Logging Logging `toml:"logging"`
+	Server   Server   `toml:"server"`
+	Logging  Logging  `toml:"logging"`
+	Storage  Storage  `toml:"storage"`
+	Security Security `toml:"security"`
 }
 
 type Server struct {
@@ -31,6 +33,16 @@ type Logging struct {
 	Format string `toml:"format"`
 }
 
+type Storage struct {
+	DatabasePath  string `toml:"database_path"`
+	MasterKeyPath string `toml:"master_key_path"`
+}
+
+type Security struct {
+	SessionTTL   string `toml:"session_ttl"`
+	CookieSecure bool   `toml:"cookie_secure"`
+}
+
 func Default() Config {
 	return Config{
 		Server: Server{
@@ -42,6 +54,13 @@ func Default() Config {
 		Logging: Logging{
 			Level:  "info",
 			Format: "text",
+		},
+		Storage: Storage{
+			DatabasePath:  "/var/lib/m-ui/m-ui.db",
+			MasterKeyPath: "/var/lib/m-ui/master.key",
+		},
+		Security: Security{
+			SessionTTL: "12h",
 		},
 	}
 }
@@ -96,6 +115,15 @@ func (c Config) Validate() error {
 	default:
 		return fmt.Errorf("logging.format must be text or json")
 	}
+	if strings.TrimSpace(c.Storage.DatabasePath) == "" {
+		return fmt.Errorf("storage.database_path is required")
+	}
+	if strings.TrimSpace(c.Storage.MasterKeyPath) == "" {
+		return fmt.Errorf("storage.master_key_path is required")
+	}
+	if _, err := c.SessionTTL(); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -109,6 +137,17 @@ func (c Config) ReadHeaderTimeout() (time.Duration, error) {
 
 func (c Config) ShutdownTimeout() (time.Duration, error) {
 	return positiveDuration("server.shutdown_timeout", c.Server.ShutdownTimeout)
+}
+
+func (c Config) SessionTTL() (time.Duration, error) {
+	duration, err := positiveDuration("security.session_ttl", c.Security.SessionTTL)
+	if err != nil {
+		return 0, err
+	}
+	if duration > 24*time.Hour {
+		return 0, fmt.Errorf("security.session_ttl must not exceed 24h")
+	}
+	return duration, nil
 }
 
 func positiveDuration(field, value string) (time.Duration, error) {

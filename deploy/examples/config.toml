@@ -7,3 +7,11 @@ shutdown_timeout = "10s"
 [logging]
 level = "info"
 format = "text"
+
+[storage]
+database_path = "/var/lib/m-ui/m-ui.db"
+master_key_path = "/var/lib/m-ui/master.key"
+
+[security]
+session_ttl = "12h"
+cookie_secure = false

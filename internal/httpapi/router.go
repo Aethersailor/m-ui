@@ -9,13 +9,16 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 
+	"github.com/Aethersailor/m-ui/internal/auth"
 	"github.com/Aethersailor/m-ui/internal/httpapi/ui"
 	"github.com/Aethersailor/m-ui/internal/version"
 )
 
 type Options struct {
-	Logger *slog.Logger
-	Build  version.Info
+	Logger       *slog.Logger
+	Build        version.Info
+	Auth         *auth.Service
+	CookieSecure bool
 }
 
 type healthResponse struct {
@@ -34,6 +37,7 @@ func New(options Options) http.Handler {
 	router.Use(middleware.RequestID)
 	router.Use(recoverer(logger))
 	router.Use(accessLog(logger))
+	router.Use(securityHeaders)
 
 	health := func(response http.ResponseWriter, _ *http.Request) {
 		writeJSON(response, http.StatusOK, healthResponse{
@@ -45,6 +49,12 @@ func New(options Options) http.Handler {
 	router.Get("/healthz", health)
 	router.Route("/api/v1", func(api chi.Router) {
 		api.Get("/health", health)
+		if options.Auth != nil {
+			mountAuthRoutes(api, authHandler{
+				service:      options.Auth,
+				cookieSecure: options.CookieSecure,
+			})
+		}
 		api.NotFound(func(response http.ResponseWriter, request *http.Request) {
 			writeJSON(response, http.StatusNotFound, map[string]any{
 				"error": map[string]any{

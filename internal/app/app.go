@@ -10,8 +10,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Aethersailor/m-ui/internal/auth"
 	"github.com/Aethersailor/m-ui/internal/config"
+	muicrypto "github.com/Aethersailor/m-ui/internal/crypto"
 	"github.com/Aethersailor/m-ui/internal/httpapi"
+	"github.com/Aethersailor/m-ui/internal/store"
 	"github.com/Aethersailor/m-ui/internal/version"
 )
 
@@ -30,10 +33,45 @@ func Run(ctx context.Context, cfg config.Config, build version.Info) error {
 	if err != nil {
 		return err
 	}
+	sessionTTL, err := cfg.SessionTTL()
+	if err != nil {
+		return err
+	}
+
+	masterKey, err := muicrypto.LoadMasterKey(cfg.Storage.MasterKeyPath)
+	if err != nil {
+		return fmt.Errorf("load master key: %w", err)
+	}
+	if _, err := muicrypto.NewSealer(masterKey); err != nil {
+		return fmt.Errorf("initialize field encryption: %w", err)
+	}
+	database, err := store.Open(ctx, cfg.Storage.DatabasePath)
+	if err != nil {
+		return fmt.Errorf("open store: %w", err)
+	}
+	defer func() {
+		if closeErr := database.Close(); closeErr != nil {
+			logger.Error("close store", "error", closeErr)
+		}
+	}()
+	authService, err := auth.NewService(database, auth.Options{
+		SessionTTL: sessionTTL,
+	})
+	if err != nil {
+		return fmt.Errorf("initialize authentication: %w", err)
+	}
+	if err := database.DeleteExpiredSessions(ctx, time.Now().UTC()); err != nil {
+		return fmt.Errorf("delete expired sessions: %w", err)
+	}
 
 	server := &http.Server{
-		Addr:              cfg.Address(),
-		Handler:           httpapi.New(httpapi.Options{Logger: logger, Build: build}),
+		Addr: cfg.Address(),
+		Handler: httpapi.New(httpapi.Options{
+			Logger:       logger,
+			Build:        build,
+			Auth:         authService,
+			CookieSecure: cfg.Security.CookieSecure,
+		}),
 		ReadHeaderTimeout: readHeaderTimeout,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      30 * time.Second,

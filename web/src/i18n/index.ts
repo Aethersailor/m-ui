@@ -13,6 +13,15 @@ const messages = {
       failed: '无法连接后端',
       version: '版本',
     },
+    auth: {
+      signIn: '管理员登录',
+      username: '用户名',
+      password: '密码',
+      submit: '登录',
+      signOut: '退出登录',
+      failed: '用户名或密码错误。',
+      rateLimited: '尝试次数过多，请稍后再试。',
+    },
     scope: {
       title: 'v0.1 范围',
       description: '单机 VLESS + TCP + REALITY + XTLS Vision 管理',
@@ -29,6 +38,15 @@ const messages = {
       loading: 'Connecting to backend…',
       failed: 'Backend unavailable',
       version: 'Version',
+    },
+    auth: {
+      signIn: 'Administrator sign in',
+      username: 'Username',
+      password: 'Password',
+      submit: 'Sign in',
+      signOut: 'Sign out',
+      failed: 'The username or password is incorrect.',
+      rateLimited: 'Too many attempts. Try again later.',
     },
     scope: {
       title: 'v0.1 scope',

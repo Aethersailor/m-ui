@@ -32,8 +32,37 @@ body,
   margin-bottom: 28px;
 }
 
+.app-header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 24px;
+}
+
 .title {
   margin: 0 0 8px;
   font-size: clamp(2.4rem, 8vw, 4.5rem);
   letter-spacing: -0.06em;
+}
+
+.login-content {
+  width: min(420px, calc(100% - 32px));
+  margin: 0 auto;
+  padding: clamp(40px, 12vh, 120px) 0;
+}
+
+.login-brand {
+  margin-bottom: 24px;
+  text-align: center;
+}
+
+.login-alert {
+  margin-bottom: 18px;
+}
+
+@media (max-width: 640px) {
+  .app-header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
 }

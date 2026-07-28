@@ -27,6 +27,7 @@ export default [
     },
     rules: {
       ...tseslint.configs.recommended.rules,
+      'no-undef': 'off',
       '@typescript-eslint/consistent-type-imports': 'error',
     },
   },
@@ -51,6 +52,7 @@ export default [
       ...tseslint.configs.recommended.rules,
       ...pluginVue.configs.base.rules,
       ...pluginVue.configs['flat/recommended'][0].rules,
+      'no-undef': 'off',
       '@typescript-eslint/consistent-type-imports': 'error',
       'vue/multi-word-component-names': 'off',
     },

@@ -2,6 +2,7 @@
 import {
   NCard,
   NCode,
+  NButton,
   NLayout,
   NLayoutContent,
   NSpace,
@@ -11,10 +12,14 @@ import {
 } from 'naive-ui'
 import { computed, onBeforeUnmount, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { useRouter } from 'vue-router'
 
+import { useAuthStore } from '@/stores/auth'
 import { useHealthStore } from '@/stores/health'
 
 const { t } = useI18n()
+const router = useRouter()
+const auth = useAuthStore()
 const health = useHealthStore()
 const controller = new AbortController()
 
@@ -29,14 +34,25 @@ onMounted(() => {
 onBeforeUnmount(() => {
   controller.abort()
 })
+
+async function signOut() {
+  await auth.logout()
+  await router.replace({ name: 'login' })
+}
 </script>
 
 <template>
   <NLayout class="page">
     <NLayoutContent class="content">
-      <header class="hero">
-        <NText tag="h1" class="title">{{ t('product.name') }}</NText>
-        <NText depth="3">{{ t('product.description') }}</NText>
+      <header class="hero app-header">
+        <div>
+          <NText tag="h1" class="title">{{ t('product.name') }}</NText>
+          <NText depth="3">{{ t('product.description') }}</NText>
+        </div>
+        <NSpace align="center">
+          <NText depth="3">{{ auth.admin?.username }}</NText>
+          <NButton secondary @click="signOut">{{ t('auth.signOut') }}</NButton>
+        </NSpace>
       </header>
 
       <NSpace vertical :size="18">
