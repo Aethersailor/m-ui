@@ -38,28 +38,58 @@ func NewCLI(binaryPath string) (*CLI, error) {
 }
 
 func (cli *CLI) GenerateRealityKeypair(ctx context.Context) (domain.Keypair, error) {
-	commandContext, cancel := context.WithTimeout(ctx, cli.timeout)
-	defer cancel()
-
-	var output limitedBuffer
-	output.limit = cli.outputLimit
-	command := exec.CommandContext(commandContext, cli.binaryPath, "generate", "reality-keypair")
-	command.Stdout = &output
-	command.Stderr = &output
-	if err := command.Run(); err != nil {
-		if errors.Is(commandContext.Err(), context.DeadlineExceeded) {
-			return domain.Keypair{}, errors.New("Mihomo REALITY key generation timed out")
-		}
-		if errors.Is(output.err, errOutputLimit) {
-			return domain.Keypair{}, errors.New("Mihomo REALITY key generation output is too large")
-		}
-		return domain.Keypair{}, errors.New("Mihomo REALITY key generation failed")
+	output, err := cli.run(ctx, cli.timeout, "generate", "reality-keypair")
+	if err != nil {
+		return domain.Keypair{}, fmt.Errorf("generate Mihomo REALITY keypair: %w", err)
 	}
-	keypair, err := parseRealityKeypair(output.Bytes())
+	keypair, err := parseRealityKeypair(output)
 	if err != nil {
 		return domain.Keypair{}, err
 	}
 	return keypair, nil
+}
+
+func (cli *CLI) Validate(ctx context.Context, configPath string) error {
+	if strings.TrimSpace(configPath) == "" {
+		return errors.New("Mihomo configuration path is required")
+	}
+	if _, err := cli.run(ctx, 20*time.Second, "-t", "-f", configPath); err != nil {
+		return fmt.Errorf("validate Mihomo configuration: %w", err)
+	}
+	return nil
+}
+
+func (cli *CLI) Version(ctx context.Context) (string, error) {
+	output, err := cli.run(ctx, cli.timeout, "-v")
+	if err != nil {
+		return "", fmt.Errorf("read Mihomo version: %w", err)
+	}
+	version := strings.TrimSpace(string(output))
+	if version == "" {
+		return "", errors.New("Mihomo version output is empty")
+	}
+	return version, nil
+}
+
+func (cli *CLI) run(ctx context.Context, timeout time.Duration, arguments ...string) ([]byte, error) {
+	commandContext, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	var output limitedBuffer
+	output.limit = cli.outputLimit
+	command := exec.CommandContext(commandContext, cli.binaryPath, arguments...)
+	command.Stdout = &output
+	command.Stderr = &output
+	if err := command.Run(); err != nil {
+		if errors.Is(commandContext.Err(), context.DeadlineExceeded) {
+			return nil, errors.New("Mihomo command timed out")
+		}
+		if errors.Is(output.err, errOutputLimit) {
+			return nil, errors.New("Mihomo command output is too large")
+		}
+		return nil, errors.New("Mihomo command failed")
+	}
+	return output.Bytes(), nil
 }
 
 func parseRealityKeypair(output []byte) (domain.Keypair, error) {

@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -24,6 +23,7 @@ func TestGeneratedServerAndClientConfigurationsWithRealMihomo(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
+	t.Setenv("USERPROFILE", t.TempDir())
 	cli, err := mihomo.NewCLI(binary)
 	if err != nil {
 		t.Fatalf("NewCLI() error = %v", err)
@@ -31,6 +31,10 @@ func TestGeneratedServerAndClientConfigurationsWithRealMihomo(t *testing.T) {
 	keypair, err := cli.GenerateRealityKeypair(ctx)
 	if err != nil {
 		t.Fatalf("GenerateRealityKeypair() error = %v", err)
+	}
+	version, err := cli.Version(ctx)
+	if err != nil || version == "" {
+		t.Fatalf("Version() = %q, %v", version, err)
 	}
 
 	listenerID := "f8bb1f0d-a396-42fd-a221-c382c8ef9526"
@@ -78,15 +82,15 @@ func TestGeneratedServerAndClientConfigurationsWithRealMihomo(t *testing.T) {
 		state.ControllerSecret,
 		state.Listeners[0].Users[0].UUID,
 	}
-	validateWithMihomo(t, ctx, binary, directory, "server.yaml", serverYAML, sensitiveValues)
+	validateWithMihomo(t, ctx, cli, directory, "server.yaml", serverYAML, sensitiveValues)
 	clientYAML := []byte(share.ClientYAML + "rules:\n  - MATCH,DIRECT\n")
-	validateWithMihomo(t, ctx, binary, directory, "client.yaml", clientYAML, sensitiveValues)
+	validateWithMihomo(t, ctx, cli, directory, "client.yaml", clientYAML, sensitiveValues)
 }
 
 func validateWithMihomo(
 	t *testing.T,
 	ctx context.Context,
-	binary string,
+	cli *mihomo.CLI,
 	directory string,
 	name string,
 	content []byte,
@@ -97,10 +101,12 @@ func validateWithMihomo(
 	if err := os.WriteFile(path, content, 0o600); err != nil {
 		t.Fatalf("write %s: %v", name, err)
 	}
-	command := exec.CommandContext(ctx, binary, "-t", "-d", directory, "-f", path)
-	output, err := command.CombinedOutput()
-	if err != nil {
-		t.Fatalf("Mihomo rejected %s: %v\n%s", name, err, redactedOutput(output, sensitiveValues))
+	if err := cli.Validate(ctx, path); err != nil {
+		t.Fatalf(
+			"Mihomo rejected %s: %s",
+			name,
+			redactedOutput([]byte(err.Error()), sensitiveValues),
+		)
 	}
 }
 
