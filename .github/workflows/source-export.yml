@@ -1,0 +1,35 @@
+name: Temporary source export
+
+on:
+  pull_request:
+    branches:
+      - master
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out complete repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Create Git bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin '+refs/heads/*:refs/remotes/origin/*'
+          git bundle create m-ui.bundle --all
+          git bundle verify m-ui.bundle
+
+      - name: Upload Git bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: m-ui-source-bundle
+          path: m-ui.bundle
+          if-no-files-found: error
+          retention-days: 1
