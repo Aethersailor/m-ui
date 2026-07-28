@@ -106,3 +106,44 @@ jobs:
           if-no-files-found: error
           compression-level: 0
           retention-days: 1
+
+  action-lock:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Resolve selected action tags to immutable commits
+        shell: bash
+        run: |
+          set -euo pipefail
+          resolve() {
+            repository="$1"
+            tag="$2"
+            sha="$(git ls-remote "https://github.com/${repository}.git" "refs/tags/${tag}^{}" | awk 'NR == 1 {print $1}')"
+            if [ -z "$sha" ]; then
+              sha="$(git ls-remote "https://github.com/${repository}.git" "refs/tags/${tag}" | awk 'NR == 1 {print $1}')"
+            fi
+            test -n "$sha"
+            printf '%s %s %s\n' "$repository" "$tag" "$sha" >> action-lock.txt
+          }
+          resolve actions/checkout v5
+          resolve actions/setup-go v6
+          resolve actions/setup-node v5
+          resolve actions/upload-artifact v4
+          resolve actions/download-artifact v5
+          resolve actions/attest-build-provenance v3
+          resolve docker/setup-qemu-action v3
+          resolve docker/setup-buildx-action v3
+          resolve docker/login-action v3
+          resolve docker/metadata-action v6
+          resolve docker/build-push-action v6
+          resolve golangci/golangci-lint-action v9
+          resolve anchore/sbom-action v0
+          cat action-lock.txt
+
+      - name: Upload action lock
+        uses: actions/upload-artifact@v4
+        with:
+          name: m-ui-action-lock
+          path: action-lock.txt
+          if-no-files-found: error
+          retention-days: 1
