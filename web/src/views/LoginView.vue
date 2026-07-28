@@ -6,8 +6,7 @@ import {
   NForm,
   NFormItem,
   NInput,
-  NLayout,
-  NLayoutContent,
+  NSelect,
   NText,
 } from 'naive-ui'
 import { computed, ref } from 'vue'
@@ -15,25 +14,35 @@ import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 
 import { useAuthStore } from '@/stores/auth'
+import { useThemeStore } from '@/stores/theme'
 
-const { t } = useI18n()
+const { locale, t } = useI18n()
 const route = useRoute()
 const router = useRouter()
 const auth = useAuthStore()
+const theme = useThemeStore()
 const username = ref('')
 const password = ref('')
+const attempted = ref(false)
+const languageOptions = [
+  { label: '简体中文', value: 'zh-CN' },
+  { label: 'English', value: 'en-US' },
+]
 
 const errorMessage = computed(() => {
-  if (!auth.errorCode) {
+  if (!attempted.value || !auth.errorCode) {
     return ''
   }
   if (auth.errorCode === 'LOGIN_RATE_LIMITED') {
-    return t('auth.rateLimited')
+    return t('auth.rateLimited', {
+      seconds: auth.errorRetryAfter || 1,
+    })
   }
   return t('auth.failed')
 })
 
 async function submit() {
+  attempted.value = true
   try {
     await auth.login(username.value, password.value)
     password.value = ''
@@ -41,26 +50,53 @@ async function submit() {
       typeof route.query.redirect === 'string' ? route.query.redirect : '/'
     await router.replace(redirect)
   } catch {
-    // The store exposes only a non-differentiating error code to this view.
+    // The store exposes only a non-differentiating safe message.
   }
 }
 </script>
 
 <template>
-  <NLayout class="page">
-    <NLayoutContent class="login-content">
+  <main class="login-page">
+    <div class="login-orb login-orb-one" />
+    <div class="login-orb login-orb-two" />
+    <div class="login-toolbar">
+      <NSelect
+        :value="locale"
+        :options="languageOptions"
+        size="small"
+        class="language-select"
+        @update:value="locale = $event"
+      />
+      <NButton
+        quaternary
+        circle
+        :aria-label="t('theme.toggle')"
+        @click="theme.cycle"
+      >
+        {{ theme.dark ? '☀' : '◐' }}
+      </NButton>
+    </div>
+
+    <section class="login-shell">
       <header class="login-brand">
-        <NText tag="h1" class="title">{{ t('product.name') }}</NText>
-        <NText depth="3">{{ t('product.description') }}</NText>
+        <span class="brand-mark login-mark">m</span>
+        <NText tag="h1" class="login-title">{{ t('product.name') }}</NText>
+        <NText depth="3" class="login-description">
+          {{ t('product.description') }}
+        </NText>
       </header>
-      <NCard :title="t('auth.signIn')" embedded>
+
+      <NCard :bordered="false" class="login-card">
+        <NText tag="h2" class="login-card-title">
+          {{ t('auth.signIn') }}
+        </NText>
         <NAlert
           v-if="errorMessage"
           type="error"
           :title="errorMessage"
           class="login-alert"
         />
-        <NForm @submit.prevent="submit">
+        <NForm size="large" @submit.prevent="submit">
           <NFormItem :label="t('auth.username')">
             <NInput
               v-model:value="username"
@@ -82,13 +118,18 @@ async function submit() {
             type="primary"
             attr-type="submit"
             block
+            size="large"
             :loading="auth.loading"
             :disabled="!username || !password"
           >
             {{ t('auth.submit') }}
           </NButton>
         </NForm>
+        <NText depth="3" class="secure-note">
+          <span aria-hidden="true">⌁</span>
+          {{ t('auth.secureNote') }}
+        </NText>
       </NCard>
-    </NLayoutContent>
-  </NLayout>
+    </section>
+  </main>
 </template>

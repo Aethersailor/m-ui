@@ -23,18 +23,21 @@ export class APIError extends Error {
   readonly status: number
   readonly code: string
   readonly requestID: string
+  readonly retryAfter: number
 
   constructor(
     status: number,
     code: string,
     message: string,
     requestID = '',
+    retryAfter = 0,
   ) {
     super(message)
     this.name = 'APIError'
     this.status = status
     this.code = code
     this.requestID = requestID
+    this.retryAfter = retryAfter
   }
 }
 
@@ -63,6 +66,7 @@ export async function apiRequest<T>(
       payload?.error?.code ?? 'REQUEST_FAILED',
       payload?.error?.message ?? `Request failed with status ${response.status}`,
       payload?.error?.request_id,
+      Number.parseInt(response.headers.get('Retry-After') ?? '0', 10) || 0,
     )
   }
   return payload as T

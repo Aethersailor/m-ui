@@ -1,0 +1,373 @@
+import { apiRequest } from './client'
+
+export interface User {
+  id: string
+  listener_id: string
+  name: string
+  enabled: boolean
+  uuid: string
+  expires_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface Listener {
+  id: string
+  name: string
+  enabled: boolean
+  listen_address: string
+  listen_port: number
+  public_host_override: string
+  public_port_override: number | null
+  server_name: string
+  reality_dest: string
+  reality_public_key: string
+  reality_private_key_set: boolean
+  short_id: string
+  udp_enabled: boolean
+  users: User[]
+  created_at: string
+  updated_at: string
+}
+
+export interface ListenerInput {
+  name: string
+  listen_address: string
+  listen_port: number
+  public_host_override: string
+  public_port_override: number | null
+  server_name: string
+  reality_dest: string
+  reality_private_key?: string
+  reality_public_key?: string
+  short_id?: string
+  udp_enabled: boolean
+}
+
+export interface UserInput {
+  name: string
+  uuid?: string
+  expires_at: string | null
+}
+
+export interface Revision {
+  id: string
+  revision_number: number
+  sha256: string
+  status: 'pending' | 'active' | 'failed' | 'rolled_back'
+  reason: string
+  actor_admin_id: string
+  error_message: string
+  created_at: string
+  activated_at: string | null
+}
+
+export interface RuntimeStatus {
+  active: boolean
+  degraded: boolean
+  degraded_reason: string
+  version: {
+    meta: boolean
+    version: string
+  }
+  traffic: {
+    up: number
+    down: number
+    upTotal: number
+    downTotal: number
+  }
+  memory: {
+    inuse: number
+    oslimit: number
+  }
+  connection_count: number
+  download_total: number
+  upload_total: number
+  observed_at: string
+}
+
+export interface RuntimeLog {
+  timestamp: string
+  message: string
+}
+
+export interface Settings {
+  panel_title: string
+  ui_language: 'en-US' | 'zh-CN'
+  public_host: string
+}
+
+export interface AuditEntry {
+  id: string
+  actor_admin_id: string
+  action: string
+  resource_type: string
+  resource_id: string
+  result: 'success' | 'failure'
+  summary: string
+  created_at: string
+}
+
+export interface Share {
+  uri: string
+  qr_content: string
+  client_yaml: string
+}
+
+export interface ConfigPreview {
+  yaml: string
+  sha256: string
+  revealed: boolean
+}
+
+export interface GeneratedKeypair {
+  private_key: string
+  public_key: string
+  short_id: string
+}
+
+function mutation<T>(
+  path: string,
+  csrfToken: string,
+  method = 'POST',
+  body?: unknown,
+): Promise<T> {
+  const headers: Record<string, string> = {
+    'X-CSRF-Token': csrfToken,
+  }
+  if (body !== undefined) {
+    headers['Content-Type'] = 'application/json'
+  }
+  return apiRequest<T>(path, {
+    method,
+    headers,
+    body: body === undefined ? undefined : JSON.stringify(body),
+  })
+}
+
+export async function listListeners(): Promise<Listener[]> {
+  return (await apiRequest<{ listeners: Listener[] }>('/api/v1/listeners'))
+    .listeners
+}
+
+export function getListener(id: string): Promise<Listener> {
+  return apiRequest<Listener>(`/api/v1/listeners/${encodeURIComponent(id)}`)
+}
+
+export async function createListener(
+  csrfToken: string,
+  input: ListenerInput,
+): Promise<Listener> {
+  return (
+    await mutation<{ listener: Listener }>(
+      '/api/v1/listeners',
+      csrfToken,
+      'POST',
+      input,
+    )
+  ).listener
+}
+
+export async function updateListener(
+  csrfToken: string,
+  id: string,
+  input: ListenerInput,
+): Promise<Listener> {
+  return (
+    await mutation<{ listener: Listener }>(
+      `/api/v1/listeners/${encodeURIComponent(id)}`,
+      csrfToken,
+      'PUT',
+      input,
+    )
+  ).listener
+}
+
+export function deleteListener(
+  csrfToken: string,
+  id: string,
+): Promise<void> {
+  return mutation<void>(
+    `/api/v1/listeners/${encodeURIComponent(id)}`,
+    csrfToken,
+    'DELETE',
+  )
+}
+
+export async function setListenerEnabled(
+  csrfToken: string,
+  id: string,
+  enabled: boolean,
+): Promise<Listener> {
+  return (
+    await mutation<{ listener: Listener }>(
+      `/api/v1/listeners/${encodeURIComponent(id)}/${enabled ? 'enable' : 'disable'}`,
+      csrfToken,
+    )
+  ).listener
+}
+
+export function generateRealityKeypair(
+  csrfToken: string,
+): Promise<GeneratedKeypair> {
+  return mutation<GeneratedKeypair>(
+    '/api/v1/listeners/generate-reality-keypair',
+    csrfToken,
+  )
+}
+
+export async function createUser(
+  csrfToken: string,
+  listenerID: string,
+  input: UserInput,
+): Promise<User> {
+  return (
+    await mutation<{ user: User }>(
+      `/api/v1/listeners/${encodeURIComponent(listenerID)}/users`,
+      csrfToken,
+      'POST',
+      input,
+    )
+  ).user
+}
+
+export async function updateUser(
+  csrfToken: string,
+  listenerID: string,
+  userID: string,
+  input: UserInput,
+): Promise<User> {
+  return (
+    await mutation<{ user: User }>(
+      `/api/v1/listeners/${encodeURIComponent(listenerID)}/users/${encodeURIComponent(userID)}`,
+      csrfToken,
+      'PUT',
+      input,
+    )
+  ).user
+}
+
+export function deleteUser(
+  csrfToken: string,
+  listenerID: string,
+  userID: string,
+): Promise<void> {
+  return mutation<void>(
+    `/api/v1/listeners/${encodeURIComponent(listenerID)}/users/${encodeURIComponent(userID)}`,
+    csrfToken,
+    'DELETE',
+  )
+}
+
+export async function setUserEnabled(
+  csrfToken: string,
+  listenerID: string,
+  userID: string,
+  enabled: boolean,
+): Promise<User> {
+  return (
+    await mutation<{ user: User }>(
+      `/api/v1/listeners/${encodeURIComponent(listenerID)}/users/${encodeURIComponent(userID)}/${enabled ? 'enable' : 'disable'}`,
+      csrfToken,
+    )
+  ).user
+}
+
+export function getShare(
+  listenerID: string,
+  userID: string,
+): Promise<Share> {
+  return apiRequest<Share>(
+    `/api/v1/listeners/${encodeURIComponent(listenerID)}/users/${encodeURIComponent(userID)}/share`,
+  )
+}
+
+export function getRuntimeStatus(): Promise<RuntimeStatus> {
+  return apiRequest<RuntimeStatus>('/api/v1/runtime/status')
+}
+
+export async function getRuntimeLogs(limit = 200): Promise<RuntimeLog[]> {
+  return (
+    await apiRequest<{ logs: RuntimeLog[] }>(
+      `/api/v1/runtime/logs?limit=${limit}`,
+    )
+  ).logs
+}
+
+export function runRuntimeAction(
+  csrfToken: string,
+  action: 'start' | 'stop' | 'restart' | 'reload',
+): Promise<void> {
+  return mutation<void>(`/api/v1/runtime/${action}`, csrfToken)
+}
+
+export function getConfigPreview(
+  reveal = false,
+): Promise<ConfigPreview> {
+  return apiRequest<ConfigPreview>(
+    `/api/v1/config/preview${reveal ? '?reveal=true' : ''}`,
+    reveal
+      ? { headers: { 'X-Confirm-Sensitive': 'reveal-current-config' } }
+      : {},
+  )
+}
+
+export function validateConfig(
+  csrfToken: string,
+): Promise<{ valid: boolean; sha256: string }> {
+  return mutation('/api/v1/config/validate', csrfToken)
+}
+
+export async function listRevisions(): Promise<Revision[]> {
+  return (
+    await apiRequest<{ revisions: Revision[] }>('/api/v1/config/revisions')
+  ).revisions
+}
+
+export async function rollbackRevision(
+  csrfToken: string,
+  revisionID: string,
+): Promise<Revision> {
+  return (
+    await mutation<{ revision: Revision }>(
+      `/api/v1/config/revisions/${encodeURIComponent(revisionID)}/rollback`,
+      csrfToken,
+    )
+  ).revision
+}
+
+export function getSettings(): Promise<Settings> {
+  return apiRequest<Settings>('/api/v1/settings')
+}
+
+export async function updateSettings(
+  csrfToken: string,
+  input: Settings,
+): Promise<Settings> {
+  return (
+    await mutation<{ settings: Settings }>(
+      '/api/v1/settings',
+      csrfToken,
+      'PUT',
+      input,
+    )
+  ).settings
+}
+
+export function testCore(
+  csrfToken: string,
+): Promise<{ version: string }> {
+  return mutation('/api/v1/settings/test-core', csrfToken)
+}
+
+export function testController(
+  csrfToken: string,
+): Promise<{ version: RuntimeStatus['version'] }> {
+  return mutation('/api/v1/settings/test-controller', csrfToken)
+}
+
+export async function listAuditEntries(): Promise<AuditEntry[]> {
+  return (
+    await apiRequest<{ entries: AuditEntry[] }>('/api/v1/audit-logs')
+  ).entries
+}

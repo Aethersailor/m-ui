@@ -41,6 +41,24 @@ export function logout(csrfToken: string): Promise<void> {
   })
 }
 
+export function changePassword(
+  csrfToken: string,
+  currentPassword: string,
+  newPassword: string,
+): Promise<void> {
+  return apiRequest<void>('/api/v1/auth/change-password', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-CSRF-Token': csrfToken,
+    },
+    body: JSON.stringify({
+      current_password: currentPassword,
+      new_password: newPassword,
+    }),
+  })
+}
+
 export function readCSRFCookie(): string {
   const prefix = 'm_ui_csrf='
   for (const value of document.cookie.split(';')) {

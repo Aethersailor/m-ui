@@ -16,6 +16,7 @@ export const useAuthStore = defineStore('auth', {
     initialized: false,
     loading: false,
     errorCode: '',
+    errorRetryAfter: 0,
   }),
   getters: {
     authenticated: (state) => state.admin !== null,
@@ -42,6 +43,7 @@ export const useAuthStore = defineStore('auth', {
     async login(username: string, password: string) {
       this.loading = true
       this.errorCode = ''
+      this.errorRetryAfter = 0
       try {
         const response = await loginRequest(username, password)
         this.admin = response.admin
@@ -52,6 +54,8 @@ export const useAuthStore = defineStore('auth', {
         this.csrfToken = ''
         this.errorCode =
           error instanceof APIError ? error.code : 'AUTHENTICATION_FAILED'
+        this.errorRetryAfter =
+          error instanceof APIError ? error.retryAfter : 0
         throw error
       } finally {
         this.loading = false

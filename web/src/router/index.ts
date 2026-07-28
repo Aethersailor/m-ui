@@ -2,7 +2,6 @@ import { createRouter, createWebHistory } from 'vue-router'
 
 import { pinia } from '@/stores'
 import { useAuthStore } from '@/stores/auth'
-import HomeView from '@/views/HomeView.vue'
 import LoginView from '@/views/LoginView.vue'
 
 export const router = createRouter({
@@ -10,8 +9,37 @@ export const router = createRouter({
   routes: [
     {
       path: '/',
-      name: 'home',
-      component: HomeView,
+      redirect: { name: 'dashboard' },
+    },
+    {
+      path: '/dashboard',
+      name: 'dashboard',
+      component: () => import('@/views/HomeView.vue'),
+      meta: { section: 'dashboard' },
+    },
+    {
+      path: '/listeners',
+      name: 'listeners',
+      component: () => import('@/views/ListenersView.vue'),
+      meta: { section: 'listeners' },
+    },
+    {
+      path: '/listeners/:id',
+      name: 'listener-detail',
+      component: () => import('@/views/ListenerDetailView.vue'),
+      meta: { section: 'listeners' },
+    },
+    {
+      path: '/config',
+      name: 'config',
+      component: () => import('@/views/ConfigView.vue'),
+      meta: { section: 'config' },
+    },
+    {
+      path: '/system',
+      name: 'system',
+      component: () => import('@/views/SystemView.vue'),
+      meta: { section: 'system' },
     },
     {
       path: '/login',
@@ -29,7 +57,7 @@ router.beforeEach(async (to) => {
     return { name: 'login', query: { redirect: to.fullPath } }
   }
   if (to.name === 'login' && auth.authenticated) {
-    return { name: 'home' }
+    return { name: 'dashboard' }
   }
   return true
 })
