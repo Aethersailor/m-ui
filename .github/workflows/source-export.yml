@@ -71,3 +71,38 @@ jobs:
           if-no-files-found: error
           compression-level: 0
           retention-days: 1
+
+  nodekit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 24.18.0
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install exact frontend dependencies
+        run: npm --prefix web ci
+
+      - name: Package offline Node development kit
+        shell: bash
+        run: |
+          set -euo pipefail
+          node_root="$(dirname "$(dirname "$(command -v node)")")"
+          mkdir -p nodekit
+          tar -C "$(dirname "$node_root")" -czf nodekit/node-root.tar.gz "$(basename "$node_root")"
+          tar -C web -czf nodekit/node-modules.tar.gz node_modules
+
+      - name: Upload offline Node development kit
+        uses: actions/upload-artifact@v4
+        with:
+          name: m-ui-node-devkit
+          path: nodekit
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
