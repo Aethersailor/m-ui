@@ -1,0 +1,8 @@
+module github.com/Aethersailor/m-ui
+
+go 1.26.5
+
+require (
+	github.com/go-chi/chi/v5 v5.3.1
+	github.com/pelletier/go-toml/v2 v2.4.3
+)

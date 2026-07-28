@@ -1,0 +1,24 @@
+# Local caches and dependencies
+.cache/
+web/node_modules/
+
+# Generated frontend and application builds
+internal/httpapi/ui/dist/
+dist/
+coverage/
+*.cover
+*.out
+*.exe
+
+# Local runtime state
+*.db
+*.db-shm
+*.db-wal
+*.log
+master.key
+
+# Editor and operating system files
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

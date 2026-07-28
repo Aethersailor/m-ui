@@ -1,0 +1,38 @@
+{
+  "name": "m-ui-web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc -b && vite build",
+    "lint": "eslint . --max-warnings=0",
+    "typecheck": "vue-tsc -b",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "naive-ui": "^2.44.1",
+    "pinia": "^4.0.2",
+    "vue": "^3.5.40",
+    "vue-i18n": "^11.4.8",
+    "vue-router": "^5.2.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^26.1.2",
+    "@vitejs/plugin-vue": "^6.0.8",
+    "eslint": "^10.8.0",
+    "eslint-plugin-vue": "^10.10.0",
+    "globals": "^17.8.0",
+    "jsdom": "^30.0.0",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.65.0",
+    "vite": "^8.1.5",
+    "vitest": "^4.1.10",
+    "vue-eslint-parser": "^10.4.1",
+    "vue-tsc": "^3.3.8"
+  }
+}

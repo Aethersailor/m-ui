@@ -1,0 +1,58 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: 1.26.5
+          cache: true
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 24.18.0
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install frontend dependencies
+        run: npm --prefix web ci
+
+      - name: Test backend
+        run: go test ./...
+
+      - name: Vet backend
+        run: go vet ./...
+
+      - name: Lint frontend
+        run: npm --prefix web run lint
+
+      - name: Type-check frontend
+        run: npm --prefix web run typecheck
+
+      - name: Test frontend
+        run: npm --prefix web run test
+
+      - name: Build release-shaped binary
+        run: make build
+
+      - name: Verify Linux amd64 target
+        env:
+          GOOS: linux
+          GOARCH: amd64
+          CGO_ENABLED: "0"
+        run: go build -tags webembed -trimpath -o dist/m-ui-linux-amd64 ./cmd/m-ui
