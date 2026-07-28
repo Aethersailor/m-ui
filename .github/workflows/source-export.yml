@@ -33,3 +33,41 @@ jobs:
           path: m-ui.bundle
           if-no-files-found: error
           retention-days: 1
+
+  devkit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: 1.26.5
+          cache: false
+
+      - name: Download Go modules
+        shell: bash
+        run: |
+          set -euo pipefail
+          go mod download
+
+      - name: Package offline Go development kit
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p devkit
+          printf '%s\n' "$(go env GOROOT)" > devkit/goroot-path.txt
+          printf '%s\n' "$(go env GOMODCACHE)" > devkit/gomodcache-path.txt
+          tar -C "$(dirname "$(go env GOROOT)")" -czf devkit/goroot.tar.gz "$(basename "$(go env GOROOT)")"
+          tar -C "$(dirname "$(go env GOMODCACHE)")" -czf devkit/gomodcache.tar.gz "$(basename "$(go env GOMODCACHE)")"
+
+      - name: Upload offline Go development kit
+        uses: actions/upload-artifact@v4
+        with:
+          name: m-ui-go-devkit
+          path: devkit
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
