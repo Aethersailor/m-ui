@@ -54,6 +54,21 @@ type loginResponse struct {
 	ExpiresAt time.Time     `json:"expires_at"`
 }
 
+type meResponse struct {
+	Admin adminResponse `json:"admin"`
+}
+
+type apiErrorResponse struct {
+	Error apiError `json:"error"`
+}
+
+type apiError struct {
+	Code      string   `json:"code"`
+	Message   string   `json:"message"`
+	RequestID string   `json:"request_id"`
+	Details   struct{} `json:"details"`
+}
+
 func mountAuthRoutes(router chi.Router, handler authHandler) {
 	router.Route("/auth", func(authRouter chi.Router) {
 		authRouter.Post("/login", handler.login)
@@ -139,8 +154,8 @@ func (h authHandler) login(response http.ResponseWriter, request *http.Request) 
 func (h authHandler) me(response http.ResponseWriter, request *http.Request) {
 	current := currentAuthSession(request.Context())
 	response.Header().Set("Cache-Control", "no-store")
-	writeJSON(response, http.StatusOK, map[string]any{
-		"admin": adminResponse{
+	writeJSON(response, http.StatusOK, meResponse{
+		Admin: adminResponse{
 			ID:       current.Admin.ID,
 			Username: current.Admin.Username,
 		},
@@ -356,12 +371,16 @@ func writeAPIError(
 	message string,
 ) {
 	response.Header().Set("Cache-Control", "no-store")
-	writeJSON(response, status, map[string]any{
-		"error": map[string]any{
-			"code":       code,
-			"message":    message,
-			"request_id": middleware.GetReqID(request.Context()),
-			"details":    map[string]any{},
+	requestID := ""
+	if request != nil {
+		requestID = middleware.GetReqID(request.Context())
+	}
+	writeJSON(response, status, apiErrorResponse{
+		Error: apiError{
+			Code:      code,
+			Message:   message,
+			RequestID: requestID,
+			Details:   struct{}{},
 		},
 	})
 }

@@ -61,3 +61,20 @@ func TestLoadRequiresExplicitFile(t *testing.T) {
 		t.Fatal("Load() error = nil, want missing file error")
 	}
 }
+
+func TestConfiguredPathWithinSupportsLinuxConfigurationOnAnyHost(t *testing.T) {
+	t.Parallel()
+
+	if !configuredPathWithin(
+		"/etc/mihomo",
+		"/etc/mihomo/config.yaml",
+	) {
+		t.Fatal("Linux child path was rejected")
+	}
+	if configuredPathWithin(
+		"/etc/mihomo",
+		"/etc/mihomo-other/config.yaml",
+	) {
+		t.Fatal("Linux sibling path was accepted")
+	}
+}

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"time"
@@ -19,6 +20,8 @@ type Config struct {
 	Logging  Logging  `toml:"logging"`
 	Storage  Storage  `toml:"storage"`
 	Security Security `toml:"security"`
+	Panel    Panel    `toml:"panel"`
+	Mihomo   Mihomo   `toml:"mihomo"`
 }
 
 type Server struct {
@@ -43,6 +46,22 @@ type Security struct {
 	CookieSecure bool   `toml:"cookie_secure"`
 }
 
+type Panel struct {
+	Title      string `toml:"title"`
+	UILanguage string `toml:"ui_language"`
+	PublicHost string `toml:"public_host"`
+}
+
+type Mihomo struct {
+	BinaryPath        string `toml:"binary_path"`
+	ConfigDirectory   string `toml:"config_directory"`
+	ConfigPath        string `toml:"config_path"`
+	ControllerAddress string `toml:"controller_address"`
+	ServiceName       string `toml:"service_name"`
+	RevisionDirectory string `toml:"revision_directory"`
+	HistoryLimit      int    `toml:"history_limit"`
+}
+
 func Default() Config {
 	return Config{
 		Server: Server{
@@ -61,6 +80,20 @@ func Default() Config {
 		},
 		Security: Security{
 			SessionTTL: "12h",
+		},
+		Panel: Panel{
+			Title:      "m-ui",
+			UILanguage: "en-US",
+			PublicHost: "localhost",
+		},
+		Mihomo: Mihomo{
+			BinaryPath:        "/usr/local/bin/mihomo",
+			ConfigDirectory:   "/etc/mihomo",
+			ConfigPath:        "/etc/mihomo/config.yaml",
+			ControllerAddress: "127.0.0.1:9090",
+			ServiceName:       "mihomo.service",
+			RevisionDirectory: "/var/lib/m-ui/revisions",
+			HistoryLimit:      20,
 		},
 	}
 }
@@ -124,6 +157,51 @@ func (c Config) Validate() error {
 	if _, err := c.SessionTTL(); err != nil {
 		return err
 	}
+	if strings.TrimSpace(c.Panel.Title) == "" || len(c.Panel.Title) > 80 {
+		return fmt.Errorf("panel.title must contain between 1 and 80 bytes")
+	}
+	switch c.Panel.UILanguage {
+	case "en-US", "zh-CN":
+	default:
+		return fmt.Errorf("panel.ui_language must be en-US or zh-CN")
+	}
+	if err := validateHost(c.Panel.PublicHost); err != nil {
+		return fmt.Errorf("panel.public_host: %w", err)
+	}
+	for _, item := range []struct {
+		field string
+		value string
+	}{
+		{"mihomo.binary_path", c.Mihomo.BinaryPath},
+		{"mihomo.config_directory", c.Mihomo.ConfigDirectory},
+		{"mihomo.config_path", c.Mihomo.ConfigPath},
+		{"mihomo.revision_directory", c.Mihomo.RevisionDirectory},
+	} {
+		if !isConfiguredPathAbsolute(item.value) {
+			return fmt.Errorf("%s must be an absolute path", item.field)
+		}
+	}
+	if !configuredPathWithin(c.Mihomo.ConfigDirectory, c.Mihomo.ConfigPath) {
+		return fmt.Errorf("mihomo.config_path must be inside mihomo.config_directory")
+	}
+	host, port, err := net.SplitHostPort(c.Mihomo.ControllerAddress)
+	if err != nil {
+		return fmt.Errorf("mihomo.controller_address must use host:port syntax")
+	}
+	controllerIP := net.ParseIP(host)
+	if !strings.EqualFold(host, "localhost") &&
+		(controllerIP == nil || !controllerIP.IsLoopback()) {
+		return fmt.Errorf("mihomo.controller_address must use a loopback host")
+	}
+	if parsedPort, err := net.LookupPort("tcp", port); err != nil || parsedPort == 0 {
+		return fmt.Errorf("mihomo.controller_address port is invalid")
+	}
+	if c.Mihomo.ServiceName != "mihomo.service" {
+		return fmt.Errorf("mihomo.service_name must be mihomo.service")
+	}
+	if c.Mihomo.HistoryLimit < 1 || c.Mihomo.HistoryLimit > 100 {
+		return fmt.Errorf("mihomo.history_limit must be between 1 and 100")
+	}
 	return nil
 }
 
@@ -159,4 +237,54 @@ func positiveDuration(field, value string) (time.Duration, error) {
 		return 0, fmt.Errorf("%s must be positive", field)
 	}
 	return duration, nil
+}
+
+func validateHost(value string) error {
+	if value == "" || strings.TrimSpace(value) != value {
+		return errors.New("host is required and must not have surrounding whitespace")
+	}
+	if net.ParseIP(value) != nil {
+		return nil
+	}
+	if len(value) > 253 {
+		return errors.New("host is too long")
+	}
+	for _, label := range strings.Split(strings.TrimSuffix(value, "."), ".") {
+		if label == "" || len(label) > 63 ||
+			strings.HasPrefix(label, "-") || strings.HasSuffix(label, "-") {
+			return errors.New("host is not a valid DNS name")
+		}
+		for _, character := range label {
+			if (character < 'a' || character > 'z') &&
+				(character < 'A' || character > 'Z') &&
+				(character < '0' || character > '9') &&
+				character != '-' {
+				return errors.New("host is not a valid DNS name")
+			}
+		}
+	}
+	return nil
+}
+
+func isConfiguredPathAbsolute(value string) bool {
+	return filepath.IsAbs(value) || path.IsAbs(value)
+}
+
+func configuredPathWithin(directory, file string) bool {
+	if filepath.IsAbs(directory) && filepath.IsAbs(file) {
+		relative, err := filepath.Rel(directory, file)
+		return err == nil &&
+			relative != ".." &&
+			!strings.HasPrefix(relative, ".."+string(filepath.Separator))
+	}
+	if path.IsAbs(directory) && path.IsAbs(file) {
+		directory = path.Clean(directory)
+		file = path.Clean(file)
+		if directory == "/" {
+			return true
+		}
+		return file == directory ||
+			strings.HasPrefix(file, strings.TrimSuffix(directory, "/")+"/")
+	}
+	return false
 }

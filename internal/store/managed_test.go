@@ -124,6 +124,87 @@ func TestManagedStoreRoundTripsEncryptedStateAndRevisionTransitions(t *testing.T
 	}
 }
 
+func TestInitialSettingsGenerateEncryptedStableControllerSecret(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	database, err := Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	sealer, err := muicrypto.NewSealer(muicrypto.MasterKey{4, 5, 6})
+	if err != nil {
+		t.Fatal(err)
+	}
+	managed, err := NewManagedStore(database, sealer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 7, 28, 4, 0, 0, 0, time.UTC)
+	initial := InitialSettings{
+		PanelTitle:         "m-ui",
+		UILanguage:         "en-US",
+		PublicHost:         "vpn.example.com",
+		PanelListenAddress: "127.0.0.1",
+		PanelListenPort:    2095,
+		TrustedProxyCIDRs:  []string{"192.0.2.0/24"},
+		MihomoBinaryPath:   "/usr/local/bin/mihomo",
+		MihomoConfigDir:    "/etc/mihomo",
+		MihomoConfigPath:   "/etc/mihomo/config.yaml",
+		ControllerAddress:  "127.0.0.1:9090",
+		MihomoServiceName:  "mihomo.service",
+		HistoryLimit:       20,
+	}
+	if err := managed.EnsureInitialSettings(ctx, initial, now); err != nil {
+		t.Fatal(err)
+	}
+	first, err := managed.Settings(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.ControllerSecret == "" ||
+		first.PanelTitle != "m-ui" ||
+		first.MihomoConfigPath != "/etc/mihomo/config.yaml" {
+		t.Fatalf("initial settings = %#v", first)
+	}
+	var storedSecret string
+	if err := database.db.QueryRowContext(
+		ctx,
+		"SELECT value FROM settings WHERE key = ?",
+		settingControllerSecret,
+	).Scan(&storedSecret); err != nil {
+		t.Fatal(err)
+	}
+	if storedSecret == first.ControllerSecret ||
+		strings.Contains(storedSecret, first.ControllerSecret) {
+		t.Fatal("database contains plaintext Controller secret")
+	}
+
+	updated := initial
+	updated.PanelTitle = "local-file-title-must-not-overwrite-managed"
+	updated.MihomoConfigPath = "/etc/mihomo/next.yaml"
+	if err := managed.EnsureInitialSettings(
+		ctx,
+		updated,
+		now.Add(time.Minute),
+	); err != nil {
+		t.Fatal(err)
+	}
+	second, err := managed.Settings(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.ControllerSecret != first.ControllerSecret {
+		t.Fatal("Controller secret changed during settings reconciliation")
+	}
+	if second.PanelTitle != initial.PanelTitle {
+		t.Fatal("managed display setting was overwritten by local configuration")
+	}
+	if second.MihomoConfigPath != updated.MihomoConfigPath {
+		t.Fatal("advanced local setting was not reconciled")
+	}
+}
+
 func TestManagedStoreSerializesImmediateTransactions(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

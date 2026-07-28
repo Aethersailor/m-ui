@@ -20,18 +20,23 @@ import (
 	"github.com/Aethersailor/m-ui/internal/store"
 )
 
-var ErrDegraded = errors.New("configuration publishing is blocked because the system is degraded")
+var (
+	ErrDegraded            = errors.New("configuration publishing is blocked because the system is degraded")
+	ErrCandidateValidation = errors.New("candidate configuration validation failed")
+)
 
 type Mutation func(ctx context.Context, transaction store.PublicationTransaction) error
 
 type Request struct {
-	Reason          string
-	ActorAdminID    string
-	AuditAction     string
-	AuditResource   string
-	AuditResourceID string
-	AuditSummary    string
-	Mutate          Mutation
+	Reason           string
+	ActorAdminID     string
+	AuditAction      string
+	AuditResource    string
+	AuditResourceID  string
+	AuditSummary     string
+	AuditSummaryFunc func() string
+	EffectiveAt      *time.Time
+	Mutate           Mutation
 }
 
 type Options struct {
@@ -107,6 +112,67 @@ func (publisher *Publisher) Publish(
 	publisher.mutex.Lock()
 	defer publisher.mutex.Unlock()
 	return publisher.publishLocked(ctx, request)
+}
+
+func (publisher *Publisher) CompileCurrent(
+	ctx context.Context,
+	asOf time.Time,
+) ([]byte, domain.DesiredState, error) {
+	publisher.mutex.Lock()
+	defer publisher.mutex.Unlock()
+
+	transaction, err := publisher.repository.BeginImmediate(ctx)
+	if err != nil {
+		return nil, domain.DesiredState{}, err
+	}
+	defer transaction.Rollback(context.Background())
+	state, err := transaction.DesiredState(ctx, asOf.UTC())
+	if err != nil {
+		return nil, domain.DesiredState{}, fmt.Errorf("load desired state: %w", err)
+	}
+	compiled, err := publisher.compiler.Compile(ctx, state)
+	if err != nil {
+		return nil, domain.DesiredState{}, err
+	}
+	return compiled, state, nil
+}
+
+func (publisher *Publisher) ValidateCurrent(
+	ctx context.Context,
+	asOf time.Time,
+) ([]byte, error) {
+	publisher.mutex.Lock()
+	defer publisher.mutex.Unlock()
+
+	transaction, err := publisher.repository.BeginImmediate(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer transaction.Rollback(context.Background())
+	state, err := transaction.DesiredState(ctx, asOf.UTC())
+	if err != nil {
+		return nil, fmt.Errorf("load desired state: %w", err)
+	}
+	compiled, err := publisher.compiler.Compile(ctx, state)
+	if err != nil {
+		return nil, err
+	}
+	validationID, err := uuid.NewRandom()
+	if err != nil {
+		return nil, errors.New("generate validation candidate ID")
+	}
+	candidatePath := filepath.Join(
+		filepath.Dir(publisher.options.ConfigPath),
+		".m-ui-validation-"+validationID.String()+".yaml",
+	)
+	defer os.Remove(candidatePath)
+	if err := writeExclusiveSynced(candidatePath, compiled); err != nil {
+		return nil, err
+	}
+	if err := publisher.cli.Validate(ctx, candidatePath); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrCandidateValidation, err)
+	}
+	return compiled, nil
 }
 
 func (publisher *Publisher) Rollback(
@@ -203,7 +269,11 @@ func (publisher *Publisher) publishLocked(
 		return domain.Revision{}, fmt.Errorf("apply managed-state mutation: %w", err)
 	}
 	now := publisher.now().UTC()
-	state, err := transaction.DesiredState(ctx, now)
+	effectiveAt := now
+	if request.EffectiveAt != nil {
+		effectiveAt = request.EffectiveAt.UTC()
+	}
+	state, err := transaction.DesiredState(ctx, effectiveAt)
 	if err != nil {
 		return domain.Revision{}, fmt.Errorf("load desired state: %w", err)
 	}
@@ -254,7 +324,7 @@ func (publisher *Publisher) publishLocked(
 			state,
 			compiled,
 			"candidate validation failed",
-			err,
+			fmt.Errorf("%w: %v", ErrCandidateValidation, err),
 		)
 	}
 
@@ -586,6 +656,10 @@ func (publisher *Publisher) insertSuccessAudit(
 	if request.AuditAction == "" {
 		return nil
 	}
+	summary := request.AuditSummary
+	if request.AuditSummaryFunc != nil {
+		summary = request.AuditSummaryFunc()
+	}
 	auditID, err := uuid.NewRandom()
 	if err != nil {
 		return errors.New("generate audit ID")
@@ -597,7 +671,7 @@ func (publisher *Publisher) insertSuccessAudit(
 		ResourceType:    request.AuditResource,
 		ResourceID:      request.AuditResourceID,
 		Result:          "success",
-		SummaryRedacted: redact.Text(request.AuditSummary),
+		SummaryRedacted: redact.Text(summary),
 		CreatedAt:       now,
 	})
 }

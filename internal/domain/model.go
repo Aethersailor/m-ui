@@ -10,6 +10,8 @@ const (
 
 type DesiredState struct {
 	AsOf              time.Time
+	PanelTitle        string
+	UILanguage        string
 	ControllerAddress string
 	ControllerSecret  string
 	PublicHost        string

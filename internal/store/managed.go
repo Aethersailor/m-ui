@@ -2,9 +2,14 @@ package store
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"strconv"
 	"strings"
 	"time"
 
@@ -14,8 +19,18 @@ import (
 
 const (
 	settingPublicHost        = "public_host"
+	settingPanelTitle        = "panel_title"
+	settingUILanguage        = "ui_language"
+	settingPanelAddress      = "panel_listen_address"
+	settingPanelPort         = "panel_listen_port"
+	settingTrustedProxies    = "trusted_proxy_cidrs"
+	settingMihomoBinary      = "mihomo_binary_path"
+	settingMihomoConfigDir   = "mihomo_config_dir"
+	settingMihomoConfigPath  = "mihomo_config_path"
 	settingControllerAddress = "mihomo_controller_address"
 	settingControllerSecret  = "mihomo_controller_secret_ciphertext"
+	settingMihomoService     = "mihomo_service_name"
+	settingHistoryLimit      = "config_history_limit"
 
 	controllerSecretPurpose = "settings:mihomo_controller_secret"
 )
@@ -29,6 +44,26 @@ type ManagedTx struct {
 	conn   *sql.Conn
 	sealer *muicrypto.Sealer
 	done   bool
+}
+
+type InitialSettings struct {
+	PanelTitle         string
+	UILanguage         string
+	PublicHost         string
+	PanelListenAddress string
+	PanelListenPort    uint16
+	TrustedProxyCIDRs  []string
+	MihomoBinaryPath   string
+	MihomoConfigDir    string
+	MihomoConfigPath   string
+	ControllerAddress  string
+	MihomoServiceName  string
+	HistoryLimit       int
+}
+
+type RuntimeSettings struct {
+	InitialSettings
+	ControllerSecret string
 }
 
 type PublicationRepository interface {
@@ -63,6 +98,173 @@ func NewManagedStore(store *Store, sealer *muicrypto.Sealer) (*ManagedStore, err
 	return &ManagedStore{store: store, sealer: sealer}, nil
 }
 
+func (managed *ManagedStore) EnsureInitialSettings(
+	ctx context.Context,
+	settings InitialSettings,
+	now time.Time,
+) error {
+	trustedProxies, err := json.Marshal(settings.TrustedProxyCIDRs)
+	if err != nil {
+		return errors.New("encode trusted proxy settings")
+	}
+	transaction, err := managed.store.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin initial settings transaction: %w", err)
+	}
+	defer transaction.Rollback()
+	displayDefaults := []struct {
+		key   string
+		value string
+	}{
+		{settingPanelTitle, settings.PanelTitle},
+		{settingUILanguage, settings.UILanguage},
+		{settingPublicHost, settings.PublicHost},
+	}
+	for _, item := range displayDefaults {
+		if _, err := transaction.ExecContext(
+			ctx,
+			`INSERT INTO settings(key, value, updated_at)
+			 VALUES (?, ?, ?)
+			 ON CONFLICT(key) DO NOTHING`,
+			item.key,
+			item.value,
+			formatTime(now),
+		); err != nil {
+			return fmt.Errorf("seed managed setting %q: %w", item.key, err)
+		}
+	}
+	advanced := []struct {
+		key   string
+		value string
+	}{
+		{settingPanelAddress, settings.PanelListenAddress},
+		{settingPanelPort, strconv.Itoa(int(settings.PanelListenPort))},
+		{settingTrustedProxies, string(trustedProxies)},
+		{settingMihomoBinary, settings.MihomoBinaryPath},
+		{settingMihomoConfigDir, settings.MihomoConfigDir},
+		{settingMihomoConfigPath, settings.MihomoConfigPath},
+		{settingControllerAddress, settings.ControllerAddress},
+		{settingMihomoService, settings.MihomoServiceName},
+		{settingHistoryLimit, strconv.Itoa(settings.HistoryLimit)},
+	}
+	for _, item := range advanced {
+		if _, err := transaction.ExecContext(
+			ctx,
+			`INSERT INTO settings(key, value, updated_at)
+			 VALUES (?, ?, ?)
+			 ON CONFLICT(key) DO UPDATE SET value = excluded.value,
+			                                updated_at = excluded.updated_at`,
+			item.key,
+			item.value,
+			formatTime(now),
+		); err != nil {
+			return fmt.Errorf("store local setting %q: %w", item.key, err)
+		}
+	}
+	var secretCount int
+	if err := transaction.QueryRowContext(
+		ctx,
+		"SELECT COUNT(*) FROM settings WHERE key = ?",
+		settingControllerSecret,
+	).Scan(&secretCount); err != nil {
+		return fmt.Errorf("check Mihomo Controller secret: %w", err)
+	}
+	if secretCount == 0 {
+		rawSecret := make([]byte, 32)
+		if _, err := io.ReadFull(rand.Reader, rawSecret); err != nil {
+			return errors.New("generate Mihomo Controller secret")
+		}
+		secret := base64.RawURLEncoding.EncodeToString(rawSecret)
+		ciphertext, err := managed.sealer.Encrypt(
+			[]byte(secret),
+			controllerSecretPurpose,
+		)
+		if err != nil {
+			return errors.New("encrypt Mihomo Controller secret")
+		}
+		if _, err := transaction.ExecContext(
+			ctx,
+			"INSERT INTO settings(key, value, updated_at) VALUES (?, ?, ?)",
+			settingControllerSecret,
+			ciphertext,
+			formatTime(now),
+		); err != nil {
+			return fmt.Errorf("store Mihomo Controller secret: %w", err)
+		}
+	}
+	if err := transaction.Commit(); err != nil {
+		return fmt.Errorf("commit initial settings: %w", err)
+	}
+	return nil
+}
+
+func (managed *ManagedStore) Settings(ctx context.Context) (RuntimeSettings, error) {
+	rows, err := managed.store.db.QueryContext(ctx, "SELECT key, value FROM settings")
+	if err != nil {
+		return RuntimeSettings{}, fmt.Errorf("query settings: %w", err)
+	}
+	defer rows.Close()
+	values := make(map[string]string)
+	for rows.Next() {
+		var key, value string
+		if err := rows.Scan(&key, &value); err != nil {
+			return RuntimeSettings{}, fmt.Errorf("scan setting: %w", err)
+		}
+		values[key] = value
+	}
+	if err := rows.Err(); err != nil {
+		return RuntimeSettings{}, fmt.Errorf("iterate settings: %w", err)
+	}
+	panelPort, err := strconv.ParseUint(values[settingPanelPort], 10, 16)
+	if err != nil || panelPort == 0 {
+		return RuntimeSettings{}, errors.New("stored panel port is invalid")
+	}
+	historyLimit, err := strconv.Atoi(values[settingHistoryLimit])
+	if err != nil || historyLimit < 1 {
+		return RuntimeSettings{}, errors.New("stored revision history limit is invalid")
+	}
+	var trustedProxies []string
+	if err := json.Unmarshal([]byte(values[settingTrustedProxies]), &trustedProxies); err != nil {
+		return RuntimeSettings{}, errors.New("stored trusted proxy list is invalid")
+	}
+	secret, err := managed.sealer.Decrypt(
+		values[settingControllerSecret],
+		controllerSecretPurpose,
+	)
+	if err != nil {
+		return RuntimeSettings{}, errors.New("decrypt Mihomo Controller secret")
+	}
+	return RuntimeSettings{
+		InitialSettings: InitialSettings{
+			PanelTitle:         values[settingPanelTitle],
+			UILanguage:         values[settingUILanguage],
+			PublicHost:         values[settingPublicHost],
+			PanelListenAddress: values[settingPanelAddress],
+			PanelListenPort:    uint16(panelPort),
+			TrustedProxyCIDRs:  trustedProxies,
+			MihomoBinaryPath:   values[settingMihomoBinary],
+			MihomoConfigDir:    values[settingMihomoConfigDir],
+			MihomoConfigPath:   values[settingMihomoConfigPath],
+			ControllerAddress:  values[settingControllerAddress],
+			MihomoServiceName:  values[settingMihomoService],
+			HistoryLimit:       historyLimit,
+		},
+		ControllerSecret: string(secret),
+	}, nil
+}
+
+func (managed *ManagedStore) ReadDesiredState(
+	ctx context.Context,
+	asOf time.Time,
+) (domain.DesiredState, error) {
+	transaction, err := managed.BeginImmediate(ctx)
+	if err != nil {
+		return domain.DesiredState{}, err
+	}
+	defer transaction.Rollback(context.Background())
+	return transaction.DesiredState(ctx, asOf)
+}
+
 func (managed *ManagedStore) BeginImmediate(ctx context.Context) (PublicationTransaction, error) {
 	conn, err := managed.store.db.Conn(ctx)
 	if err != nil {
@@ -92,6 +294,8 @@ func (transaction *ManagedTx) DesiredState(
 	}
 	state := domain.DesiredState{
 		AsOf:              asOf.UTC(),
+		PanelTitle:        settings[settingPanelTitle],
+		UILanguage:        settings[settingUILanguage],
 		ControllerAddress: settings[settingControllerAddress],
 		ControllerSecret:  string(secret),
 		PublicHost:        settings[settingPublicHost],
@@ -182,21 +386,34 @@ func (transaction *ManagedTx) ReplaceDesiredState(
 		return errors.New("encrypt Mihomo Controller secret")
 	}
 	now := formatTime(state.AsOf)
-	for key, value := range map[string]string{
-		settingPublicHost:        state.PublicHost,
-		settingControllerAddress: state.ControllerAddress,
-		settingControllerSecret:  controllerCiphertext,
+	panelTitle := state.PanelTitle
+	if panelTitle == "" {
+		panelTitle = "m-ui"
+	}
+	uiLanguage := state.UILanguage
+	if uiLanguage == "" {
+		uiLanguage = "en-US"
+	}
+	for _, item := range []struct {
+		key   string
+		value string
+	}{
+		{settingPanelTitle, panelTitle},
+		{settingUILanguage, uiLanguage},
+		{settingPublicHost, state.PublicHost},
+		{settingControllerAddress, state.ControllerAddress},
+		{settingControllerSecret, controllerCiphertext},
 	} {
 		if _, err := transaction.conn.ExecContext(
 			ctx,
 			`INSERT INTO settings(key, value, updated_at) VALUES (?, ?, ?)
 			 ON CONFLICT(key) DO UPDATE SET value = excluded.value,
 			                                updated_at = excluded.updated_at`,
-			key,
-			value,
+			item.key,
+			item.value,
 			now,
 		); err != nil {
-			return fmt.Errorf("store managed setting %q: %w", key, err)
+			return fmt.Errorf("store managed setting %q: %w", item.key, err)
 		}
 	}
 	if _, err := transaction.conn.ExecContext(ctx, "DELETE FROM listeners"); err != nil {
@@ -566,7 +783,9 @@ func (transaction *ManagedTx) settings(ctx context.Context) (map[string]string, 
 	rows, err := transaction.conn.QueryContext(
 		ctx,
 		`SELECT key, value FROM settings
-		  WHERE key IN (?, ?, ?)`,
+		  WHERE key IN (?, ?, ?, ?, ?)`,
+		settingPanelTitle,
+		settingUILanguage,
 		settingPublicHost,
 		settingControllerAddress,
 		settingControllerSecret,
@@ -584,6 +803,8 @@ func (transaction *ManagedTx) settings(ctx context.Context) (map[string]string, 
 		settings[key] = value
 	}
 	for _, required := range []string{
+		settingPanelTitle,
+		settingUILanguage,
 		settingPublicHost,
 		settingControllerAddress,
 		settingControllerSecret,

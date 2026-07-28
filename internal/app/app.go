@@ -14,6 +14,10 @@ import (
 	"github.com/Aethersailor/m-ui/internal/config"
 	muicrypto "github.com/Aethersailor/m-ui/internal/crypto"
 	"github.com/Aethersailor/m-ui/internal/httpapi"
+	"github.com/Aethersailor/m-ui/internal/mihomo"
+	"github.com/Aethersailor/m-ui/internal/publisher"
+	"github.com/Aethersailor/m-ui/internal/scheduler"
+	"github.com/Aethersailor/m-ui/internal/service"
 	"github.com/Aethersailor/m-ui/internal/store"
 	"github.com/Aethersailor/m-ui/internal/version"
 )
@@ -42,7 +46,8 @@ func Run(ctx context.Context, cfg config.Config, build version.Info) error {
 	if err != nil {
 		return fmt.Errorf("load master key: %w", err)
 	}
-	if _, err := muicrypto.NewSealer(masterKey); err != nil {
+	sealer, err := muicrypto.NewSealer(masterKey)
+	if err != nil {
 		return fmt.Errorf("initialize field encryption: %w", err)
 	}
 	database, err := store.Open(ctx, cfg.Storage.DatabasePath)
@@ -63,6 +68,100 @@ func Run(ctx context.Context, cfg config.Config, build version.Info) error {
 	if err := database.DeleteExpiredSessions(ctx, time.Now().UTC()); err != nil {
 		return fmt.Errorf("delete expired sessions: %w", err)
 	}
+	managedStore, err := store.NewManagedStore(database, sealer)
+	if err != nil {
+		return fmt.Errorf("initialize managed store: %w", err)
+	}
+	if err := managedStore.EnsureInitialSettings(
+		ctx,
+		store.InitialSettings{
+			PanelTitle:         cfg.Panel.Title,
+			UILanguage:         cfg.Panel.UILanguage,
+			PublicHost:         cfg.Panel.PublicHost,
+			PanelListenAddress: cfg.Server.ListenAddress,
+			PanelListenPort:    cfg.Server.Port,
+			TrustedProxyCIDRs:  []string{},
+			MihomoBinaryPath:   cfg.Mihomo.BinaryPath,
+			MihomoConfigDir:    cfg.Mihomo.ConfigDirectory,
+			MihomoConfigPath:   cfg.Mihomo.ConfigPath,
+			ControllerAddress:  cfg.Mihomo.ControllerAddress,
+			MihomoServiceName:  cfg.Mihomo.ServiceName,
+			HistoryLimit:       cfg.Mihomo.HistoryLimit,
+		},
+		time.Now().UTC(),
+	); err != nil {
+		return fmt.Errorf("initialize managed settings: %w", err)
+	}
+	runtimeSettings, err := managedStore.Settings(ctx)
+	if err != nil {
+		return fmt.Errorf("load managed settings: %w", err)
+	}
+	coreCLI, err := mihomo.NewCLI(runtimeSettings.MihomoBinaryPath)
+	if err != nil {
+		return fmt.Errorf("initialize Mihomo CLI: %w", err)
+	}
+	controller, err := mihomo.NewController(
+		runtimeSettings.ControllerAddress,
+		runtimeSettings.ControllerSecret,
+	)
+	if err != nil {
+		return fmt.Errorf("initialize Mihomo Controller: %w", err)
+	}
+	process, err := mihomo.NewSystemdProcess(runtimeSettings.MihomoServiceName)
+	if err != nil {
+		return fmt.Errorf("initialize Mihomo systemd adapter: %w", err)
+	}
+	configurationPublisher, err := publisher.New(
+		managedStore,
+		publisher.YAMLCompiler{},
+		coreCLI,
+		controller,
+		process,
+		publisher.Options{
+			ConfigPath:        runtimeSettings.MihomoConfigPath,
+			RevisionDirectory: cfg.Mihomo.RevisionDirectory,
+			HistoryLimit:      runtimeSettings.HistoryLimit,
+			HealthTimeout:     10 * time.Second,
+			HealthInterval:    250 * time.Millisecond,
+		},
+	)
+	if err != nil {
+		return fmt.Errorf("initialize configuration publisher: %w", err)
+	}
+	runtimeMonitor, err := service.NewRuntimeMonitor(
+		controller,
+		process,
+		service.RuntimeMonitorOptions{
+			Interval: 2 * time.Second,
+			Logger:   logger,
+		},
+	)
+	if err != nil {
+		return fmt.Errorf("initialize runtime monitor: %w", err)
+	}
+	manager, err := service.NewManager(service.ManagerOptions{
+		Store:      managedStore,
+		Publisher:  configurationPublisher,
+		CLI:        coreCLI,
+		Controller: controller,
+		Process:    process,
+		Runtime:    runtimeMonitor,
+	})
+	if err != nil {
+		return fmt.Errorf("initialize management service: %w", err)
+	}
+	expiryScheduler, err := scheduler.NewExpiry(
+		configurationPublisher,
+		scheduler.Options{
+			Interval: time.Minute,
+			Logger:   logger,
+		},
+	)
+	if err != nil {
+		return fmt.Errorf("initialize expiry scheduler: %w", err)
+	}
+	go runtimeMonitor.Run(ctx)
+	go expiryScheduler.Run(ctx)
 
 	server := &http.Server{
 		Addr: cfg.Address(),
@@ -70,6 +169,7 @@ func Run(ctx context.Context, cfg config.Config, build version.Info) error {
 			Logger:       logger,
 			Build:        build,
 			Auth:         authService,
+			Management:   manager,
 			CookieSecure: cfg.Security.CookieSecure,
 		}),
 		ReadHeaderTimeout: readHeaderTimeout,

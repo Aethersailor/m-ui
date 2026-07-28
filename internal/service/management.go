@@ -1,0 +1,766 @@
+package service
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/Aethersailor/m-ui/internal/domain"
+	"github.com/Aethersailor/m-ui/internal/mihomo"
+	"github.com/Aethersailor/m-ui/internal/publisher"
+	"github.com/Aethersailor/m-ui/internal/redact"
+	"github.com/Aethersailor/m-ui/internal/store"
+)
+
+var (
+	ErrNotFound   = errors.New("managed resource not found")
+	ErrValidation = errors.New("managed state validation failed")
+)
+
+type ListenerSpec struct {
+	Name               string
+	ListenAddress      string
+	ListenPort         uint16
+	PublicHostOverride string
+	PublicPortOverride *uint16
+	ServerName         string
+	RealityDest        string
+	RealityPrivateKey  string
+	RealityPublicKey   string
+	ShortID            string
+	UDPEnabled         bool
+}
+
+type UserSpec struct {
+	Name      string
+	UUID      string
+	ExpiresAt *time.Time
+}
+
+type EditableSettings struct {
+	PanelTitle string
+	UILanguage string
+	PublicHost string
+}
+
+type RuntimeStatus struct {
+	Active          bool
+	Degraded        bool
+	DegradedReason  string
+	Version         mihomo.Version
+	Traffic         mihomo.TrafficSnapshot
+	Memory          mihomo.MemorySnapshot
+	ConnectionCount int
+	DownloadTotal   int64
+	UploadTotal     int64
+	ObservedAt      time.Time
+}
+
+type ManagerOptions struct {
+	Store      *store.ManagedStore
+	Publisher  *publisher.Publisher
+	CLI        mihomo.CoreCLI
+	Controller mihomo.CoreController
+	Process    mihomo.CoreProcess
+	Runtime    *RuntimeMonitor
+	Clock      func() time.Time
+}
+
+type Manager struct {
+	store      *store.ManagedStore
+	publisher  *publisher.Publisher
+	cli        mihomo.CoreCLI
+	controller mihomo.CoreController
+	process    mihomo.CoreProcess
+	runtime    *RuntimeMonitor
+	clock      func() time.Time
+}
+
+func NewManager(options ManagerOptions) (*Manager, error) {
+	switch {
+	case options.Store == nil:
+		return nil, errors.New("managed store is required")
+	case options.Publisher == nil:
+		return nil, errors.New("publisher is required")
+	case options.CLI == nil:
+		return nil, errors.New("Mihomo CLI is required")
+	case options.Controller == nil:
+		return nil, errors.New("Mihomo Controller is required")
+	case options.Process == nil:
+		return nil, errors.New("Mihomo process adapter is required")
+	case options.Runtime == nil:
+		return nil, errors.New("runtime monitor is required")
+	}
+	if options.Clock == nil {
+		options.Clock = time.Now
+	}
+	return &Manager{
+		store:      options.Store,
+		publisher:  options.Publisher,
+		cli:        options.CLI,
+		controller: options.Controller,
+		process:    options.Process,
+		runtime:    options.Runtime,
+		clock:      options.Clock,
+	}, nil
+}
+
+func (manager *Manager) Listeners(ctx context.Context) ([]domain.Listener, error) {
+	state, err := manager.currentState(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return state.Listeners, nil
+}
+
+func (manager *Manager) Listener(
+	ctx context.Context,
+	listenerID string,
+) (domain.Listener, error) {
+	state, err := manager.currentState(ctx)
+	if err != nil {
+		return domain.Listener{}, err
+	}
+	index := listenerIndex(state, listenerID)
+	if index < 0 {
+		return domain.Listener{}, ErrNotFound
+	}
+	return state.Listeners[index], nil
+}
+
+func (manager *Manager) CreateListener(
+	ctx context.Context,
+	actorAdminID string,
+	spec ListenerSpec,
+) (domain.Listener, domain.Revision, error) {
+	id, err := domain.GenerateUUID()
+	if err != nil {
+		return domain.Listener{}, domain.Revision{}, err
+	}
+	if spec.RealityPrivateKey == "" && spec.RealityPublicKey == "" {
+		keypair, err := manager.cli.GenerateRealityKeypair(ctx)
+		if err != nil {
+			return domain.Listener{}, domain.Revision{}, err
+		}
+		spec.RealityPrivateKey = keypair.PrivateKey
+		spec.RealityPublicKey = keypair.PublicKey
+	} else if spec.RealityPrivateKey == "" || spec.RealityPublicKey == "" {
+		return domain.Listener{}, domain.Revision{}, fmt.Errorf(
+			"%w: both REALITY keys are required",
+			ErrValidation,
+		)
+	}
+	if spec.ShortID == "" {
+		spec.ShortID, err = domain.GenerateShortID()
+		if err != nil {
+			return domain.Listener{}, domain.Revision{}, err
+		}
+	}
+	var created domain.Listener
+	revision, err := manager.mutate(
+		ctx,
+		actorAdminID,
+		"create listener",
+		"listener.create",
+		"listener",
+		id,
+		"Created a disabled VLESS REALITY listener.",
+		func(state *domain.DesiredState, now time.Time) error {
+			created = listenerFromSpec(id, spec)
+			created.CreatedAt = now
+			created.UpdatedAt = now
+			state.Listeners = append(state.Listeners, created)
+			return nil
+		},
+	)
+	return created, revision, err
+}
+
+func (manager *Manager) UpdateListener(
+	ctx context.Context,
+	actorAdminID, listenerID string,
+	spec ListenerSpec,
+) (domain.Listener, domain.Revision, error) {
+	var updated domain.Listener
+	revision, err := manager.mutate(
+		ctx,
+		actorAdminID,
+		"update listener",
+		"listener.update",
+		"listener",
+		listenerID,
+		"Updated a VLESS REALITY listener.",
+		func(state *domain.DesiredState, now time.Time) error {
+			index := listenerIndex(*state, listenerID)
+			if index < 0 {
+				return ErrNotFound
+			}
+			current := state.Listeners[index]
+			updated = listenerFromSpec(listenerID, spec)
+			updated.Enabled = current.Enabled
+			updated.Users = current.Users
+			updated.CreatedAt = current.CreatedAt
+			updated.UpdatedAt = now
+			if updated.RealityPrivateKey == "" {
+				updated.RealityPrivateKey = current.RealityPrivateKey
+			}
+			if updated.RealityPublicKey == "" {
+				updated.RealityPublicKey = current.RealityPublicKey
+			}
+			if updated.ShortID == "" {
+				updated.ShortID = current.ShortID
+			}
+			state.Listeners[index] = updated
+			return nil
+		},
+	)
+	return updated, revision, err
+}
+
+func (manager *Manager) DeleteListener(
+	ctx context.Context,
+	actorAdminID, listenerID string,
+) (domain.Revision, error) {
+	return manager.mutate(
+		ctx,
+		actorAdminID,
+		"delete listener",
+		"listener.delete",
+		"listener",
+		listenerID,
+		"Deleted a VLESS REALITY listener.",
+		func(state *domain.DesiredState, _ time.Time) error {
+			index := listenerIndex(*state, listenerID)
+			if index < 0 {
+				return ErrNotFound
+			}
+			state.Listeners = append(
+				state.Listeners[:index],
+				state.Listeners[index+1:]...,
+			)
+			return nil
+		},
+	)
+}
+
+func (manager *Manager) SetListenerEnabled(
+	ctx context.Context,
+	actorAdminID, listenerID string,
+	enabled bool,
+) (domain.Listener, domain.Revision, error) {
+	action := "listener.disable"
+	summary := "Disabled a VLESS REALITY listener."
+	if enabled {
+		action = "listener.enable"
+		summary = "Enabled a VLESS REALITY listener."
+	}
+	var updated domain.Listener
+	revision, err := manager.mutate(
+		ctx,
+		actorAdminID,
+		action,
+		action,
+		"listener",
+		listenerID,
+		summary,
+		func(state *domain.DesiredState, now time.Time) error {
+			index := listenerIndex(*state, listenerID)
+			if index < 0 {
+				return ErrNotFound
+			}
+			state.Listeners[index].Enabled = enabled
+			state.Listeners[index].UpdatedAt = now
+			updated = state.Listeners[index]
+			return nil
+		},
+	)
+	return updated, revision, err
+}
+
+func (manager *Manager) Users(
+	ctx context.Context,
+	listenerID string,
+) ([]domain.User, error) {
+	listener, err := manager.Listener(ctx, listenerID)
+	if err != nil {
+		return nil, err
+	}
+	return listener.Users, nil
+}
+
+func (manager *Manager) CreateUser(
+	ctx context.Context,
+	actorAdminID, listenerID string,
+	spec UserSpec,
+) (domain.User, domain.Revision, error) {
+	id, err := domain.GenerateUUID()
+	if err != nil {
+		return domain.User{}, domain.Revision{}, err
+	}
+	if spec.UUID == "" {
+		spec.UUID, err = domain.GenerateUUID()
+		if err != nil {
+			return domain.User{}, domain.Revision{}, err
+		}
+	}
+	var created domain.User
+	revision, err := manager.mutate(
+		ctx,
+		actorAdminID,
+		"create listener user",
+		"user.create",
+		"listener_user",
+		id,
+		"Created an enabled listener user.",
+		func(state *domain.DesiredState, now time.Time) error {
+			index := listenerIndex(*state, listenerID)
+			if index < 0 {
+				return ErrNotFound
+			}
+			created = domain.User{
+				ID:         id,
+				ListenerID: listenerID,
+				Name:       spec.Name,
+				Enabled:    true,
+				UUID:       spec.UUID,
+				ExpiresAt:  normalizeExpiry(spec.ExpiresAt),
+				CreatedAt:  now,
+				UpdatedAt:  now,
+			}
+			state.Listeners[index].Users = append(
+				state.Listeners[index].Users,
+				created,
+			)
+			return nil
+		},
+	)
+	return created, revision, err
+}
+
+func (manager *Manager) UpdateUser(
+	ctx context.Context,
+	actorAdminID, listenerID, userID string,
+	spec UserSpec,
+) (domain.User, domain.Revision, error) {
+	var updated domain.User
+	revision, err := manager.mutate(
+		ctx,
+		actorAdminID,
+		"update listener user",
+		"user.update",
+		"listener_user",
+		userID,
+		"Updated a listener user.",
+		func(state *domain.DesiredState, now time.Time) error {
+			listenerPosition := listenerIndex(*state, listenerID)
+			if listenerPosition < 0 {
+				return ErrNotFound
+			}
+			userPosition := userIndex(
+				state.Listeners[listenerPosition],
+				userID,
+			)
+			if userPosition < 0 {
+				return ErrNotFound
+			}
+			current := state.Listeners[listenerPosition].Users[userPosition]
+			updated = current
+			updated.Name = spec.Name
+			updated.ExpiresAt = normalizeExpiry(spec.ExpiresAt)
+			updated.UpdatedAt = now
+			if spec.UUID != "" {
+				updated.UUID = spec.UUID
+			}
+			state.Listeners[listenerPosition].Users[userPosition] = updated
+			return nil
+		},
+	)
+	return updated, revision, err
+}
+
+func (manager *Manager) DeleteUser(
+	ctx context.Context,
+	actorAdminID, listenerID, userID string,
+) (domain.Revision, error) {
+	return manager.mutate(
+		ctx,
+		actorAdminID,
+		"delete listener user",
+		"user.delete",
+		"listener_user",
+		userID,
+		"Deleted a listener user.",
+		func(state *domain.DesiredState, _ time.Time) error {
+			listenerPosition := listenerIndex(*state, listenerID)
+			if listenerPosition < 0 {
+				return ErrNotFound
+			}
+			userPosition := userIndex(
+				state.Listeners[listenerPosition],
+				userID,
+			)
+			if userPosition < 0 {
+				return ErrNotFound
+			}
+			users := state.Listeners[listenerPosition].Users
+			state.Listeners[listenerPosition].Users = append(
+				users[:userPosition],
+				users[userPosition+1:]...,
+			)
+			return nil
+		},
+	)
+}
+
+func (manager *Manager) SetUserEnabled(
+	ctx context.Context,
+	actorAdminID, listenerID, userID string,
+	enabled bool,
+) (domain.User, domain.Revision, error) {
+	action := "user.disable"
+	summary := "Disabled a listener user."
+	if enabled {
+		action = "user.enable"
+		summary = "Enabled a listener user."
+	}
+	var updated domain.User
+	revision, err := manager.mutate(
+		ctx,
+		actorAdminID,
+		action,
+		action,
+		"listener_user",
+		userID,
+		summary,
+		func(state *domain.DesiredState, now time.Time) error {
+			listenerPosition := listenerIndex(*state, listenerID)
+			if listenerPosition < 0 {
+				return ErrNotFound
+			}
+			userPosition := userIndex(
+				state.Listeners[listenerPosition],
+				userID,
+			)
+			if userPosition < 0 {
+				return ErrNotFound
+			}
+			state.Listeners[listenerPosition].Users[userPosition].Enabled = enabled
+			state.Listeners[listenerPosition].Users[userPosition].UpdatedAt = now
+			updated = state.Listeners[listenerPosition].Users[userPosition]
+			return nil
+		},
+	)
+	return updated, revision, err
+}
+
+func (manager *Manager) GenerateRealityKeypair(
+	ctx context.Context,
+) (domain.Keypair, string, error) {
+	keypair, err := manager.cli.GenerateRealityKeypair(ctx)
+	if err != nil {
+		return domain.Keypair{}, "", err
+	}
+	shortID, err := domain.GenerateShortID()
+	if err != nil {
+		return domain.Keypair{}, "", err
+	}
+	return keypair, shortID, nil
+}
+
+func (manager *Manager) GenerateUUID() (string, error) {
+	return domain.GenerateUUID()
+}
+
+func (manager *Manager) Share(
+	ctx context.Context,
+	listenerID, userID string,
+) (Share, error) {
+	state, err := manager.currentState(ctx)
+	if err != nil {
+		return Share{}, err
+	}
+	share, err := BuildShare(state, listenerID, userID)
+	if err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			return Share{}, ErrNotFound
+		}
+		return Share{}, fmt.Errorf("%w: %v", ErrValidation, err)
+	}
+	return share, nil
+}
+
+func (manager *Manager) EditableSettings(
+	ctx context.Context,
+) (EditableSettings, error) {
+	settings, err := manager.store.Settings(ctx)
+	if err != nil {
+		return EditableSettings{}, err
+	}
+	return EditableSettings{
+		PanelTitle: settings.PanelTitle,
+		UILanguage: settings.UILanguage,
+		PublicHost: settings.PublicHost,
+	}, nil
+}
+
+func (manager *Manager) UpdateSettings(
+	ctx context.Context,
+	actorAdminID string,
+	settings EditableSettings,
+) (domain.Revision, error) {
+	if strings.TrimSpace(settings.PanelTitle) == "" ||
+		len(settings.PanelTitle) > 80 {
+		return domain.Revision{}, fmt.Errorf(
+			"%w: panel title must contain between 1 and 80 bytes",
+			ErrValidation,
+		)
+	}
+	switch settings.UILanguage {
+	case "en-US", "zh-CN":
+	default:
+		return domain.Revision{}, fmt.Errorf(
+			"%w: UI language must be en-US or zh-CN",
+			ErrValidation,
+		)
+	}
+	return manager.mutate(
+		ctx,
+		actorAdminID,
+		"update managed settings",
+		"settings.update",
+		"settings",
+		"managed",
+		"Updated managed panel and public endpoint settings.",
+		func(state *domain.DesiredState, _ time.Time) error {
+			state.PanelTitle = settings.PanelTitle
+			state.UILanguage = settings.UILanguage
+			state.PublicHost = settings.PublicHost
+			return nil
+		},
+	)
+}
+
+func (manager *Manager) PreviewConfig(
+	ctx context.Context,
+	reveal bool,
+) ([]byte, string, error) {
+	compiled, _, err := manager.publisher.CompileCurrent(
+		ctx,
+		manager.clock().UTC(),
+	)
+	if err != nil {
+		return nil, "", err
+	}
+	hash := publisher.SHA256(compiled)
+	if reveal {
+		return compiled, hash, nil
+	}
+	return []byte(redact.Text(string(compiled))), hash, nil
+}
+
+func (manager *Manager) ValidateConfig(
+	ctx context.Context,
+) (string, error) {
+	compiled, err := manager.publisher.ValidateCurrent(
+		ctx,
+		manager.clock().UTC(),
+	)
+	if err != nil {
+		return "", err
+	}
+	return publisher.SHA256(compiled), nil
+}
+
+func (manager *Manager) Revisions(
+	ctx context.Context,
+	limit, offset int,
+) ([]domain.Revision, error) {
+	return manager.store.Revisions(ctx, limit, offset)
+}
+
+func (manager *Manager) Revision(
+	ctx context.Context,
+	revisionID string,
+) (domain.Revision, error) {
+	revision, err := manager.store.Revision(ctx, revisionID)
+	if errors.Is(err, store.ErrNotFound) {
+		return domain.Revision{}, ErrNotFound
+	}
+	return revision, err
+}
+
+func (manager *Manager) Rollback(
+	ctx context.Context,
+	actorAdminID, revisionID string,
+) (domain.Revision, error) {
+	revision, err := manager.publisher.Rollback(ctx, revisionID, actorAdminID)
+	if errors.Is(err, store.ErrNotFound) {
+		return domain.Revision{}, ErrNotFound
+	}
+	return revision, err
+}
+
+func (manager *Manager) AuditEntries(
+	ctx context.Context,
+	limit, offset int,
+) ([]store.AuditEntry, error) {
+	return manager.store.AuditEntries(ctx, limit, offset)
+}
+
+func (manager *Manager) RuntimeStatus(
+	ctx context.Context,
+) (RuntimeStatus, error) {
+	systemState, err := manager.store.SystemState(ctx)
+	if err != nil {
+		return RuntimeStatus{}, err
+	}
+	status := manager.runtime.Snapshot()
+	status.Degraded = systemState.Degraded
+	status.DegradedReason = systemState.DegradedReason
+	if status.ObservedAt.IsZero() {
+		status.ObservedAt = manager.clock().UTC()
+	}
+	return status, nil
+}
+
+func (manager *Manager) RuntimeLogs(
+	ctx context.Context,
+	limit int,
+) ([]mihomo.LogEntry, error) {
+	return manager.process.RecentLogs(ctx, limit)
+}
+
+func (manager *Manager) RuntimeAction(
+	ctx context.Context,
+	actorAdminID, action string,
+) error {
+	var err error
+	switch action {
+	case "start":
+		err = manager.process.Start(ctx)
+	case "stop":
+		err = manager.process.Stop(ctx)
+	case "restart":
+		err = manager.process.Restart(ctx)
+	case "reload":
+		err = manager.process.Reload(ctx)
+	default:
+		return fmt.Errorf("%w: unsupported runtime action", ErrValidation)
+	}
+	result := "success"
+	if err != nil {
+		result = "failure"
+	}
+	auditID, idErr := domain.GenerateUUID()
+	if idErr == nil {
+		idErr = manager.store.RecordAudit(ctx, store.AuditEntry{
+			ID:              auditID,
+			ActorAdminID:    actorAdminID,
+			Action:          "runtime." + action,
+			ResourceType:    "mihomo",
+			ResourceID:      "",
+			Result:          result,
+			SummaryRedacted: "Requested Mihomo runtime " + action + ".",
+			CreatedAt:       manager.clock().UTC(),
+		})
+	}
+	return errors.Join(err, idErr)
+}
+
+func (manager *Manager) TestCore(
+	ctx context.Context,
+) (string, error) {
+	return manager.cli.Version(ctx)
+}
+
+func (manager *Manager) TestController(
+	ctx context.Context,
+) (mihomo.Version, error) {
+	return manager.controller.Version(ctx)
+}
+
+func (manager *Manager) currentState(
+	ctx context.Context,
+) (domain.DesiredState, error) {
+	return manager.store.ReadDesiredState(ctx, manager.clock().UTC())
+}
+
+func (manager *Manager) mutate(
+	ctx context.Context,
+	actorAdminID, reason, auditAction, auditResource, auditResourceID, auditSummary string,
+	mutation func(*domain.DesiredState, time.Time) error,
+) (domain.Revision, error) {
+	effectiveAt := manager.clock().UTC()
+	revision, err := manager.publisher.Publish(ctx, publisher.Request{
+		Reason:          reason,
+		ActorAdminID:    actorAdminID,
+		AuditAction:     auditAction,
+		AuditResource:   auditResource,
+		AuditResourceID: auditResourceID,
+		AuditSummary:    auditSummary,
+		EffectiveAt:     &effectiveAt,
+		Mutate: func(
+			ctx context.Context,
+			transaction store.PublicationTransaction,
+		) error {
+			state, err := transaction.DesiredState(ctx, effectiveAt)
+			if err != nil {
+				return err
+			}
+			state.AsOf = effectiveAt
+			if err := mutation(&state, effectiveAt); err != nil {
+				return err
+			}
+			if err := state.Validate(); err != nil {
+				return fmt.Errorf("%w: %v", ErrValidation, err)
+			}
+			return transaction.ReplaceDesiredState(ctx, state)
+		},
+	})
+	return revision, err
+}
+
+func listenerFromSpec(id string, spec ListenerSpec) domain.Listener {
+	return domain.Listener{
+		ID:                 id,
+		Name:               spec.Name,
+		ListenAddress:      spec.ListenAddress,
+		ListenPort:         spec.ListenPort,
+		PublicHostOverride: spec.PublicHostOverride,
+		PublicPortOverride: spec.PublicPortOverride,
+		ServerName:         spec.ServerName,
+		RealityDest:        spec.RealityDest,
+		RealityPrivateKey:  spec.RealityPrivateKey,
+		RealityPublicKey:   spec.RealityPublicKey,
+		ShortID:            spec.ShortID,
+		UDPEnabled:         spec.UDPEnabled,
+	}
+}
+
+func listenerIndex(state domain.DesiredState, listenerID string) int {
+	for index := range state.Listeners {
+		if state.Listeners[index].ID == listenerID {
+			return index
+		}
+	}
+	return -1
+}
+
+func userIndex(listener domain.Listener, userID string) int {
+	for index := range listener.Users {
+		if listener.Users[index].ID == userID {
+			return index
+		}
+	}
+	return -1
+}
+
+func normalizeExpiry(value *time.Time) *time.Time {
+	if value == nil {
+		return nil
+	}
+	normalized := value.UTC()
+	return &normalized
+}

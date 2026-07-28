@@ -11,6 +11,7 @@ import (
 
 	"github.com/Aethersailor/m-ui/internal/auth"
 	"github.com/Aethersailor/m-ui/internal/httpapi/ui"
+	"github.com/Aethersailor/m-ui/internal/service"
 	"github.com/Aethersailor/m-ui/internal/version"
 )
 
@@ -18,6 +19,7 @@ type Options struct {
 	Logger       *slog.Logger
 	Build        version.Info
 	Auth         *auth.Service
+	Management   *service.Manager
 	CookieSecure bool
 }
 
@@ -50,18 +52,26 @@ func New(options Options) http.Handler {
 	router.Route("/api/v1", func(api chi.Router) {
 		api.Get("/health", health)
 		if options.Auth != nil {
-			mountAuthRoutes(api, authHandler{
+			authentication := authHandler{
 				service:      options.Auth,
 				cookieSecure: options.CookieSecure,
-			})
+			}
+			mountAuthRoutes(api, authentication)
+			if options.Management != nil {
+				mountManagementRoutes(
+					api,
+					authentication,
+					managementHandler{manager: options.Management},
+				)
+			}
 		}
 		api.NotFound(func(response http.ResponseWriter, request *http.Request) {
-			writeJSON(response, http.StatusNotFound, map[string]any{
-				"error": map[string]any{
-					"code":       "NOT_FOUND",
-					"message":    "The requested API resource was not found.",
-					"request_id": middleware.GetReqID(request.Context()),
-					"details":    map[string]any{},
+			writeJSON(response, http.StatusNotFound, apiErrorResponse{
+				Error: apiError{
+					Code:      "NOT_FOUND",
+					Message:   "The requested API resource was not found.",
+					RequestID: middleware.GetReqID(request.Context()),
+					Details:   struct{}{},
 				},
 			})
 		})

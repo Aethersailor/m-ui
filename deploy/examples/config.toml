@@ -15,3 +15,17 @@ master_key_path = "/var/lib/m-ui/master.key"
 [security]
 session_ttl = "12h"
 cookie_secure = false
+
+[panel]
+title = "m-ui"
+ui_language = "en-US"
+public_host = "localhost"
+
+[mihomo]
+binary_path = "/usr/local/bin/mihomo"
+config_directory = "/etc/mihomo"
+config_path = "/etc/mihomo/config.yaml"
+controller_address = "127.0.0.1:9090"
+service_name = "mihomo.service"
+revision_directory = "/var/lib/m-ui/revisions"
+history_limit = 20
