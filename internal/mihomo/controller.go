@@ -27,22 +27,22 @@ type Controller struct {
 func NewController(address, secret string) (*Controller, error) {
 	host, port, err := net.SplitHostPort(address)
 	if err != nil || port == "" {
-		return nil, errors.New("Mihomo Controller address must use host:port syntax")
+		return nil, errors.New("mihomo Controller address must use host:port syntax")
 	}
 	portNumber, err := strconv.Atoi(port)
 	if err != nil || portNumber < 1 || portNumber > 65535 {
-		return nil, errors.New("Mihomo Controller port must be between 1 and 65535")
+		return nil, errors.New("mihomo Controller port must be between 1 and 65535")
 	}
 	ip := net.ParseIP(host)
 	if !strings.EqualFold(host, "localhost") && (ip == nil || !ip.IsLoopback()) {
-		return nil, errors.New("Mihomo Controller must use a loopback address")
+		return nil, errors.New("mihomo Controller must use a loopback address")
 	}
 	if strings.TrimSpace(secret) == "" {
-		return nil, errors.New("Mihomo Controller secret is required")
+		return nil, errors.New("mihomo Controller secret is required")
 	}
 	baseURL, err := url.Parse("http://" + address)
 	if err != nil {
-		return nil, errors.New("Mihomo Controller address is invalid")
+		return nil, errors.New("mihomo Controller address is invalid")
 	}
 	return &Controller{
 		baseURL: baseURL,
@@ -57,7 +57,7 @@ func (controller *Controller) Version(ctx context.Context) (Version, error) {
 		return Version{}, fmt.Errorf("read Mihomo Controller version: %w", err)
 	}
 	if result.Version == "" {
-		return Version{}, errors.New("Mihomo Controller returned an empty version")
+		return Version{}, errors.New("mihomo Controller returned an empty version")
 	}
 	return result, nil
 }
@@ -88,7 +88,7 @@ func (controller *Controller) Connections(ctx context.Context) (ConnectionsSnaps
 
 func (controller *Controller) Reload(ctx context.Context, configPath string) error {
 	if !filepath.IsAbs(configPath) {
-		return errors.New("Mihomo configuration path must be absolute")
+		return errors.New("mihomo configuration path must be absolute")
 	}
 	if err := controller.requestJSON(
 		ctx,
@@ -141,12 +141,14 @@ func (controller *Controller) requestJSON(
 	}
 	response, err := controller.client.Do(request)
 	if err != nil {
-		return errors.New("Mihomo Controller is unavailable")
+		return errors.New("mihomo Controller is unavailable")
 	}
-	defer response.Body.Close()
+	defer func() {
+		_ = response.Body.Close()
+	}()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, maxControllerResponse))
-		return fmt.Errorf("Mihomo Controller returned HTTP %d", response.StatusCode)
+		return fmt.Errorf("mihomo Controller returned HTTP %d", response.StatusCode)
 	}
 	if responseBody == nil || response.StatusCode == http.StatusNoContent {
 		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, maxControllerResponse))

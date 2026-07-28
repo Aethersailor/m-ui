@@ -63,7 +63,9 @@ func TestPublisherCommitsManagedStateAndRevisionInRealSQLite(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer database.Close()
+	defer func() {
+		_ = database.Close()
+	}()
 	sealer, err := muicrypto.NewSealer(muicrypto.MasterKey{1, 2, 3})
 	if err != nil {
 		t.Fatal(err)

@@ -54,6 +54,27 @@ func TestLoadRejectsInvalidConfiguration(t *testing.T) {
 	}
 }
 
+func TestLoadAcceptsControllerBootstrapSecret(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(
+		path,
+		[]byte("[mihomo]\ncontroller_secret = \"synthetic-controller-secret-0001\"\n"),
+		0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Mihomo.ControllerSecret != "synthetic-controller-secret-0001" {
+		t.Fatal("controller bootstrap secret was not loaded")
+	}
+}
+
 func TestLoadRequiresExplicitFile(t *testing.T) {
 	t.Parallel()
 

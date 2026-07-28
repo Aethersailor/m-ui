@@ -119,7 +119,8 @@ YAML file over the active configuration.
 - State-changing browser requests require a valid session and CSRF header.
 - Login failures are deliberately indistinguishable and rate limited by the
   source-address and username combination.
-- Proxy headers are honored only for explicitly trusted proxy CIDRs.
+- Forwarded client-address headers are ignored in v0.1; security decisions use
+  the direct socket peer and therefore cannot be spoofed through HTTP headers.
 - Sensitive responses use `Cache-Control: no-store`; security headers deny
   framing and constrain content sources.
 - Logs, audit summaries, errors, fixtures, and command output are redacted and
@@ -137,8 +138,8 @@ observability, never user billing data.
 
 - Supported targets are systemd-based Debian 12+ and Ubuntu 24.04+ on Linux
   amd64 and arm64.
-- The panel defaults to `127.0.0.1:2095`; public exposure requires an explicit
-  local configuration change.
+- The panel defaults to `127.0.0.1:2095`; remote access uses an SSH tunnel or a
+  separately managed loopback reverse proxy.
 - The Mihomo Controller remains on loopback.
 - Data, the master key, database, revisions, and generated configuration use
   least-privilege ownership and modes.
@@ -151,4 +152,3 @@ No other protocols or transports, multi-node control, multi-administrator RBAC,
 per-user quota enforcement, permanent public subscriptions, arbitrary
 third-party YAML import, Docker packaging, automatic TLS certificates, firewall
 automation, or reverse-proxy installation are part of v0.1.
-

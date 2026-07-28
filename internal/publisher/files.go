@@ -46,6 +46,14 @@ func rejectSymlink(path string) error {
 }
 
 func writeExclusiveSynced(path string, content []byte) error {
+	return writeSynced(path, content, 0o600)
+}
+
+func writeSharedConfigSynced(path string, content []byte) error {
+	return writeSynced(path, content, 0o640)
+}
+
+func writeSynced(path string, content []byte, mode os.FileMode) error {
 	if len(content) > maxManagedFileSize {
 		return errors.New("managed file exceeds the size limit")
 	}
@@ -62,6 +70,9 @@ func writeExclusiveSynced(path string, content []byte) error {
 	}()
 	if _, err := file.Write(content); err != nil {
 		return errors.New("write managed publication file")
+	}
+	if err := file.Chmod(mode); err != nil {
+		return errors.New("set managed publication file permissions")
 	}
 	if err := file.Sync(); err != nil {
 		return errors.New("synchronize managed publication file")
@@ -84,7 +95,9 @@ func readManagedFile(path string) ([]byte, bool, error) {
 	case err != nil:
 		return nil, false, errors.New("open managed file")
 	}
-	defer file.Close()
+	defer func() {
+		_ = file.Close()
+	}()
 	content, err := io.ReadAll(io.LimitReader(file, maxManagedFileSize+1))
 	if err != nil {
 		return nil, false, errors.New("read managed file")

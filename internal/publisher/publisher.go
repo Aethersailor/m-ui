@@ -72,13 +72,13 @@ func New(
 	case compiler == nil:
 		return nil, errors.New("configuration compiler is required")
 	case cli == nil:
-		return nil, errors.New("Mihomo CLI is required")
+		return nil, errors.New("mihomo CLI is required")
 	case controller == nil:
-		return nil, errors.New("Mihomo Controller is required")
+		return nil, errors.New("mihomo Controller is required")
 	case process == nil:
-		return nil, errors.New("Mihomo process adapter is required")
+		return nil, errors.New("mihomo process adapter is required")
 	case !filepath.IsAbs(options.ConfigPath):
-		return nil, errors.New("Mihomo configuration path must be absolute")
+		return nil, errors.New("mihomo configuration path must be absolute")
 	case !filepath.IsAbs(options.RevisionDirectory):
 		return nil, errors.New("revision directory must be absolute")
 	case options.HistoryLimit < 1:
@@ -125,7 +125,9 @@ func (publisher *Publisher) CompileCurrent(
 	if err != nil {
 		return nil, domain.DesiredState{}, err
 	}
-	defer transaction.Rollback(context.Background())
+	defer func() {
+		_ = transaction.Rollback(context.Background())
+	}()
 	state, err := transaction.DesiredState(ctx, asOf.UTC())
 	if err != nil {
 		return nil, domain.DesiredState{}, fmt.Errorf("load desired state: %w", err)
@@ -148,7 +150,9 @@ func (publisher *Publisher) ValidateCurrent(
 	if err != nil {
 		return nil, err
 	}
-	defer transaction.Rollback(context.Background())
+	defer func() {
+		_ = transaction.Rollback(context.Background())
+	}()
 	state, err := transaction.DesiredState(ctx, asOf.UTC())
 	if err != nil {
 		return nil, fmt.Errorf("load desired state: %w", err)
@@ -165,7 +169,9 @@ func (publisher *Publisher) ValidateCurrent(
 		filepath.Dir(publisher.options.ConfigPath),
 		".m-ui-validation-"+validationID.String()+".yaml",
 	)
-	defer os.Remove(candidatePath)
+	defer func() {
+		_ = os.Remove(candidatePath)
+	}()
 	if err := writeExclusiveSynced(candidatePath, compiled); err != nil {
 		return nil, err
 	}
@@ -311,8 +317,10 @@ func (publisher *Publisher) publishLocked(
 		configDirectory,
 		".m-ui-candidate-"+revision.ID+".yaml",
 	)
-	defer os.Remove(candidatePath)
-	if err := writeExclusiveSynced(candidatePath, compiled); err != nil {
+	defer func() {
+		_ = os.Remove(candidatePath)
+	}()
+	if err := writeSharedConfigSynced(candidatePath, compiled); err != nil {
 		return domain.Revision{}, err
 	}
 	if err := publisher.cli.Validate(ctx, candidatePath); err != nil {
@@ -336,7 +344,9 @@ func (publisher *Publisher) publishLocked(
 		configDirectory,
 		".m-ui-rollback-"+revision.ID+".yaml",
 	)
-	defer os.Remove(backupPath)
+	defer func() {
+		_ = os.Remove(backupPath)
+	}()
 	if previousExists {
 		if err := writeExclusiveSynced(backupPath, previousConfig); err != nil {
 			return domain.Revision{}, err
@@ -586,7 +596,7 @@ func (publisher *Publisher) reloadWithFallback(ctx context.Context) error {
 		return nil
 	}
 	if err := publisher.process.Restart(ctx); err != nil {
-		return errors.New("Controller reload and systemd restart both failed")
+		return errors.New("controller reload and systemd restart both failed")
 	}
 	return nil
 }
@@ -604,7 +614,7 @@ func (publisher *Publisher) waitHealthy(ctx context.Context) error {
 		select {
 		case <-healthContext.Done():
 			timer.Stop()
-			return errors.New("Mihomo did not become healthy before the deadline")
+			return errors.New("mihomo did not become healthy before the deadline")
 		case <-timer.C:
 		}
 	}
@@ -629,8 +639,10 @@ func (publisher *Publisher) restorePrevious(
 		filepath.Dir(publisher.options.ConfigPath),
 		".m-ui-recovery-"+revisionID+".yaml",
 	)
-	defer os.Remove(recoveryPath)
-	if err := writeExclusiveSynced(recoveryPath, previousConfig); err != nil {
+	defer func() {
+		_ = os.Remove(recoveryPath)
+	}()
+	if err := writeSharedConfigSynced(recoveryPath, previousConfig); err != nil {
 		return err
 	}
 	if err := replaceAndSync(recoveryPath, publisher.options.ConfigPath); err != nil {

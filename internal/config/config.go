@@ -57,6 +57,7 @@ type Mihomo struct {
 	ConfigDirectory   string `toml:"config_directory"`
 	ConfigPath        string `toml:"config_path"`
 	ControllerAddress string `toml:"controller_address"`
+	ControllerSecret  string `toml:"controller_secret"`
 	ServiceName       string `toml:"service_name"`
 	RevisionDirectory string `toml:"revision_directory"`
 	HistoryLimit      int    `toml:"history_limit"`
@@ -195,6 +196,15 @@ func (c Config) Validate() error {
 	}
 	if parsedPort, err := net.LookupPort("tcp", port); err != nil || parsedPort == 0 {
 		return fmt.Errorf("mihomo.controller_address port is invalid")
+	}
+	if c.Mihomo.ControllerSecret != "" {
+		if strings.TrimSpace(c.Mihomo.ControllerSecret) != c.Mihomo.ControllerSecret ||
+			len(c.Mihomo.ControllerSecret) < 32 ||
+			len(c.Mihomo.ControllerSecret) > 128 {
+			return fmt.Errorf(
+				"mihomo.controller_secret must contain between 32 and 128 non-whitespace bytes",
+			)
+		}
 	}
 	if c.Mihomo.ServiceName != "mihomo.service" {
 		return fmt.Errorf("mihomo.service_name must be mihomo.service")

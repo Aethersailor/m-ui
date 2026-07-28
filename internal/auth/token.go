@@ -1,7 +1,6 @@
 package auth
 
 import (
-	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -34,8 +33,4 @@ func newOpaqueID(random io.Reader) (string, error) {
 		return "", fmt.Errorf("generate random ID: %w", err)
 	}
 	return hex.EncodeToString(value), nil
-}
-
-func generateSessionToken() (string, error) {
-	return newToken(rand.Reader, sessionTokenBytes)
 }

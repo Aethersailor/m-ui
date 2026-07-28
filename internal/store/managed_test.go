@@ -18,7 +18,9 @@ func TestManagedStoreRoundTripsEncryptedStateAndRevisionTransitions(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer database.Close()
+	defer func() {
+		_ = database.Close()
+	}()
 	var key muicrypto.MasterKey
 	for index := range key {
 		key[index] = byte(index + 1)
@@ -124,14 +126,16 @@ func TestManagedStoreRoundTripsEncryptedStateAndRevisionTransitions(t *testing.T
 	}
 }
 
-func TestInitialSettingsGenerateEncryptedStableControllerSecret(t *testing.T) {
+func TestInitialSettingsEncryptStableControllerBootstrapSecret(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	database, err := Open(ctx, ":memory:")
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer database.Close()
+	defer func() {
+		_ = database.Close()
+	}()
 	sealer, err := muicrypto.NewSealer(muicrypto.MasterKey{4, 5, 6})
 	if err != nil {
 		t.Fatal(err)
@@ -152,6 +156,7 @@ func TestInitialSettingsGenerateEncryptedStableControllerSecret(t *testing.T) {
 		MihomoConfigDir:    "/etc/mihomo",
 		MihomoConfigPath:   "/etc/mihomo/config.yaml",
 		ControllerAddress:  "127.0.0.1:9090",
+		BootstrapSecret:    "synthetic-controller-bootstrap-secret",
 		MihomoServiceName:  "mihomo.service",
 		HistoryLimit:       20,
 	}
@@ -162,7 +167,7 @@ func TestInitialSettingsGenerateEncryptedStableControllerSecret(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if first.ControllerSecret == "" ||
+	if first.ControllerSecret != initial.BootstrapSecret ||
 		first.PanelTitle != "m-ui" ||
 		first.MihomoConfigPath != "/etc/mihomo/config.yaml" {
 		t.Fatalf("initial settings = %#v", first)
@@ -212,7 +217,9 @@ func TestManagedStoreSerializesImmediateTransactions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer database.Close()
+	defer func() {
+		_ = database.Close()
+	}()
 	sealer, err := muicrypto.NewSealer(muicrypto.MasterKey{1})
 	if err != nil {
 		t.Fatal(err)
@@ -242,7 +249,9 @@ func TestManagedStoreDegradedStateAndRetentionNeverDeleteActive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer database.Close()
+	defer func() {
+		_ = database.Close()
+	}()
 	sealer, err := muicrypto.NewSealer(muicrypto.MasterKey{2})
 	if err != nil {
 		t.Fatal(err)

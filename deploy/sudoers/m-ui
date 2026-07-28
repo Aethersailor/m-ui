@@ -1,0 +1,10 @@
+Defaults:m-ui !requiretty
+
+Cmnd_Alias M_UI_MIHOMO = \
+    /usr/bin/systemctl start mihomo.service, \
+    /usr/bin/systemctl stop mihomo.service, \
+    /usr/bin/systemctl restart mihomo.service, \
+    /usr/bin/systemctl reload mihomo.service, \
+    /usr/bin/systemctl is-active mihomo.service
+
+m-ui ALL=(root) NOPASSWD: M_UI_MIHOMO

@@ -26,6 +26,10 @@ binary_path = "/usr/local/bin/mihomo"
 config_directory = "/etc/mihomo"
 config_path = "/etc/mihomo/config.yaml"
 controller_address = "127.0.0.1:9090"
+# Optional first-run bootstrap value. The installer writes a random secret,
+# m-ui encrypts it into SQLite, then the installer clears this field after the
+# first healthy start. Protect this file as root:m-ui 0640.
+controller_secret = ""
 service_name = "mihomo.service"
 revision_directory = "/var/lib/m-ui/revisions"
 history_limit = 20

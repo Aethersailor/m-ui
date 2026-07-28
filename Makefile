@@ -11,7 +11,7 @@ LDFLAGS := -X github.com/Aethersailor/m-ui/internal/version.version=$(VERSION) \
 	-X github.com/Aethersailor/m-ui/internal/version.date=$(BUILD_DATE) \
 	-X github.com/Aethersailor/m-ui/internal/version.dirty=$(DIRTY)
 
-.PHONY: all build web-install web-build test test-go test-web vet lint typecheck clean
+.PHONY: all build web-install web-build test test-go test-web vet lint typecheck smoke clean
 
 all: build
 
@@ -41,6 +41,9 @@ lint:
 
 typecheck:
 	$(NPM) --prefix web run typecheck
+
+smoke:
+	sh scripts/smoke-test.sh
 
 clean:
 	rm -rf "$(OUTPUT_DIR)" internal/httpapi/ui/dist

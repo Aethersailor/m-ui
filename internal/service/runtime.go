@@ -37,10 +37,10 @@ func NewRuntimeMonitor(
 	options RuntimeMonitorOptions,
 ) (*RuntimeMonitor, error) {
 	if controller == nil {
-		return nil, fmt.Errorf("Mihomo Controller is required")
+		return nil, fmt.Errorf("mihomo Controller is required")
 	}
 	if process == nil {
-		return nil, fmt.Errorf("Mihomo process adapter is required")
+		return nil, fmt.Errorf("mihomo process adapter is required")
 	}
 	if options.Interval <= 0 {
 		options.Interval = 2 * time.Second

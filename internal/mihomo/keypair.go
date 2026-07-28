@@ -28,7 +28,7 @@ type CLI struct {
 
 func NewCLI(binaryPath string) (*CLI, error) {
 	if strings.TrimSpace(binaryPath) == "" {
-		return nil, errors.New("Mihomo binary path is required")
+		return nil, errors.New("mihomo binary path is required")
 	}
 	return &CLI{
 		binaryPath:  binaryPath,
@@ -51,7 +51,7 @@ func (cli *CLI) GenerateRealityKeypair(ctx context.Context) (domain.Keypair, err
 
 func (cli *CLI) Validate(ctx context.Context, configPath string) error {
 	if strings.TrimSpace(configPath) == "" {
-		return errors.New("Mihomo configuration path is required")
+		return errors.New("mihomo configuration path is required")
 	}
 	if _, err := cli.run(ctx, 20*time.Second, "-t", "-f", configPath); err != nil {
 		return fmt.Errorf("validate Mihomo configuration: %w", err)
@@ -66,7 +66,7 @@ func (cli *CLI) Version(ctx context.Context) (string, error) {
 	}
 	version := strings.TrimSpace(string(output))
 	if version == "" {
-		return "", errors.New("Mihomo version output is empty")
+		return "", errors.New("mihomo version output is empty")
 	}
 	return version, nil
 }
@@ -82,12 +82,12 @@ func (cli *CLI) run(ctx context.Context, timeout time.Duration, arguments ...str
 	command.Stderr = &output
 	if err := command.Run(); err != nil {
 		if errors.Is(commandContext.Err(), context.DeadlineExceeded) {
-			return nil, errors.New("Mihomo command timed out")
+			return nil, errors.New("mihomo command timed out")
 		}
 		if errors.Is(output.err, errOutputLimit) {
-			return nil, errors.New("Mihomo command output is too large")
+			return nil, errors.New("mihomo command output is too large")
 		}
-		return nil, errors.New("Mihomo command failed")
+		return nil, errors.New("mihomo command failed")
 	}
 	return output.Bytes(), nil
 }
@@ -103,24 +103,24 @@ func parseRealityKeypair(output []byte) (domain.Keypair, error) {
 		switch normalizedLabel {
 		case "privatekey":
 			if keypair.PrivateKey != "" {
-				return domain.Keypair{}, errors.New("Mihomo REALITY key output contains a duplicate private key")
+				return domain.Keypair{}, errors.New("mihomo REALITY key output contains a duplicate private key")
 			}
 			keypair.PrivateKey = strings.TrimSpace(value)
 		case "publickey":
 			if keypair.PublicKey != "" {
-				return domain.Keypair{}, errors.New("Mihomo REALITY key output contains a duplicate public key")
+				return domain.Keypair{}, errors.New("mihomo REALITY key output contains a duplicate public key")
 			}
 			keypair.PublicKey = strings.TrimSpace(value)
 		}
 	}
 	if keypair.PrivateKey == "" || keypair.PublicKey == "" {
-		return domain.Keypair{}, errors.New("Mihomo REALITY key output format is not recognized")
+		return domain.Keypair{}, errors.New("mihomo REALITY key output format is not recognized")
 	}
 	if err := domain.ValidateRealityKey(keypair.PrivateKey); err != nil {
-		return domain.Keypair{}, fmt.Errorf("Mihomo returned an invalid REALITY private key: %w", err)
+		return domain.Keypair{}, fmt.Errorf("mihomo returned an invalid REALITY private key: %w", err)
 	}
 	if err := domain.ValidateRealityKey(keypair.PublicKey); err != nil {
-		return domain.Keypair{}, fmt.Errorf("Mihomo returned an invalid REALITY public key: %w", err)
+		return domain.Keypair{}, fmt.Errorf("mihomo returned an invalid REALITY public key: %w", err)
 	}
 	return keypair, nil
 }

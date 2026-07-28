@@ -85,11 +85,11 @@ func NewManager(options ManagerOptions) (*Manager, error) {
 	case options.Publisher == nil:
 		return nil, errors.New("publisher is required")
 	case options.CLI == nil:
-		return nil, errors.New("Mihomo CLI is required")
+		return nil, errors.New("mihomo CLI is required")
 	case options.Controller == nil:
-		return nil, errors.New("Mihomo Controller is required")
+		return nil, errors.New("mihomo Controller is required")
 	case options.Process == nil:
-		return nil, errors.New("Mihomo process adapter is required")
+		return nil, errors.New("mihomo process adapter is required")
 	case options.Runtime == nil:
 		return nil, errors.New("runtime monitor is required")
 	}

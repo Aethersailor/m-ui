@@ -38,6 +38,9 @@ jobs:
       - name: Vet backend
         run: go vet ./...
 
+      - name: Test backend with race detector
+        run: go test -race ./...
+
       - name: Lint frontend
         run: npm --prefix web run lint
 
@@ -47,8 +50,24 @@ jobs:
       - name: Test frontend
         run: npm --prefix web run test
 
+      - name: Run real Mihomo smoke test
+        run: make smoke
+
       - name: Build release-shaped binary
         run: make build
+
+      - name: Validate packaging files
+        run: |
+          sh -n scripts/install.sh
+          sh -n scripts/uninstall.sh
+          sh -n scripts/smoke-test.sh
+          sudo visudo -cf deploy/sudoers/m-ui
+          sudo install -m 0755 dist/m-ui /usr/local/bin/m-ui
+          sudo install -m 0755 /bin/true /usr/local/bin/mihomo
+          systemd-analyze verify \
+            deploy/systemd/m-ui.service \
+            deploy/systemd/mihomo.service
+          sudo rm -f /usr/local/bin/m-ui /usr/local/bin/mihomo
 
       - name: Verify Linux amd64 target
         env:
@@ -56,3 +75,22 @@ jobs:
           GOARCH: amd64
           CGO_ENABLED: "0"
         run: go build -tags webembed -trimpath -o dist/m-ui-linux-amd64 ./cmd/m-ui
+
+  golangci-lint:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: 1.26.5
+          cache: true
+
+      - name: Run golangci-lint
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.12.2

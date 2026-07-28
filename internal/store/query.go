@@ -30,7 +30,9 @@ func (managed *ManagedStore) Revisions(
 	if err != nil {
 		return nil, fmt.Errorf("query configuration revisions: %w", err)
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 	var revisions []domain.Revision
 	for rows.Next() {
 		revision, err := scanRevision(rows)
@@ -81,7 +83,9 @@ func (managed *ManagedStore) AuditEntries(
 	if err != nil {
 		return nil, fmt.Errorf("query audit entries: %w", err)
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 	var entries []AuditEntry
 	for rows.Next() {
 		entry, err := scanAuditEntry(rows)

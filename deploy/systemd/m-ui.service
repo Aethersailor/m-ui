@@ -1,0 +1,41 @@
+[Unit]
+Description=m-ui Mihomo management interface
+Documentation=https://github.com/Aethersailor/m-ui
+After=network-online.target mihomo.service
+Wants=network-online.target mihomo.service
+
+[Service]
+Type=simple
+User=m-ui
+Group=m-ui
+SupplementaryGroups=systemd-journal
+WorkingDirectory=/var/lib/m-ui
+Environment=HOME=/var/lib/m-ui
+ExecStart=/usr/local/bin/m-ui server --config /etc/m-ui/config.toml
+Restart=on-failure
+RestartSec=3s
+TimeoutStopSec=15s
+UMask=0077
+
+CapabilityBoundingSet=
+LockPersonality=true
+PrivateDevices=true
+PrivateTmp=true
+ProtectClock=true
+ProtectControlGroups=true
+ProtectHome=true
+ProtectHostname=true
+ProtectKernelLogs=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectProc=invisible
+ProtectSystem=strict
+ReadWritePaths=/etc/mihomo /var/lib/m-ui
+RemoveIPC=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+RestrictRealtime=true
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

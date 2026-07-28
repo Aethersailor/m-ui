@@ -57,6 +57,7 @@ type InitialSettings struct {
 	MihomoConfigDir    string
 	MihomoConfigPath   string
 	ControllerAddress  string
+	BootstrapSecret    string
 	MihomoServiceName  string
 	HistoryLimit       int
 }
@@ -111,7 +112,9 @@ func (managed *ManagedStore) EnsureInitialSettings(
 	if err != nil {
 		return fmt.Errorf("begin initial settings transaction: %w", err)
 	}
-	defer transaction.Rollback()
+	defer func() {
+		_ = transaction.Rollback()
+	}()
 	displayDefaults := []struct {
 		key   string
 		value string
@@ -170,11 +173,14 @@ func (managed *ManagedStore) EnsureInitialSettings(
 		return fmt.Errorf("check Mihomo Controller secret: %w", err)
 	}
 	if secretCount == 0 {
-		rawSecret := make([]byte, 32)
-		if _, err := io.ReadFull(rand.Reader, rawSecret); err != nil {
-			return errors.New("generate Mihomo Controller secret")
+		secret := settings.BootstrapSecret
+		if secret == "" {
+			rawSecret := make([]byte, 32)
+			if _, err := io.ReadFull(rand.Reader, rawSecret); err != nil {
+				return errors.New("generate Mihomo Controller secret")
+			}
+			secret = base64.RawURLEncoding.EncodeToString(rawSecret)
 		}
-		secret := base64.RawURLEncoding.EncodeToString(rawSecret)
 		ciphertext, err := managed.sealer.Encrypt(
 			[]byte(secret),
 			controllerSecretPurpose,
@@ -203,7 +209,9 @@ func (managed *ManagedStore) Settings(ctx context.Context) (RuntimeSettings, err
 	if err != nil {
 		return RuntimeSettings{}, fmt.Errorf("query settings: %w", err)
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 	values := make(map[string]string)
 	for rows.Next() {
 		var key, value string
@@ -246,6 +254,7 @@ func (managed *ManagedStore) Settings(ctx context.Context) (RuntimeSettings, err
 			MihomoConfigDir:    values[settingMihomoConfigDir],
 			MihomoConfigPath:   values[settingMihomoConfigPath],
 			ControllerAddress:  values[settingControllerAddress],
+			BootstrapSecret:    "",
 			MihomoServiceName:  values[settingMihomoService],
 			HistoryLimit:       historyLimit,
 		},
@@ -261,7 +270,9 @@ func (managed *ManagedStore) ReadDesiredState(
 	if err != nil {
 		return domain.DesiredState{}, err
 	}
-	defer transaction.Rollback(context.Background())
+	defer func() {
+		_ = transaction.Rollback(context.Background())
+	}()
 	return transaction.DesiredState(ctx, asOf)
 }
 
@@ -313,7 +324,9 @@ func (transaction *ManagedTx) DesiredState(
 	if err != nil {
 		return domain.DesiredState{}, fmt.Errorf("query listeners: %w", err)
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 	for rows.Next() {
 		var listener domain.Listener
 		var enabled, udpEnabled int
@@ -747,7 +760,9 @@ func (managed *ManagedStore) InactiveRevisionsBeyond(
 	if err != nil {
 		return nil, fmt.Errorf("query expired revisions: %w", err)
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 	var revisions []domain.Revision
 	for rows.Next() {
 		revision, err := scanRevision(rows)
@@ -793,7 +808,9 @@ func (transaction *ManagedTx) settings(ctx context.Context) (map[string]string, 
 	if err != nil {
 		return nil, fmt.Errorf("query managed settings: %w", err)
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 	settings := make(map[string]string, 3)
 	for rows.Next() {
 		var key, value string
@@ -834,7 +851,9 @@ func (transaction *ManagedTx) loadUsers(
 	if err != nil {
 		return fmt.Errorf("query listener users: %w", err)
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 	for rows.Next() {
 		var user domain.User
 		var enabled int
