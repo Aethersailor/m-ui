@@ -760,7 +760,7 @@ func (transaction *commitFaultTransaction) Commit(ctx context.Context) error {
 	synthetic := errors.New("synthetic uncertain commit result")
 	switch transaction.mode {
 	case commitFailsBeforeDurableWrite:
-		if err := transaction.PublicationTransaction.Rollback(ctx); err != nil {
+		if err := transaction.Rollback(ctx); err != nil {
 			return errors.Join(synthetic, err)
 		}
 		if transaction.afterCommit != nil {
