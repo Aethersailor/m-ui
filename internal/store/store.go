@@ -18,8 +18,9 @@ import (
 )
 
 var (
-	ErrNotFound            = errors.New("record not found")
-	ErrSingleAdminConflict = errors.New("a different administrator already exists")
+	ErrNotFound                = errors.New("record not found")
+	ErrSingleAdminConflict     = errors.New("a different administrator already exists")
+	ErrMultipleActiveRevisions = errors.New("multiple active configuration revisions found")
 )
 
 const databaseTimeFormat = "2006-01-02T15:04:05.000000000Z"

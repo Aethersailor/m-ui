@@ -67,8 +67,17 @@ type RuntimeSettings struct {
 	ControllerSecret string
 }
 
+type PublicationSnapshot struct {
+	State          domain.DesiredState
+	ActiveRevision *domain.Revision
+}
+
 type PublicationRepository interface {
 	BeginImmediate(ctx context.Context) (PublicationTransaction, error)
+	ReadPublicationSnapshot(
+		ctx context.Context,
+		asOf time.Time,
+	) (PublicationSnapshot, error)
 	SystemState(ctx context.Context) (domain.SystemState, error)
 	MarkDegraded(ctx context.Context, reason, revisionID string, now time.Time) error
 	ClearDegraded(ctx context.Context, now time.Time) error
@@ -81,6 +90,7 @@ type PublicationRepository interface {
 type PublicationTransaction interface {
 	DesiredState(ctx context.Context, asOf time.Time) (domain.DesiredState, error)
 	ReplaceDesiredState(ctx context.Context, state domain.DesiredState) error
+	ActiveRevision(ctx context.Context) (*domain.Revision, error)
 	NextRevisionNumber(ctx context.Context) (int64, error)
 	InsertRevision(ctx context.Context, revision domain.Revision) error
 	ActivateRevision(ctx context.Context, revisionID string, activatedAt time.Time) error
@@ -266,14 +276,53 @@ func (managed *ManagedStore) ReadDesiredState(
 	ctx context.Context,
 	asOf time.Time,
 ) (domain.DesiredState, error) {
-	transaction, err := managed.BeginImmediate(ctx)
+	snapshot, err := managed.ReadPublicationSnapshot(ctx, asOf)
 	if err != nil {
 		return domain.DesiredState{}, err
 	}
+	return snapshot.State, nil
+}
+
+func (managed *ManagedStore) ReadPublicationSnapshot(
+	ctx context.Context,
+	asOf time.Time,
+) (PublicationSnapshot, error) {
+	conn, err := managed.store.db.Conn(ctx)
+	if err != nil {
+		return PublicationSnapshot{}, fmt.Errorf(
+			"acquire SQLite publication snapshot connection: %w",
+			err,
+		)
+	}
+	if _, err := conn.ExecContext(ctx, "BEGIN"); err != nil {
+		_ = conn.Close()
+		return PublicationSnapshot{}, fmt.Errorf(
+			"begin publication snapshot transaction: %w",
+			err,
+		)
+	}
+	transaction := &ManagedTx{conn: conn, sealer: managed.sealer}
 	defer func() {
 		_ = transaction.Rollback(context.Background())
 	}()
-	return transaction.DesiredState(ctx, asOf)
+	state, err := transaction.DesiredState(ctx, asOf.UTC())
+	if err != nil {
+		return PublicationSnapshot{}, fmt.Errorf(
+			"read durable desired state: %w",
+			err,
+		)
+	}
+	activeRevision, err := transaction.ActiveRevision(ctx)
+	if err != nil {
+		return PublicationSnapshot{}, fmt.Errorf(
+			"read durable active revision: %w",
+			err,
+		)
+	}
+	return PublicationSnapshot{
+		State:          state,
+		ActiveRevision: activeRevision,
+	}, nil
 }
 
 func (managed *ManagedStore) BeginImmediate(ctx context.Context) (PublicationTransaction, error) {
@@ -516,6 +565,45 @@ func (transaction *ManagedTx) NextRevisionNumber(ctx context.Context) (int64, er
 	return number, nil
 }
 
+func (transaction *ManagedTx) ActiveRevision(
+	ctx context.Context,
+) (*domain.Revision, error) {
+	rows, err := transaction.conn.QueryContext(
+		ctx,
+		`SELECT id, revision_number, sha256, file_path, state_file_path,
+		        status, reason, COALESCE(actor_admin_id, ''),
+		        COALESCE(error_message_redacted, ''), created_at, activated_at
+		   FROM config_revisions
+		  WHERE status = ?
+		  ORDER BY revision_number DESC
+		  LIMIT 2`,
+		domain.RevisionActive,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("query active configuration revision: %w", err)
+	}
+	defer func() {
+		_ = rows.Close()
+	}()
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			return nil, fmt.Errorf("iterate active configuration revision: %w", err)
+		}
+		return nil, nil
+	}
+	revision, err := scanRevision(rows)
+	if err != nil {
+		return nil, err
+	}
+	if rows.Next() {
+		return nil, ErrMultipleActiveRevisions
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate active configuration revision: %w", err)
+	}
+	return &revision, nil
+}
+
 func (transaction *ManagedTx) InsertRevision(
 	ctx context.Context,
 	revision domain.Revision,
@@ -751,11 +839,12 @@ func (managed *ManagedStore) InactiveRevisionsBeyond(
 		        status, reason, COALESCE(actor_admin_id, ''),
 		        COALESCE(error_message_redacted, ''), created_at, activated_at
 		   FROM config_revisions
-		  WHERE status = ?
+		  WHERE status IN (?, ?)
 		  ORDER BY revision_number DESC
 		  LIMIT -1 OFFSET ?`,
 		domain.RevisionRolledBack,
-		keep-1,
+		domain.RevisionFailed,
+		keep,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("query expired revisions: %w", err)

@@ -237,6 +237,59 @@ func TestPublisherCommitFailureRestoresPreviousConfiguration(t *testing.T) {
 	}
 }
 
+func TestPublisherPruneFailureAfterCommitStillReturnsSuccess(t *testing.T) {
+	t.Parallel()
+	fixture := newPublisherFixture(t)
+	fixture.repository.inactiveErr = errors.New("synthetic retention query failure")
+
+	revision, err := fixture.publisher.Publish(
+		context.Background(),
+		fixture.request(fixture.nextState),
+	)
+	if err != nil {
+		t.Fatalf("Publish() error = %v", err)
+	}
+	if revision.Status != domain.RevisionActive || revision.ActivatedAt == nil {
+		t.Fatalf("revision = %#v", revision)
+	}
+	if fixture.repository.currentState().Listeners[0].Name != "next" {
+		t.Fatal("successful publication was not committed")
+	}
+}
+
+func TestPruneFileFailureDoesNotDeleteRevisionRecord(t *testing.T) {
+	t.Parallel()
+	fixture := newPublisherFixture(t)
+	nonEmptyDirectory := filepath.Join(
+		fixture.publisher.options.RevisionDirectory,
+		"cannot-remove-as-file",
+	)
+	if err := os.MkdirAll(nonEmptyDirectory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(nonEmptyDirectory, "child"),
+		[]byte("synthetic\n"),
+		0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+	fixture.repository.inactive = []domain.Revision{{
+		ID:             "inactive-revision",
+		FilePath:       nonEmptyDirectory,
+		StateFilePath:  filepath.Join(fixture.publisher.options.RevisionDirectory, "state.json"),
+		Status:         domain.RevisionFailed,
+		RevisionNumber: 1,
+	}}
+
+	if err := fixture.publisher.prune(context.Background()); err == nil {
+		t.Fatal("prune() error = nil, want file removal failure")
+	}
+	if fixture.repository.deletes != 0 {
+		t.Fatal("revision database record was deleted before its files")
+	}
+}
+
 func TestPublisherRecoveryFailureMarksDegradedAndBlocksWrites(t *testing.T) {
 	t.Parallel()
 	fixture := newPublisherFixture(t)
@@ -271,20 +324,28 @@ func TestPublisherRecoveryFailureMarksDegradedAndBlocksWrites(t *testing.T) {
 func TestPublisherSerializesConcurrentPublications(t *testing.T) {
 	t.Parallel()
 	fixture := newPublisherFixture(t)
-	fixture.cli.delay = 15 * time.Millisecond
+	fixture.cli.entered = make(chan struct{})
+	fixture.cli.release = make(chan struct{})
 	var wait sync.WaitGroup
 	errorsFound := make(chan error, 2)
+	firstStarted := make(chan struct{})
 	for index := 0; index < 2; index++ {
 		wait.Add(1)
-		go func() {
+		go func(index int) {
 			defer wait.Done()
+			if index == 0 {
+				close(firstStarted)
+			}
 			_, err := fixture.publisher.Publish(
 				context.Background(),
 				fixture.request(fixture.nextState),
 			)
 			errorsFound <- err
-		}()
+		}(index)
 	}
+	<-firstStarted
+	<-fixture.cli.entered
+	close(fixture.cli.release)
 	wait.Wait()
 	close(errorsFound)
 	for err := range errorsFound {
@@ -488,6 +549,11 @@ type fakePublicationRepository struct {
 	revisions   map[string]domain.Revision
 	audits      []store.AuditEntry
 	commitErr   error
+	snapshotErr error
+	inactiveErr error
+	inactive    []domain.Revision
+	deleteErr   error
+	deletes     int
 }
 
 func newFakePublicationRepository(state domain.DesiredState) *fakePublicationRepository {
@@ -516,6 +582,32 @@ func (repository *fakePublicationRepository) SystemState(
 	repository.mutex.Lock()
 	defer repository.mutex.Unlock()
 	return repository.systemState, nil
+}
+
+func (repository *fakePublicationRepository) ReadPublicationSnapshot(
+	_ context.Context,
+	asOf time.Time,
+) (store.PublicationSnapshot, error) {
+	repository.mutex.Lock()
+	defer repository.mutex.Unlock()
+	if repository.snapshotErr != nil {
+		return store.PublicationSnapshot{}, repository.snapshotErr
+	}
+	snapshot := store.PublicationSnapshot{
+		State: cloneState(repository.state),
+	}
+	snapshot.State.AsOf = asOf
+	for _, revision := range repository.revisions {
+		if revision.Status != domain.RevisionActive {
+			continue
+		}
+		if snapshot.ActiveRevision != nil {
+			return store.PublicationSnapshot{}, errors.New("multiple active revisions")
+		}
+		active := revision
+		snapshot.ActiveRevision = &active
+	}
+	return snapshot, nil
 }
 
 func (repository *fakePublicationRepository) MarkDegraded(
@@ -572,7 +664,9 @@ func (repository *fakePublicationRepository) InactiveRevisionsBeyond(
 	context.Context,
 	int,
 ) ([]domain.Revision, error) {
-	return nil, nil
+	repository.mutex.Lock()
+	defer repository.mutex.Unlock()
+	return append([]domain.Revision(nil), repository.inactive...), repository.inactiveErr
 }
 
 func (repository *fakePublicationRepository) DeleteRevision(
@@ -581,6 +675,10 @@ func (repository *fakePublicationRepository) DeleteRevision(
 ) error {
 	repository.mutex.Lock()
 	defer repository.mutex.Unlock()
+	repository.deletes++
+	if repository.deleteErr != nil {
+		return repository.deleteErr
+	}
 	delete(repository.revisions, id)
 	return nil
 }
@@ -653,6 +751,23 @@ func (transaction *fakePublicationTransaction) NextRevisionNumber(
 	return maximum + 1, nil
 }
 
+func (transaction *fakePublicationTransaction) ActiveRevision(
+	context.Context,
+) (*domain.Revision, error) {
+	var active *domain.Revision
+	for _, revision := range transaction.revisions {
+		if revision.Status != domain.RevisionActive {
+			continue
+		}
+		if active != nil {
+			return nil, errors.New("multiple active revisions")
+		}
+		copy := revision
+		active = &copy
+	}
+	return active, nil
+}
+
 func (transaction *fakePublicationTransaction) InsertRevision(
 	_ context.Context,
 	revision domain.Revision,
@@ -711,12 +826,16 @@ func (transaction *fakePublicationTransaction) Rollback(context.Context) error {
 
 type fakeCLI struct {
 	validateErr   error
-	delay         time.Duration
 	concurrent    atomic.Int32
 	maxConcurrent atomic.Int32
+	calls         atomic.Int32
+	entered       chan struct{}
+	release       chan struct{}
+	enterOnce     sync.Once
 }
 
 func (cli *fakeCLI) Validate(context.Context, string) error {
+	cli.calls.Add(1)
 	current := cli.concurrent.Add(1)
 	defer cli.concurrent.Add(-1)
 	for {
@@ -725,8 +844,13 @@ func (cli *fakeCLI) Validate(context.Context, string) error {
 			break
 		}
 	}
-	if cli.delay != 0 {
-		time.Sleep(cli.delay)
+	if cli.entered != nil {
+		cli.enterOnce.Do(func() {
+			close(cli.entered)
+			if cli.release != nil {
+				<-cli.release
+			}
+		})
 	}
 	return cli.validateErr
 }

@@ -13,9 +13,11 @@ import (
 	"github.com/Aethersailor/m-ui/internal/auth"
 	"github.com/Aethersailor/m-ui/internal/config"
 	muicrypto "github.com/Aethersailor/m-ui/internal/crypto"
+	"github.com/Aethersailor/m-ui/internal/domain"
 	"github.com/Aethersailor/m-ui/internal/httpapi"
 	"github.com/Aethersailor/m-ui/internal/mihomo"
 	"github.com/Aethersailor/m-ui/internal/publisher"
+	"github.com/Aethersailor/m-ui/internal/redact"
 	"github.com/Aethersailor/m-ui/internal/scheduler"
 	"github.com/Aethersailor/m-ui/internal/service"
 	"github.com/Aethersailor/m-ui/internal/store"
@@ -147,8 +149,16 @@ func Run(ctx context.Context, cfg config.Config, build version.Info) error {
 	if err != nil {
 		return fmt.Errorf("initialize expiry scheduler: %w", err)
 	}
-	go runtimeMonitor.Run(ctx)
-	go expiryScheduler.Run(ctx)
+	if err := startBackgroundServices(
+		ctx,
+		configurationPublisher,
+		managedStore,
+		runtimeMonitor,
+		expiryScheduler,
+		logger,
+	); err != nil {
+		return err
+	}
 
 	server := &http.Server{
 		Addr: cfg.Address(),
@@ -192,6 +202,55 @@ func Run(ctx context.Context, cfg config.Config, build version.Info) error {
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		return fmt.Errorf("shut down HTTP server: %w", err)
 	}
+	return nil
+}
+
+type startupReconciler interface {
+	ReconcileStartup(context.Context) error
+}
+
+type systemStateReader interface {
+	SystemState(context.Context) (domain.SystemState, error)
+}
+
+type backgroundRunner interface {
+	Run(context.Context)
+}
+
+func startBackgroundServices(
+	ctx context.Context,
+	reconciler startupReconciler,
+	stateReader systemStateReader,
+	runtimeMonitor backgroundRunner,
+	expiryScheduler backgroundRunner,
+	logger *slog.Logger,
+) error {
+	reconcileErr := reconciler.ReconcileStartup(ctx)
+	if reconcileErr != nil && !errors.Is(
+		reconcileErr,
+		publisher.ErrStartupDegraded,
+	) {
+		return fmt.Errorf("reconcile startup publication state: %w", reconcileErr)
+	}
+	if reconcileErr != nil {
+		logger.Warn(
+			"startup reconciliation completed in degraded mode",
+			"error",
+			redact.Text(reconcileErr.Error()),
+		)
+	}
+	systemState, err := stateReader.SystemState(ctx)
+	if err != nil {
+		return fmt.Errorf("read system state after startup reconciliation: %w", err)
+	}
+	go runtimeMonitor.Run(ctx)
+	if systemState.Degraded {
+		logger.Warn(
+			"expiry scheduler is disabled while configuration publishing is degraded",
+		)
+		return nil
+	}
+	go expiryScheduler.Run(ctx)
 	return nil
 }
 

@@ -149,13 +149,14 @@ func newExpiryFixture(t *testing.T) expiryFixture {
 		t.Fatal(err)
 	}
 	batchTime := time.Date(2026, 7, 28, 4, 0, 0, 0, time.UTC)
+	initialState := expiryState(batchTime)
 	transaction, err := managed.BeginImmediate(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := transaction.ReplaceDesiredState(
 		ctx,
-		expiryState(batchTime),
+		initialState,
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -184,6 +185,18 @@ func newExpiryFixture(t *testing.T) expiryFixture {
 	)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if _, err := configurationPublisher.Publish(ctx, publisher.Request{
+		Reason:      "seed active expiry revision",
+		EffectiveAt: &initialState.AsOf,
+		Mutate: func(
+			ctx context.Context,
+			transaction store.PublicationTransaction,
+		) error {
+			return transaction.ReplaceDesiredState(ctx, initialState)
+		},
+	}); err != nil {
+		t.Fatalf("seed active expiry revision: %v", err)
 	}
 	instance, err := NewExpiry(configurationPublisher, Options{
 		Interval: time.Minute,
@@ -383,7 +396,9 @@ func (controller *expiryController) Connections(
 	return mihomo.ConnectionsSnapshot{}, nil
 }
 func (controller *expiryController) Reload(context.Context, string) error {
-	return controller.reloadErr
+	err := controller.reloadErr
+	controller.reloadErr = nil
+	return err
 }
 func (controller *expiryController) Restart(context.Context, string) error {
 	return nil
@@ -400,7 +415,9 @@ func (process *expiryProcess) IsActive(context.Context) (bool, error) {
 func (process *expiryProcess) Start(context.Context) error { return nil }
 func (process *expiryProcess) Stop(context.Context) error  { return nil }
 func (process *expiryProcess) Restart(context.Context) error {
-	return process.restartErr
+	err := process.restartErr
+	process.restartErr = nil
+	return err
 }
 func (process *expiryProcess) Reload(context.Context) error { return nil }
 func (process *expiryProcess) RecentLogs(

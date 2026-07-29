@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -23,6 +24,7 @@ import (
 var (
 	ErrDegraded            = errors.New("configuration publishing is blocked because the system is degraded")
 	ErrCandidateValidation = errors.New("candidate configuration validation failed")
+	ErrStartupDegraded     = errors.New("startup reconciliation marked the system degraded")
 )
 
 type Mutation func(ctx context.Context, transaction store.PublicationTransaction) error
@@ -45,6 +47,7 @@ type Options struct {
 	HistoryLimit      int
 	HealthTimeout     time.Duration
 	HealthInterval    time.Duration
+	Logger            *slog.Logger
 }
 
 type Publisher struct {
@@ -54,8 +57,22 @@ type Publisher struct {
 	controller mihomo.CoreController
 	process    mihomo.CoreProcess
 	options    Options
+	logger     *slog.Logger
 	now        func() time.Time
 	mutex      sync.Mutex
+}
+
+type publicationFileState struct {
+	content []byte
+	exists  bool
+	sha256  string
+}
+
+type publicationBaseline struct {
+	databaseSHA256 string
+	databaseAsOf   time.Time
+	activeRevision *domain.Revision
+	activeYAML     publicationFileState
 }
 
 func New(
@@ -94,6 +111,9 @@ func New(
 	if err := rejectSymlink(options.ConfigPath); err != nil {
 		return nil, err
 	}
+	if options.Logger == nil {
+		options.Logger = slog.Default()
+	}
 	return &Publisher{
 		repository: repository,
 		compiler:   compiler,
@@ -101,6 +121,7 @@ func New(
 		controller: controller,
 		process:    process,
 		options:    options,
+		logger:     options.Logger,
 		now:        func() time.Time { return time.Now().UTC() },
 	}, nil
 }
@@ -181,6 +202,171 @@ func (publisher *Publisher) ValidateCurrent(
 	return compiled, nil
 }
 
+func (publisher *Publisher) ReconcileStartup(ctx context.Context) error {
+	publisher.mutex.Lock()
+	defer publisher.mutex.Unlock()
+
+	reconciliationContext, cancel := context.WithTimeout(
+		ctx,
+		45*time.Second+publisher.options.HealthTimeout,
+	)
+	defer cancel()
+	systemState, err := publisher.repository.SystemState(reconciliationContext)
+	if err != nil {
+		return fmt.Errorf("read system state before startup reconciliation: %w", err)
+	}
+	if systemState.Degraded {
+		return fmt.Errorf(
+			"%w: the system was already degraded before startup",
+			ErrStartupDegraded,
+		)
+	}
+
+	initial, err := publisher.repository.ReadPublicationSnapshot(
+		reconciliationContext,
+		publisher.now().UTC(),
+	)
+	if err != nil {
+		if errors.Is(err, store.ErrMultipleActiveRevisions) {
+			return publisher.markStartupDegraded(
+				reconciliationContext,
+				"",
+				"multiple active revisions prevent safe startup reconciliation",
+			)
+		}
+		return fmt.Errorf("read startup publication state: %w", err)
+	}
+	if initial.ActiveRevision == nil {
+		return nil
+	}
+	activeRevision := *initial.ActiveRevision
+	if !pathWithin(
+		publisher.options.RevisionDirectory,
+		activeRevision.FilePath,
+	) || !pathWithin(
+		publisher.options.RevisionDirectory,
+		activeRevision.StateFilePath,
+	) {
+		return publisher.markStartupDegraded(
+			reconciliationContext,
+			activeRevision.ID,
+			"active revision artifacts are outside the managed revision directory",
+		)
+	}
+
+	revisionYAML, exists, err := readManagedFile(activeRevision.FilePath)
+	if err != nil || !exists || SHA256(revisionYAML) != activeRevision.SHA256 {
+		return publisher.markStartupDegraded(
+			reconciliationContext,
+			activeRevision.ID,
+			"active revision YAML is missing or failed its integrity check",
+		)
+	}
+	stateSnapshot, err := readRevisionStateSnapshot(activeRevision)
+	if err != nil {
+		return publisher.markStartupDegraded(
+			reconciliationContext,
+			activeRevision.ID,
+			"active revision state snapshot is missing or invalid",
+		)
+	}
+	snapshotYAML, err := publisher.compiler.Compile(
+		reconciliationContext,
+		stateSnapshot.State,
+	)
+	if err != nil || SHA256(snapshotYAML) != activeRevision.SHA256 {
+		return publisher.markStartupDegraded(
+			reconciliationContext,
+			activeRevision.ID,
+			"active revision state snapshot does not match its YAML revision",
+		)
+	}
+
+	durable, err := publisher.repository.ReadPublicationSnapshot(
+		reconciliationContext,
+		stateSnapshot.State.AsOf,
+	)
+	if err != nil {
+		if errors.Is(err, store.ErrMultipleActiveRevisions) {
+			return publisher.markStartupDegraded(
+				reconciliationContext,
+				activeRevision.ID,
+				"multiple active revisions prevent safe startup reconciliation",
+			)
+		}
+		return fmt.Errorf("read durable startup state: %w", err)
+	}
+	if !revisionMatches(durable.ActiveRevision, &activeRevision) {
+		return publisher.markStartupDegraded(
+			reconciliationContext,
+			activeRevision.ID,
+			"durable active revision changed during startup reconciliation",
+		)
+	}
+	durableYAML, err := publisher.compiler.Compile(
+		reconciliationContext,
+		durable.State,
+	)
+	if err != nil || SHA256(durableYAML) != activeRevision.SHA256 {
+		return publisher.markStartupDegraded(
+			reconciliationContext,
+			activeRevision.ID,
+			"durable desired state does not match the active revision",
+		)
+	}
+
+	activeYAML, err := publisher.readActiveYAML()
+	if err != nil {
+		return publisher.markStartupDegraded(
+			reconciliationContext,
+			activeRevision.ID,
+			"active Mihomo YAML could not be inspected safely",
+		)
+	}
+	if activeYAML.exists && activeYAML.sha256 == activeRevision.SHA256 {
+		return nil
+	}
+	if err := publisher.publishCompiled(
+		reconciliationContext,
+		durableYAML,
+	); err != nil {
+		return publisher.markStartupDegraded(
+			reconciliationContext,
+			activeRevision.ID,
+			"active Mihomo YAML could not be repaired from durable state",
+		)
+	}
+	publisher.logger.Warn(
+		"startup reconciliation repaired the active Mihomo configuration",
+		"revision",
+		activeRevision.RevisionNumber,
+	)
+	return nil
+}
+
+func (publisher *Publisher) markStartupDegraded(
+	ctx context.Context,
+	revisionID string,
+	reason string,
+) error {
+	markContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	if err := publisher.repository.MarkDegraded(
+		markContext,
+		reason,
+		revisionID,
+		publisher.now().UTC(),
+	); err != nil {
+		return fmt.Errorf("persist degraded startup state: %w", err)
+	}
+	publisher.logger.Error(
+		"startup reconciliation requires operator intervention",
+		"reason",
+		reason,
+	)
+	return fmt.Errorf("%w: %s", ErrStartupDegraded, reason)
+}
+
 func (publisher *Publisher) Rollback(
 	ctx context.Context,
 	revisionID, actorAdminID string,
@@ -210,21 +396,9 @@ func (publisher *Publisher) Rollback(
 	if SHA256(revisionYAML) != revision.SHA256 {
 		return domain.Revision{}, errors.New("rollback YAML failed its SHA-256 integrity check")
 	}
-	content, exists, err := readManagedFile(revision.StateFilePath)
+	snapshot, err := readRevisionStateSnapshot(revision)
 	if err != nil {
-		return domain.Revision{}, fmt.Errorf("read rollback state: %w", err)
-	}
-	if !exists {
-		return domain.Revision{}, errors.New("rollback state snapshot is missing")
-	}
-	var snapshot domain.StateSnapshot
-	decoder := json.NewDecoder(strings.NewReader(string(content)))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&snapshot); err != nil || snapshot.Version != 1 {
-		return domain.Revision{}, errors.New("rollback state snapshot is invalid")
-	}
-	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		return domain.Revision{}, errors.New("rollback state snapshot is invalid")
+		return domain.Revision{}, fmt.Errorf("read rollback state snapshot: %w", err)
 	}
 	snapshotYAML, err := publisher.compiler.Compile(ctx, snapshot.State)
 	if err != nil || SHA256(snapshotYAML) != revision.SHA256 {
@@ -261,6 +435,11 @@ func (publisher *Publisher) publishLocked(
 		return domain.Revision{}, fmt.Errorf("%w: %s", ErrDegraded, systemState.DegradedReason)
 	}
 
+	now := publisher.now().UTC()
+	effectiveAt := now
+	if request.EffectiveAt != nil {
+		effectiveAt = request.EffectiveAt.UTC()
+	}
 	transaction, err := publisher.repository.BeginImmediate(ctx)
 	if err != nil {
 		return domain.Revision{}, err
@@ -271,13 +450,44 @@ func (publisher *Publisher) publishLocked(
 			_ = transaction.Rollback(context.Background())
 		}
 	}()
+	oldActiveRevision, err := transaction.ActiveRevision(ctx)
+	if err != nil {
+		return domain.Revision{}, fmt.Errorf("load previous active revision: %w", err)
+	}
+	oldEffectiveAt := effectiveAt
+	if oldActiveRevision != nil {
+		if !pathWithin(
+			publisher.options.RevisionDirectory,
+			oldActiveRevision.StateFilePath,
+		) {
+			return domain.Revision{}, errors.New(
+				"previous active revision state is outside the revision directory",
+			)
+		}
+		oldSnapshot, err := readRevisionStateSnapshot(*oldActiveRevision)
+		if err != nil {
+			return domain.Revision{}, fmt.Errorf(
+				"load previous active revision state: %w",
+				err,
+			)
+		}
+		oldEffectiveAt = oldSnapshot.State.AsOf
+	}
+	oldState, err := transaction.DesiredState(ctx, oldEffectiveAt)
+	if err != nil {
+		return domain.Revision{}, fmt.Errorf("load previous desired state: %w", err)
+	}
+	oldCompiled, err := publisher.compiler.Compile(ctx, oldState)
+	if err != nil {
+		return domain.Revision{}, fmt.Errorf("compile previous desired state: %w", err)
+	}
+	if oldActiveRevision != nil && SHA256(oldCompiled) != oldActiveRevision.SHA256 {
+		return domain.Revision{}, errors.New(
+			"previous durable state does not match the active revision",
+		)
+	}
 	if err := request.Mutate(ctx, transaction); err != nil {
 		return domain.Revision{}, fmt.Errorf("apply managed-state mutation: %w", err)
-	}
-	now := publisher.now().UTC()
-	effectiveAt := now
-	if request.EffectiveAt != nil {
-		effectiveAt = request.EffectiveAt.UTC()
 	}
 	state, err := transaction.DesiredState(ctx, effectiveAt)
 	if err != nil {
@@ -339,6 +549,16 @@ func (publisher *Publisher) publishLocked(
 	previousConfig, previousExists, err := readManagedFile(publisher.options.ConfigPath)
 	if err != nil {
 		return domain.Revision{}, err
+	}
+	baseline := publicationBaseline{
+		databaseSHA256: SHA256(oldCompiled),
+		databaseAsOf:   oldEffectiveAt,
+		activeRevision: oldActiveRevision,
+		activeYAML: publicationFileState{
+			content: previousConfig,
+			exists:  previousExists,
+			sha256:  SHA256(previousConfig),
+		},
 	}
 	backupPath := filepath.Join(
 		configDirectory,
@@ -433,21 +653,17 @@ func (publisher *Publisher) publishLocked(
 	}
 	if err := transaction.Commit(ctx); err != nil {
 		transactionOpen = false
-		return domain.Revision{}, publisher.failAfterCommit(
+		return publisher.reconcileCommit(
 			ctx,
 			revision,
-			previousConfig,
-			previousExists,
+			activatedAt,
+			effectiveAt,
+			baseline,
 			err,
 		)
 	}
 	transactionOpen = false
-	revision.Status = domain.RevisionActive
-	revision.ActivatedAt = &activatedAt
-	if err := publisher.prune(ctx); err != nil {
-		return revision, fmt.Errorf("publication succeeded but revision cleanup failed: %w", err)
-	}
-	return revision, nil
+	return publisher.finishSuccessfulPublication(ctx, revision, activatedAt), nil
 }
 
 func (publisher *Publisher) failAfterReplacement(
@@ -460,7 +676,7 @@ func (publisher *Publisher) failAfterReplacement(
 	stage string,
 	cause error,
 ) error {
-	recoveryContext, cancel := publisher.recoveryContext()
+	recoveryContext, cancel := publisher.recoveryContext(ctx)
 	defer cancel()
 	recoveryErr := publisher.restorePrevious(
 		recoveryContext,
@@ -494,43 +710,227 @@ func (publisher *Publisher) failAfterReplacement(
 	return failureErr
 }
 
-func (publisher *Publisher) failAfterCommit(
+func (publisher *Publisher) reconcileCommit(
 	ctx context.Context,
 	revision domain.Revision,
-	previousConfig []byte,
-	previousExists bool,
-	cause error,
-) error {
-	recoveryContext, cancel := publisher.recoveryContext()
+	activatedAt time.Time,
+	effectiveAt time.Time,
+	baseline publicationBaseline,
+	commitErr error,
+) (domain.Revision, error) {
+	recoveryContext, cancel := publisher.recoveryContext(ctx)
 	defer cancel()
-	recoveryErr := publisher.restorePrevious(
+
+	durable, err := publisher.repository.ReadPublicationSnapshot(
 		recoveryContext,
-		revision.ID,
-		previousConfig,
-		previousExists,
+		effectiveAt,
 	)
-	failureErr := publisher.recordFailure(
-		ctx,
-		revision,
-		domain.DesiredState{},
-		nil,
-		"database commit failed",
-		cause,
-	)
-	if recoveryErr != nil {
-		degradedErr := publisher.repository.MarkDegraded(
-			context.Background(),
-			"database commit and automatic configuration recovery failed; restore the indicated revision manually",
+	if err != nil {
+		return domain.Revision{}, publisher.markCommitReconciliationDegraded(
+			recoveryContext,
 			revision.ID,
-			publisher.now().UTC(),
-		)
-		return errors.Join(
-			fmt.Errorf("automatic recovery failed: %w", recoveryErr),
-			degradedErr,
-			failureErr,
+			"database commit result could not be reconciled from durable state",
+			fmt.Errorf("reconcile uncertain database commit: read durable state"),
+			err,
 		)
 	}
-	return failureErr
+	activeYAML, err := publisher.readActiveYAML()
+	if err != nil {
+		return domain.Revision{}, publisher.markCommitReconciliationDegraded(
+			recoveryContext,
+			revision.ID,
+			"database commit result could not be reconciled with the active configuration",
+			fmt.Errorf("reconcile uncertain database commit: read active YAML"),
+			err,
+		)
+	}
+
+	var durableCompiled []byte
+	databaseIsNew := false
+	databaseIsOld := false
+	switch {
+	case revisionMatches(durable.ActiveRevision, &revision):
+		durableCompiled, err = publisher.compiler.Compile(
+			recoveryContext,
+			durable.State,
+		)
+		if err == nil {
+			databaseIsNew = SHA256(durableCompiled) == revision.SHA256
+		}
+	case revisionMatches(durable.ActiveRevision, baseline.activeRevision):
+		if !baseline.databaseAsOf.Equal(effectiveAt) {
+			durable, err = publisher.repository.ReadPublicationSnapshot(
+				recoveryContext,
+				baseline.databaseAsOf,
+			)
+			if err != nil {
+				return domain.Revision{}, publisher.markCommitReconciliationDegraded(
+					recoveryContext,
+					revision.ID,
+					"database commit result could not be reconciled from durable state",
+					fmt.Errorf("reconcile uncertain database commit: read previous durable state"),
+					err,
+				)
+			}
+		}
+		if revisionMatches(durable.ActiveRevision, baseline.activeRevision) {
+			durableCompiled, err = publisher.compiler.Compile(
+				recoveryContext,
+				durable.State,
+			)
+			if err == nil {
+				databaseIsOld = SHA256(durableCompiled) ==
+					baseline.databaseSHA256
+			}
+		}
+	}
+	if err != nil {
+		return domain.Revision{}, publisher.markCommitReconciliationDegraded(
+			recoveryContext,
+			revision.ID,
+			"database commit result could not be reconciled from durable state",
+			fmt.Errorf("reconcile uncertain database commit: compile durable state"),
+			err,
+		)
+	}
+	yamlIsNew := activeYAML.exists && activeYAML.sha256 == revision.SHA256
+	yamlIsOld := fileStateMatches(activeYAML, baseline.activeYAML)
+
+	switch {
+	case databaseIsNew && yamlIsNew:
+		publisher.logger.Warn(
+			"database commit returned an error after the publication became durable",
+			"revision",
+			revision.RevisionNumber,
+		)
+		return publisher.finishDurablePublication(
+			recoveryContext,
+			durable.ActiveRevision,
+			activatedAt,
+		), nil
+	case databaseIsOld && yamlIsOld:
+		return domain.Revision{}, publisher.recordFailure(
+			ctx,
+			revision,
+			domain.DesiredState{},
+			nil,
+			"database commit failed",
+			commitErr,
+		)
+	case databaseIsOld && yamlIsNew:
+		recoveryErr := publisher.restorePrevious(
+			recoveryContext,
+			revision.ID,
+			baseline.activeYAML.content,
+			baseline.activeYAML.exists,
+		)
+		failureErr := publisher.recordFailure(
+			ctx,
+			revision,
+			domain.DesiredState{},
+			nil,
+			"database commit failed",
+			commitErr,
+		)
+		if recoveryErr != nil {
+			return domain.Revision{}, errors.Join(
+				publisher.markCommitReconciliationDegraded(
+					recoveryContext,
+					revision.ID,
+					"database commit failed and the previous configuration could not be restored",
+					errors.New("automatic recovery failed after database commit"),
+					recoveryErr,
+				),
+				failureErr,
+			)
+		}
+		return domain.Revision{}, failureErr
+	case databaseIsNew && (!activeYAML.exists || yamlIsOld):
+		if err := publisher.publishCompiled(
+			recoveryContext,
+			durableCompiled,
+		); err != nil {
+			return domain.Revision{}, publisher.markCommitReconciliationDegraded(
+				recoveryContext,
+				revision.ID,
+				"database commit succeeded but the active configuration could not be reconciled",
+				errors.New("reconcile uncertain database commit: republish durable state"),
+				err,
+			)
+		}
+		publisher.logger.Warn(
+			"database commit returned an error and durable state was republished",
+			"revision",
+			revision.RevisionNumber,
+		)
+		return publisher.finishDurablePublication(
+			recoveryContext,
+			durable.ActiveRevision,
+			activatedAt,
+		), nil
+	default:
+		return domain.Revision{}, publisher.markCommitReconciliationDegraded(
+			recoveryContext,
+			revision.ID,
+			"database commit result is inconsistent across durable state, active revision, and active configuration",
+			errors.New("cannot classify uncertain database commit result"),
+			nil,
+		)
+	}
+}
+
+func (publisher *Publisher) markCommitReconciliationDegraded(
+	ctx context.Context,
+	revisionID string,
+	reason string,
+	resultErr error,
+	cause error,
+) error {
+	markContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	markErr := publisher.repository.MarkDegraded(
+		markContext,
+		reason,
+		revisionID,
+		publisher.now().UTC(),
+	)
+	return errors.Join(resultErr, cause, markErr)
+}
+
+func (publisher *Publisher) finishDurablePublication(
+	ctx context.Context,
+	durable *domain.Revision,
+	activatedAt time.Time,
+) domain.Revision {
+	if durable == nil {
+		return domain.Revision{}
+	}
+	revision := *durable
+	if revision.ActivatedAt == nil {
+		revision.ActivatedAt = &activatedAt
+	}
+	return publisher.finishSuccessfulPublication(ctx, revision, activatedAt)
+}
+
+func (publisher *Publisher) finishSuccessfulPublication(
+	ctx context.Context,
+	revision domain.Revision,
+	activatedAt time.Time,
+) domain.Revision {
+	revision.Status = domain.RevisionActive
+	if revision.ActivatedAt == nil {
+		revision.ActivatedAt = &activatedAt
+	}
+	if err := publisher.prune(ctx); err != nil {
+		publisher.logger.Warn(
+			"configuration publication succeeded but revision maintenance failed",
+			"revision",
+			revision.RevisionNumber,
+			"error",
+			redact.Text(err.Error()),
+		)
+	}
+	return revision
 }
 
 func (publisher *Publisher) recordFailure(
@@ -547,8 +947,13 @@ func (publisher *Publisher) recordFailure(
 	}
 	revision.Status = domain.RevisionFailed
 	revision.ErrorMessageRedacted = stage
-	recordErr := publisher.repository.RecordFailedRevision(
+	recordContext, cancel := context.WithTimeout(
 		context.WithoutCancel(ctx),
+		5*time.Second,
+	)
+	defer cancel()
+	recordErr := publisher.repository.RecordFailedRevision(
+		recordContext,
 		revision,
 	)
 	return errors.Join(
@@ -589,6 +994,90 @@ func archiveRevision(
 		return errors.New("synchronize revision directory")
 	}
 	return nil
+}
+
+func readRevisionStateSnapshot(
+	revision domain.Revision,
+) (domain.StateSnapshot, error) {
+	content, exists, err := readManagedFile(revision.StateFilePath)
+	if err != nil {
+		return domain.StateSnapshot{}, err
+	}
+	if !exists {
+		return domain.StateSnapshot{}, errors.New("revision state snapshot is missing")
+	}
+	var snapshot domain.StateSnapshot
+	decoder := json.NewDecoder(strings.NewReader(string(content)))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&snapshot); err != nil || snapshot.Version != 1 {
+		return domain.StateSnapshot{}, errors.New("revision state snapshot is invalid")
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return domain.StateSnapshot{}, errors.New("revision state snapshot is invalid")
+	}
+	return snapshot, nil
+}
+
+func (publisher *Publisher) publishCompiled(
+	ctx context.Context,
+	compiled []byte,
+) error {
+	candidateID, err := uuid.NewRandom()
+	if err != nil {
+		return errors.New("generate reconciliation candidate ID")
+	}
+	candidatePath := filepath.Join(
+		filepath.Dir(publisher.options.ConfigPath),
+		".m-ui-reconciliation-"+candidateID.String()+".yaml",
+	)
+	defer func() {
+		_ = os.Remove(candidatePath)
+	}()
+	if err := writeSharedConfigSynced(candidatePath, compiled); err != nil {
+		return err
+	}
+	if err := publisher.cli.Validate(ctx, candidatePath); err != nil {
+		return fmt.Errorf("%w during reconciliation", ErrCandidateValidation)
+	}
+	if err := replaceAndSync(candidatePath, publisher.options.ConfigPath); err != nil {
+		return err
+	}
+	if err := publisher.reloadWithFallback(ctx); err != nil {
+		return err
+	}
+	if err := publisher.waitHealthy(ctx); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (publisher *Publisher) readActiveYAML() (publicationFileState, error) {
+	content, exists, err := readManagedFile(publisher.options.ConfigPath)
+	if err != nil {
+		return publicationFileState{}, err
+	}
+	state := publicationFileState{
+		content: content,
+		exists:  exists,
+	}
+	if exists {
+		state.sha256 = SHA256(content)
+	}
+	return state, nil
+}
+
+func revisionMatches(actual, expected *domain.Revision) bool {
+	if actual == nil || expected == nil {
+		return actual == nil && expected == nil
+	}
+	return actual.ID == expected.ID && actual.SHA256 == expected.SHA256
+}
+
+func fileStateMatches(actual, expected publicationFileState) bool {
+	if actual.exists != expected.exists {
+		return false
+	}
+	return !actual.exists || actual.sha256 == expected.sha256
 }
 
 func (publisher *Publisher) reloadWithFallback(ctx context.Context) error {
@@ -654,9 +1143,11 @@ func (publisher *Publisher) restorePrevious(
 	return publisher.waitHealthy(ctx)
 }
 
-func (publisher *Publisher) recoveryContext() (context.Context, context.CancelFunc) {
+func (publisher *Publisher) recoveryContext(
+	ctx context.Context,
+) (context.Context, context.CancelFunc) {
 	timeout := 45*time.Second + publisher.options.HealthTimeout
-	return context.WithTimeout(context.Background(), timeout)
+	return context.WithTimeout(context.WithoutCancel(ctx), timeout)
 }
 
 func (publisher *Publisher) insertSuccessAudit(
@@ -697,8 +1188,17 @@ func (publisher *Publisher) prune(ctx context.Context) error {
 		return err
 	}
 	for _, revision := range revisions {
-		for _, path := range []string{revision.FilePath, revision.StateFilePath} {
-			if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		if revision.Status == domain.RevisionActive {
+			return errors.New("revision maintenance selected the active revision")
+		}
+		paths := []string{revision.FilePath, revision.StateFilePath}
+		for _, path := range paths {
+			if !pathWithin(publisher.options.RevisionDirectory, path) {
+				return errors.New("revision maintenance path is outside the revision directory")
+			}
+		}
+		for _, path := range paths {
+			if err := removeAndSync(path); err != nil {
 				return errors.New("remove expired revision file")
 			}
 		}

@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -306,11 +307,142 @@ func TestManagedStoreDegradedStateAndRetentionNeverDeleteActive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(expired) != 1 || expired[0].ID != "revision-1" {
+	if len(expired) != 0 {
 		t.Fatalf("InactiveRevisionsBeyond() = %#v", expired)
 	}
 	if err := managed.DeleteRevision(ctx, "revision-2"); err == nil {
 		t.Fatal("DeleteRevision() deleted the active revision")
+	}
+}
+
+func TestInactiveRevisionRetentionIncludesFailedAndRolledBack(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	database := openTestStore(t)
+	sealer, err := muicrypto.NewSealer(muicrypto.MasterKey{3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	managed, err := NewManagedStore(database, sealer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, time.July, 29, 12, 0, 0, 0, time.UTC)
+
+	insertSuccessful := func(number int64) {
+		t.Helper()
+		transaction, err := managed.BeginImmediate(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		revision := retentionRevision(number, domain.RevisionPending, now)
+		if err := transaction.InsertRevision(ctx, revision); err != nil {
+			t.Fatal(err)
+		}
+		if err := transaction.ActivateRevision(ctx, revision.ID, revision.CreatedAt); err != nil {
+			t.Fatal(err)
+		}
+		if err := transaction.Commit(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	insertFailed := func(number int64) {
+		t.Helper()
+		if err := managed.RecordFailedRevision(
+			ctx,
+			retentionRevision(number, domain.RevisionFailed, now),
+		); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	insertSuccessful(1)
+	insertFailed(2)
+	insertSuccessful(3)
+	insertFailed(4)
+	insertSuccessful(5)
+
+	expired, err := managed.InactiveRevisionsBeyond(ctx, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(expired) != 2 ||
+		expired[0].ID != "revision-2" ||
+		expired[1].ID != "revision-1" {
+		t.Fatalf("InactiveRevisionsBeyond() = %#v", expired)
+	}
+	if err := managed.DeleteRevision(ctx, "revision-5"); err == nil {
+		t.Fatal("DeleteRevision() deleted the active revision")
+	}
+}
+
+func TestPublicationSnapshotRejectsMultipleActiveRevisions(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	database := openTestStore(t)
+	sealer, err := muicrypto.NewSealer(muicrypto.MasterKey{7})
+	if err != nil {
+		t.Fatal(err)
+	}
+	managed, err := NewManagedStore(database, sealer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := managedTestState()
+	transaction, err := managed.BeginImmediate(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := transaction.ReplaceDesiredState(ctx, state); err != nil {
+		t.Fatal(err)
+	}
+	if err := transaction.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for number := int64(1); number <= 2; number++ {
+		revision := retentionRevision(number, domain.RevisionActive, state.AsOf)
+		if _, err := database.DB().ExecContext(
+			ctx,
+			`INSERT INTO config_revisions(
+				id, revision_number, sha256, file_path, state_file_path,
+				status, reason, created_at, activated_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			revision.ID,
+			revision.RevisionNumber,
+			revision.SHA256,
+			revision.FilePath,
+			revision.StateFilePath,
+			revision.Status,
+			revision.Reason,
+			formatTime(revision.CreatedAt),
+			formatTime(revision.CreatedAt),
+		); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if _, err := managed.ReadPublicationSnapshot(
+		ctx,
+		state.AsOf,
+	); !errors.Is(err, ErrMultipleActiveRevisions) {
+		t.Fatalf("ReadPublicationSnapshot() error = %v, want ErrMultipleActiveRevisions", err)
+	}
+}
+
+func retentionRevision(
+	number int64,
+	status domain.RevisionStatus,
+	now time.Time,
+) domain.Revision {
+	return domain.Revision{
+		ID:             fmt.Sprintf("revision-%d", number),
+		RevisionNumber: number,
+		SHA256:         strings.Repeat("c", 64),
+		FilePath:       fmt.Sprintf("/revision-%d.yaml", number),
+		StateFilePath:  fmt.Sprintf("/revision-%d.json", number),
+		Status:         status,
+		Reason:         "retention test",
+		CreatedAt:      now.Add(time.Duration(number) * time.Minute),
 	}
 }
 
