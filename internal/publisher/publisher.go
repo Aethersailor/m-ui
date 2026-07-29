@@ -456,19 +456,23 @@ func (publisher *Publisher) publishLocked(
 	}
 	oldEffectiveAt := effectiveAt
 	if oldActiveRevision != nil {
-		if !pathWithin(
-			publisher.options.RevisionDirectory,
-			oldActiveRevision.StateFilePath,
-		) {
-			return domain.Revision{}, errors.New(
-				"previous active revision state is outside the revision directory",
-			)
-		}
-		oldSnapshot, err := readRevisionStateSnapshot(*oldActiveRevision)
+		oldSnapshot, err := publisher.verifyActivePublication(
+			ctx,
+			transaction,
+			*oldActiveRevision,
+		)
 		if err != nil {
-			return domain.Revision{}, fmt.Errorf(
-				"load previous active revision state: %w",
-				err,
+			transactionOpen = false
+			_ = transaction.Rollback(context.Background())
+			degradedErr := publisher.repository.MarkDegraded(
+				context.Background(),
+				"active configuration integrity check failed; run startup reconciliation or restore the active revision manually",
+				oldActiveRevision.ID,
+				publisher.now().UTC(),
+			)
+			return domain.Revision{}, errors.Join(
+				fmt.Errorf("active configuration integrity check failed: %w", err),
+				degradedErr,
 			)
 		}
 		oldEffectiveAt = oldSnapshot.State.AsOf
@@ -956,11 +960,78 @@ func (publisher *Publisher) recordFailure(
 		recordContext,
 		revision,
 	)
+	if recordErr == nil {
+		if err := publisher.prune(recordContext); err != nil {
+			publisher.logger.Warn(
+				"failed revision was recorded but revision maintenance failed",
+				"revision",
+				revision.RevisionNumber,
+				"error",
+				redact.Text(err.Error()),
+			)
+		}
+	}
 	return errors.Join(
 		fmt.Errorf("%s: %w", stage, cause),
 		archiveErr,
 		recordErr,
 	)
+}
+
+func (publisher *Publisher) verifyActivePublication(
+	ctx context.Context,
+	transaction store.PublicationTransaction,
+	revision domain.Revision,
+) (domain.StateSnapshot, error) {
+	if revision.Status != domain.RevisionActive {
+		return domain.StateSnapshot{}, errors.New(
+			"database selected a non-active revision as active",
+		)
+	}
+	for _, path := range []string{revision.FilePath, revision.StateFilePath} {
+		if !pathWithin(publisher.options.RevisionDirectory, path) {
+			return domain.StateSnapshot{}, errors.New(
+				"active revision artifact is outside the revision directory",
+			)
+		}
+	}
+	snapshot, err := readRevisionStateSnapshot(revision)
+	if err != nil {
+		return domain.StateSnapshot{}, errors.New(
+			"active revision state snapshot is missing or invalid",
+		)
+	}
+	snapshotYAML, err := publisher.compiler.Compile(ctx, snapshot.State)
+	if err != nil || SHA256(snapshotYAML) != revision.SHA256 {
+		return domain.StateSnapshot{}, errors.New(
+			"active revision state snapshot does not match its recorded digest",
+		)
+	}
+	durableState, err := transaction.DesiredState(ctx, snapshot.State.AsOf)
+	if err != nil {
+		return domain.StateSnapshot{}, errors.New(
+			"read durable state at the active revision time",
+		)
+	}
+	durableYAML, err := publisher.compiler.Compile(ctx, durableState)
+	if err != nil || SHA256(durableYAML) != revision.SHA256 {
+		return domain.StateSnapshot{}, errors.New(
+			"durable state does not match the active revision",
+		)
+	}
+	revisionYAML, exists, err := readManagedFile(revision.FilePath)
+	if err != nil || !exists || SHA256(revisionYAML) != revision.SHA256 {
+		return domain.StateSnapshot{}, errors.New(
+			"active revision YAML archive does not match its recorded digest",
+		)
+	}
+	activeYAML, err := publisher.readActiveYAML()
+	if err != nil || !activeYAML.exists || activeYAML.sha256 != revision.SHA256 {
+		return domain.StateSnapshot{}, errors.New(
+			"running Mihomo YAML does not match the active revision",
+		)
+	}
+	return snapshot, nil
 }
 
 func archiveRevision(

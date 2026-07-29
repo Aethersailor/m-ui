@@ -1,9 +1,11 @@
 package publisher
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -164,6 +166,80 @@ func TestPublisherValidationFailureLeavesActiveConfigurationUntouched(t *testing
 	}
 }
 
+func TestFailedRevisionMaintenanceEnforcesHistoryLimitRealSQLite(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	fixture := newSQLiteReconciliationFixture(t)
+	instance := fixture.newPublisher(t, fixture.repository)
+	instance.options.HistoryLimit = 2
+	fixture.cli.validateErr = errors.New("synthetic invalid candidate")
+
+	for attempt := 1; attempt <= 5; attempt++ {
+		if _, err := instance.Publish(
+			ctx,
+			fixture.request(fixture.nextState),
+		); !errors.Is(err, ErrCandidateValidation) {
+			t.Fatalf("Publish() attempt %d error = %v", attempt, err)
+		}
+	}
+
+	revisions, err := fixture.repository.Revisions(ctx, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(revisions) != 2 ||
+		revisions[0].RevisionNumber != 5 ||
+		revisions[1].RevisionNumber != 4 {
+		t.Fatalf("retained revisions = %#v", revisions)
+	}
+	for _, revision := range revisions {
+		if revision.Status != domain.RevisionFailed {
+			t.Fatalf("retained revision = %#v", revision)
+		}
+		for _, path := range []string{revision.FilePath, revision.StateFilePath} {
+			if _, err := os.Stat(path); err != nil {
+				t.Fatalf("retained artifact %q: %v", path, err)
+			}
+		}
+	}
+	entries, err := os.ReadDir(fixture.revisionDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 4 {
+		t.Fatalf("revision artifact count = %d, want 4", len(entries))
+	}
+}
+
+func TestFailedRevisionMaintenanceFailurePreservesPublishError(t *testing.T) {
+	t.Parallel()
+	fixture := newPublisherFixture(t)
+	fixture.cli.validateErr = errors.New("synthetic invalid candidate")
+	fixture.repository.inactiveErr = errors.New("synthetic maintenance failure")
+	var logs bytes.Buffer
+	fixture.publisher.logger = slog.New(slog.NewTextHandler(&logs, nil))
+
+	_, err := fixture.publisher.Publish(
+		context.Background(),
+		fixture.request(fixture.nextState),
+	)
+	if !errors.Is(err, ErrCandidateValidation) ||
+		!strings.Contains(err.Error(), "candidate validation failed") ||
+		strings.Contains(err.Error(), "maintenance failure") {
+		t.Fatalf("Publish() error = %v", err)
+	}
+	if fixture.repository.failedCount() != 1 {
+		t.Fatalf("failed revision count = %d", fixture.repository.failedCount())
+	}
+	systemState, stateErr := fixture.repository.SystemState(context.Background())
+	if stateErr != nil || systemState.Degraded {
+		t.Fatalf("SystemState() = %#v, %v", systemState, stateErr)
+	}
+	if !strings.Contains(logs.String(), "revision maintenance failed") {
+		t.Fatalf("maintenance warning was not logged: %q", logs.String())
+	}
+}
+
 func TestPublisherReloadFailureRestoresPreviousConfiguration(t *testing.T) {
 	t.Parallel()
 	fixture := newPublisherFixture(t)
@@ -287,6 +363,167 @@ func TestPruneFileFailureDoesNotDeleteRevisionRecord(t *testing.T) {
 	}
 	if fixture.repository.deletes != 0 {
 		t.Fatal("revision database record was deleted before its files")
+	}
+}
+
+func TestPruneMixedInactiveRevisionsPreservesActiveRealSQLite(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	fixture := newSQLiteReconciliationFixture(t)
+	instance := fixture.newPublisher(t, fixture.repository)
+	instance.options.HistoryLimit = 2
+
+	newRevision := func(number int64, status domain.RevisionStatus) domain.Revision {
+		revision := domain.Revision{
+			ID:             "retention-" + string(rune('0'+number)),
+			RevisionNumber: number,
+			SHA256:         strings.Repeat("a", 64),
+			Status:         status,
+			Reason:         "retention integration test",
+			CreatedAt:      fixture.effectiveTime.Add(time.Duration(number) * time.Minute),
+		}
+		revision.FilePath = filepath.Join(fixture.revisionDir, revision.ID+".yaml")
+		revision.StateFilePath = filepath.Join(fixture.revisionDir, revision.ID+".json")
+		for _, path := range []string{revision.FilePath, revision.StateFilePath} {
+			if err := os.WriteFile(path, []byte("synthetic\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return revision
+	}
+	insertActive := func(number int64) {
+		t.Helper()
+		transaction, err := fixture.repository.BeginImmediate(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		revision := newRevision(number, domain.RevisionPending)
+		if err := transaction.InsertRevision(ctx, revision); err != nil {
+			t.Fatal(err)
+		}
+		if err := transaction.ActivateRevision(ctx, revision.ID, revision.CreatedAt); err != nil {
+			t.Fatal(err)
+		}
+		if err := transaction.Commit(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	insertFailed := func(number int64) {
+		t.Helper()
+		if err := fixture.repository.RecordFailedRevision(
+			ctx,
+			newRevision(number, domain.RevisionFailed),
+		); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	insertActive(1)
+	insertFailed(2)
+	insertActive(3)
+	insertFailed(4)
+	insertActive(5)
+	if err := instance.prune(ctx); err != nil {
+		t.Fatalf("prune() error = %v", err)
+	}
+
+	revisions, err := fixture.repository.Revisions(ctx, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(revisions) != 3 ||
+		revisions[0].RevisionNumber != 5 ||
+		revisions[0].Status != domain.RevisionActive ||
+		revisions[1].RevisionNumber != 4 ||
+		revisions[1].Status != domain.RevisionFailed ||
+		revisions[2].RevisionNumber != 3 ||
+		revisions[2].Status != domain.RevisionRolledBack {
+		t.Fatalf("retained revisions = %#v", revisions)
+	}
+	for _, revision := range revisions {
+		for _, path := range []string{revision.FilePath, revision.StateFilePath} {
+			if _, err := os.Stat(path); err != nil {
+				t.Fatalf("retained artifact %q: %v", path, err)
+			}
+		}
+	}
+}
+
+func TestPruneArtifactFailureRetainsRowAndRetriesRealSQLite(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name       string
+		failOnJSON bool
+	}{
+		{name: "YAML"},
+		{name: "JSON", failOnJSON: true},
+	} {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			fixture := newSQLiteReconciliationFixture(t)
+			instance := fixture.newPublisher(t, fixture.repository)
+			instance.options.HistoryLimit = 1
+
+			for number := int64(1); number <= 2; number++ {
+				revision := domain.Revision{
+					ID:             "retry-" + string(rune('0'+number)),
+					RevisionNumber: number,
+					SHA256:         strings.Repeat("b", 64),
+					Status:         domain.RevisionFailed,
+					Reason:         "retry integration test",
+					CreatedAt:      fixture.effectiveTime.Add(time.Duration(number) * time.Minute),
+				}
+				revision.FilePath = filepath.Join(fixture.revisionDir, revision.ID+".yaml")
+				revision.StateFilePath = filepath.Join(fixture.revisionDir, revision.ID+".json")
+				for _, path := range []string{revision.FilePath, revision.StateFilePath} {
+					if err := os.WriteFile(path, []byte("synthetic\n"), 0o600); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if err := fixture.repository.RecordFailedRevision(ctx, revision); err != nil {
+					t.Fatal(err)
+				}
+			}
+			oldest, err := fixture.repository.Revision(ctx, "retry-1")
+			if err != nil {
+				t.Fatal(err)
+			}
+			failingPath := oldest.FilePath
+			if test.failOnJSON {
+				failingPath = oldest.StateFilePath
+			}
+			if err := os.Remove(failingPath); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Mkdir(failingPath, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			childPath := filepath.Join(failingPath, "child")
+			if err := os.WriteFile(childPath, []byte("block removal\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			if err := instance.prune(ctx); err == nil {
+				t.Fatal("prune() error = nil, want artifact removal failure")
+			}
+			if _, err := fixture.repository.Revision(ctx, oldest.ID); err != nil {
+				t.Fatalf("failed cleanup deleted database row: %v", err)
+			}
+			if err := os.Remove(childPath); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Remove(failingPath); err != nil {
+				t.Fatal(err)
+			}
+			if err := instance.prune(ctx); err != nil {
+				t.Fatalf("retry prune() error = %v", err)
+			}
+			if _, err := fixture.repository.Revision(ctx, oldest.ID); !errors.Is(err, store.ErrNotFound) {
+				t.Fatalf("retried cleanup Revision() error = %v", err)
+			}
+		})
 	}
 }
 
@@ -917,6 +1154,7 @@ type fakeProcess struct {
 	mutex         sync.Mutex
 	active        bool
 	restarts      int
+	stops         int
 	restartErrors []error
 	stopErr       error
 }
@@ -934,6 +1172,7 @@ func (*fakeProcess) Start(context.Context) error {
 func (process *fakeProcess) Stop(context.Context) error {
 	process.mutex.Lock()
 	defer process.mutex.Unlock()
+	process.stops++
 	if process.stopErr == nil {
 		process.active = false
 	}
@@ -965,6 +1204,12 @@ func (process *fakeProcess) restartCount() int {
 	process.mutex.Lock()
 	defer process.mutex.Unlock()
 	return process.restarts
+}
+
+func (process *fakeProcess) stopCount() int {
+	process.mutex.Lock()
+	defer process.mutex.Unlock()
+	return process.stops
 }
 
 func cloneState(state domain.DesiredState) domain.DesiredState {

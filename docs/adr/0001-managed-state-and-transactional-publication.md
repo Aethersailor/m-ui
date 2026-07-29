@@ -52,6 +52,12 @@ cause publication.
 Historical rollback restores the versioned structured JSON snapshot and
 recompiles it; it is not a raw file-copy operation.
 
+Before a mutation is applied, an existing active revision is checked again in
+the publication transaction. Database state compiled at the revision JSON's
+fixed `State.AsOf`, the revision digest, archived YAML, and current Mihomo YAML
+must agree. Drift blocks the mutation, preserves the unknown active YAML, and
+marks publication degraded; repair remains the startup reconciliation path.
+
 ## Consequences
 
 Benefits:
@@ -80,8 +86,9 @@ and recoverability are more important than mutation throughput.
 
 Revision retention counts inactive revisions only. Inactive means
 `rolled_back` or `failed`; the active revision is never eligible. Cleanup is
-post-commit maintenance, so a cleanup failure is logged but cannot change an
-already successful publication into an API failure.
+best-effort maintenance after either a successful commit or successful failed
+revision recording, so cleanup failure is logged but cannot change the
+publication result.
 
 ## Rejected alternatives
 

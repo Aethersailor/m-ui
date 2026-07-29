@@ -285,6 +285,199 @@ func TestCommitReconciliationUnclassifiableStateMarksDegraded(t *testing.T) {
 	}
 }
 
+func TestPublishRejectsTamperedOrMissingActiveYAMLBeforeMutation(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name       string
+		tamper     func(*testing.T, activeSQLiteFixture)
+		assertKept func(*testing.T, activeSQLiteFixture)
+	}{
+		{
+			name: "tampered",
+			tamper: func(t *testing.T, fixture activeSQLiteFixture) {
+				t.Helper()
+				if err := os.WriteFile(
+					fixture.configPath,
+					[]byte("externally-modified-active-yaml\n"),
+					0o640,
+				); err != nil {
+					t.Fatal(err)
+				}
+			},
+			assertKept: func(t *testing.T, fixture activeSQLiteFixture) {
+				t.Helper()
+				content, err := os.ReadFile(fixture.configPath)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if string(content) != "externally-modified-active-yaml\n" {
+					t.Fatalf("active YAML was overwritten: %q", content)
+				}
+			},
+		},
+		{
+			name: "missing",
+			tamper: func(t *testing.T, fixture activeSQLiteFixture) {
+				t.Helper()
+				if err := os.Remove(fixture.configPath); err != nil {
+					t.Fatal(err)
+				}
+			},
+			assertKept: func(t *testing.T, fixture activeSQLiteFixture) {
+				t.Helper()
+				if _, err := os.Stat(fixture.configPath); !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("missing active YAML was recreated: %v", err)
+				}
+			},
+		},
+	} {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			fixture := newActiveSQLiteFixture(t)
+			test.tamper(t, fixture)
+			revisionsBefore, err := fixture.repository.Revisions(ctx, 10, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			validationsBefore := fixture.cli.calls.Load()
+			reloadsBefore := fixture.controller.reloadCount()
+			restartsBefore := fixture.process.restartCount()
+			stopsBefore := fixture.process.stopCount()
+			mutated := false
+
+			_, err = fixture.publisher.Publish(ctx, Request{
+				Reason: "must not mutate inconsistent active state",
+				Mutate: func(ctx context.Context, transaction store.PublicationTransaction) error {
+					mutated = true
+					return transaction.ReplaceDesiredState(ctx, fixture.initialState)
+				},
+			})
+			if err == nil || !strings.Contains(
+				err.Error(),
+				"active configuration integrity check failed",
+			) {
+				t.Fatalf("Publish() error = %v", err)
+			}
+			if mutated {
+				t.Fatal("managed-state mutation was called")
+			}
+			state, stateErr := fixture.repository.ReadDesiredState(
+				ctx,
+				fixture.effectiveTime,
+			)
+			if stateErr != nil || state.Listeners[0].Name != fixture.nextState.Listeners[0].Name {
+				t.Fatalf("DesiredState() = %#v, %v", state, stateErr)
+			}
+			revisionsAfter, listErr := fixture.repository.Revisions(ctx, 10, 0)
+			if listErr != nil {
+				t.Fatal(listErr)
+			}
+			if len(revisionsAfter) != len(revisionsBefore) {
+				t.Fatalf("revisions before/after = %d/%d", len(revisionsBefore), len(revisionsAfter))
+			}
+			if fixture.cli.calls.Load() != validationsBefore {
+				t.Fatal("candidate validation was called")
+			}
+			if fixture.controller.reloadCount() != reloadsBefore ||
+				fixture.process.restartCount() != restartsBefore ||
+				fixture.process.stopCount() != stopsBefore {
+				t.Fatal("runtime lifecycle operation was called")
+			}
+			test.assertKept(t, fixture)
+			fixture.assertDegraded(t)
+
+			if _, err := fixture.publisher.Publish(
+				ctx,
+				fixture.request(fixture.initialState),
+			); !errors.Is(err, ErrDegraded) {
+				t.Fatalf("second Publish() error = %v, want ErrDegraded", err)
+			}
+		})
+	}
+}
+
+func TestPublishAcceptsMatchingActiveYAML(t *testing.T) {
+	t.Parallel()
+	fixture := newActiveSQLiteFixture(t)
+	thirdState := cloneState(fixture.nextState)
+	thirdState.Listeners[0].Name = "third"
+	thirdState.Listeners[0].ListenPort = 9443
+
+	revision, err := fixture.publisher.Publish(
+		context.Background(),
+		fixture.request(thirdState),
+	)
+	if err != nil {
+		t.Fatalf("Publish() error = %v", err)
+	}
+	if revision.Status != domain.RevisionActive ||
+		fixture.cli.calls.Load() != 2 ||
+		fixture.controller.reloadCount() != 2 {
+		t.Fatalf(
+			"revision/validation/reload = %#v/%d/%d",
+			revision,
+			fixture.cli.calls.Load(),
+			fixture.controller.reloadCount(),
+		)
+	}
+}
+
+func TestPublishActiveIntegrityUsesSnapshotAsOfForExpiredUser(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	fixture := newSQLiteReconciliationFixture(t)
+	publicationTime := fixture.effectiveTime
+	expiresAt := publicationTime.Add(time.Minute)
+	activeState := cloneState(fixture.nextState)
+	activeState.AsOf = publicationTime
+	activeState.Listeners[0].Users[0].ExpiresAt = &expiresAt
+	transaction, err := fixture.repository.BeginImmediate(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := transaction.ReplaceDesiredState(ctx, activeState); err != nil {
+		t.Fatal(err)
+	}
+	if err := transaction.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	activeYAML, err := (YAMLCompiler{}).Compile(ctx, activeState)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(fixture.configPath, activeYAML, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	instance := fixture.newPublisher(t, fixture.repository)
+	if _, err := instance.Publish(
+		ctx,
+		fixture.request(activeState),
+	); err != nil {
+		t.Fatalf("seed active revision: %v", err)
+	}
+
+	later := expiresAt.Add(time.Hour)
+	instance.now = func() time.Time { return later }
+	laterState := cloneState(activeState)
+	laterState.AsOf = later
+	laterState.Listeners[0].Name = "after-expiry"
+	laterState.Listeners[0].Enabled = false
+	laterState.Listeners[0].Users[0].Enabled = false
+	revision, err := instance.Publish(ctx, fixture.request(laterState))
+	if err != nil {
+		t.Fatalf("Publish() after wall time advance error = %v", err)
+	}
+	if revision.Status != domain.RevisionActive {
+		t.Fatalf("revision = %#v", revision)
+	}
+	systemState, err := fixture.repository.SystemState(ctx)
+	if err != nil || systemState.Degraded {
+		t.Fatalf("SystemState() = %#v, %v", systemState, err)
+	}
+}
+
 func TestStartupRepairsMissingOrTamperedActiveYAML(t *testing.T) {
 	t.Parallel()
 	for _, test := range []struct {

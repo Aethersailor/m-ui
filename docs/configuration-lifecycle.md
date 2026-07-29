@@ -55,6 +55,14 @@ with the saved old and candidate identities:
 A failed revision is recorded only after this classification proves that the
 candidate did not become the durable active revision.
 
+Before every later mutation, the publisher repeats the active identity check
+inside the publication transaction. It compiles database state at the fixed
+`State.AsOf` stored in the active revision JSON and requires that digest, the
+revision record, the archived revision YAML, and the current Mihomo YAML to
+agree. A missing or externally changed active YAML blocks the mutation, is
+left untouched, and marks the system degraded for startup reconciliation or
+manual recovery.
+
 ## Startup reconciliation
 
 Before the HTTP server, runtime monitor, or expiry scheduler starts, m-ui checks
@@ -89,7 +97,9 @@ newest inactive revisions in stable revision-number order; active artifacts are
 never removed. Files are removed before their database row, so a file-removal
 failure leaves the row intact. Cleanup runs as post-commit maintenance: its
 failure is logged but does not turn an already committed publication into an
-API error.
+API error. The same best-effort maintenance runs after a failed revision is
+successfully recorded; maintenance failure never replaces the original
+publication error.
 
 ## Expiry
 
