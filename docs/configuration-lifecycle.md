@@ -37,6 +37,44 @@ If a step fails, m-ui restores both the file and structured state. If automatic
 recovery itself fails, it records degraded mode and blocks further publication
 until an operator investigates.
 
+`COMMIT` returning an error does not establish whether SQLite committed. The
+publisher treats the original transaction as closed and uses an independent,
+bounded recovery context to read and compile fresh durable state. It then
+compares the durable database hash, unique active revision, and active YAML
+with the saved old and candidate identities:
+
+- database new and YAML new: accept the durable publication;
+- database old and YAML new: restore and reload the old YAML, then report the
+  commit failure;
+- database new and YAML old or missing: validate and atomically republish the
+  durable database result;
+- database old and YAML old: report a clean commit failure;
+- any other combination: enter degraded mode without overwriting either
+  direction.
+
+A failed revision is recorded only after this classification proves that the
+candidate did not become the durable active revision.
+
+## Startup reconciliation
+
+Before the HTTP server, runtime monitor, or expiry scheduler starts, m-ui checks
+the database, active revision metadata, revision YAML, revision JSON state
+snapshot, and active Mihomo YAML. Revision JSON is decoded strictly and
+recompiled at its fixed effective time, so wall-clock advancement alone does
+not look like persistent corruption.
+
+When the database, revision metadata, and both revision artifacts agree, a
+missing or changed active YAML is rebuilt, validated with real `mihomo -t`,
+atomically published, reloaded, and health checked. Database/revision
+disagreement or a missing, changed, or invalid revision artifact enters
+degraded mode. The panel and read-only runtime monitor continue to start, but
+the expiry scheduler is not started and publisher mutations return the existing
+degraded error.
+
+No active revision is the valid initial bootstrap state. Startup does not
+rewrite or validate the bootstrap YAML and does not mark that state degraded.
+Failure to open or read the database remains a startup failure.
+
 ## Revisions and rollback
 
 Revision YAML and state snapshots live under `/var/lib/m-ui/revisions`, mode
@@ -45,8 +83,13 @@ the selected structured state, recompiles it, validates it with the current
 Mihomo binary, publishes it, and records a new active revision. The database
 and active YAML therefore move together.
 
-The configured history limit applies only to inactive revisions. Active
-artifacts are never removed by retention cleanup.
+The configured history limit is the number of inactive revisions to retain.
+Inactive includes both `rolled_back` and `failed` revisions. Cleanup keeps the
+newest inactive revisions in stable revision-number order; active artifacts are
+never removed. Files are removed before their database row, so a file-removal
+failure leaves the row intact. Cleanup runs as post-commit maintenance: its
+failure is logged but does not turn an already committed publication into an
+API error.
 
 ## Expiry
 

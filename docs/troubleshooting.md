@@ -82,17 +82,36 @@ the m-ui journal for a redacted Controller error.
 
 ## Degraded mode
 
-Degraded mode means automatic recovery after a publication failure did not
-fully restore file and database state. Do not keep retrying mutations.
+Degraded mode means m-ui could not prove or restore a consistent relationship
+between the database, unique active revision, revision YAML/JSON artifacts, and
+active Mihomo YAML. It can be entered after an uncertain `COMMIT` result, a
+failed automatic repair, or startup integrity checking. Do not keep retrying
+mutations.
 
 1. Stop m-ui to freeze changes.
 2. Back up `/etc/m-ui`, `/etc/mihomo`, and `/var/lib/m-ui`.
-3. Inspect both service journals and revision files.
-4. Validate the active YAML with real Mihomo.
-5. Restore a known-good matched backup of configuration, database, and master
-   key, or investigate with the maintainer.
+3. Inspect both service journals, the indicated active revision metadata, and
+   its `.yaml` and `.json` files under the revision directory.
+4. Compare the active YAML SHA-256 with the active revision and validate the
+   YAML with real Mihomo.
+5. Restore a known-good matched backup of configuration, database, revision
+   artifacts, and master key, or investigate with the maintainer.
+
+The HTTP panel and read-only runtime monitor remain available in degraded mode,
+but configuration writes return the degraded error and the expiry scheduler is
+not started. A first installation with no active revision is not degraded and
+startup intentionally leaves its bootstrap YAML untouched.
 
 Deleting `system_state`, revisions, or the database is not a repair.
+
+## Revision cleanup warning
+
+If the journal reports that publication succeeded but revision maintenance
+failed, the configuration and database commit remain successful. Do not repeat
+the mutation. Check revision-directory ownership, free space, file types, and
+the database error, then repair the maintenance cause. Both `failed` and
+`rolled_back` revisions count toward the inactive history limit; the active
+revision is never eligible for cleanup.
 
 ## Login rate limiting
 
