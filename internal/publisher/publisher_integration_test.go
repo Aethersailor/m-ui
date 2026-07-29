@@ -1063,6 +1063,7 @@ func (transaction *fakePublicationTransaction) Rollback(context.Context) error {
 
 type fakeCLI struct {
 	validateErr   error
+	afterValidate func() error
 	concurrent    atomic.Int32
 	maxConcurrent atomic.Int32
 	calls         atomic.Int32
@@ -1089,7 +1090,11 @@ func (cli *fakeCLI) Validate(context.Context, string) error {
 			}
 		})
 	}
-	return cli.validateErr
+	var afterErr error
+	if cli.afterValidate != nil {
+		afterErr = cli.afterValidate()
+	}
+	return errors.Join(cli.validateErr, afterErr)
 }
 
 func (*fakeCLI) Version(context.Context) (string, error) {

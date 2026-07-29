@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"testing"
@@ -45,7 +46,7 @@ func TestBackgroundServicesWaitForStartupReconciliation(t *testing.T) {
 	assertStarted(t, expiry.started, "expiry scheduler")
 }
 
-func TestBackgroundServicesSkipExpiryWhenReconciliationDegrades(t *testing.T) {
+func TestBackgroundServicesSkipExpiryWhenStartupRecoveryFails(t *testing.T) {
 	t.Parallel()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -54,7 +55,10 @@ func TestBackgroundServicesSkipExpiryWhenReconciliationDegrades(t *testing.T) {
 
 	err := startBackgroundServices(
 		ctx,
-		staticStartupReconciler{err: publisher.ErrStartupDegraded},
+		staticStartupReconciler{err: errors.Join(
+			publisher.ErrStartupDegraded,
+			errors.New("synthetic startup recovery failure"),
+		)},
 		staticSystemStateReader{
 			state: domain.SystemState{Degraded: true},
 		},
