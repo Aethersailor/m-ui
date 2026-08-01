@@ -288,13 +288,13 @@ func (client *GitHubClient) Download(
 	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode != http.StatusOK {
 		return "", 0, fmt.Errorf(
-			"Mihomo asset download returned HTTP %d",
+			"mihomo asset download returned HTTP %d",
 			response.StatusCode,
 		)
 	}
 	if response.ContentLength > identity.AssetSize ||
 		response.ContentLength > maxAssetSize {
-		return "", 0, errors.New("Mihomo asset response is larger than expected")
+		return "", 0, errors.New("mihomo asset response is larger than expected")
 	}
 	hasher := sha256.New()
 	limited := &io.LimitedReader{
@@ -306,11 +306,11 @@ func (client *GitHubClient) Download(
 		return "", 0, errors.New("store Mihomo asset")
 	}
 	if written != identity.AssetSize || limited.N <= 0 {
-		return "", 0, errors.New("Mihomo asset size does not match release metadata")
+		return "", 0, errors.New("mihomo asset size does not match release metadata")
 	}
 	digest := hex.EncodeToString(hasher.Sum(nil))
 	if digest != identity.AssetDigestSHA256 {
-		return "", 0, errors.New("Mihomo asset SHA-256 verification failed")
+		return "", 0, errors.New("mihomo asset SHA-256 verification failed")
 	}
 	return digest, written, nil
 }
