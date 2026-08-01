@@ -235,7 +235,7 @@ jobs:
               /var/lib/m-ui/core/current/mihomo -d /var/lib/mihomo \
                 -f /etc/mihomo/config.yaml >/tmp/mihomo-package-test.log 2>&1 &
               mihomo_pid=$!
-              trap 'kill "$mihomo_pid" 2>/dev/null || true' EXIT
+              trap "kill \"$mihomo_pid\" 2>/dev/null || true" EXIT
               sleep 2
               runuser -u m-ui -- /usr/bin/m-ui doctor \
                 --config /etc/m-ui/config.toml
@@ -245,12 +245,12 @@ jobs:
                 --manifest /usr/share/m-ui/bootstrap/manifest.json \
                 --channel alpha --auto-update on --check-interval 6h
               test "$(runuser -u m-ui -- /usr/bin/m-ui core status \
-                --json --config /etc/m-ui/config.toml | grep -c '\"channel\": \"alpha\"')" -eq 1
+                --json --config /etc/m-ui/config.toml | grep -c "\"channel\": \"alpha\"")" -eq 1
               printf "%s\n" preserve > /var/lib/m-ui/package-test-marker
               apt-get install --reinstall -y "$package"
               test -x /usr/bin/m-ui
               test "$(runuser -u m-ui -- /usr/bin/m-ui core status \
-                --json --config /etc/m-ui/config.toml | grep -c '\"channel\": \"alpha\"')" -eq 1
+                --json --config /etc/m-ui/config.toml | grep -c "\"channel\": \"alpha\"")" -eq 1
               test -f /var/lib/m-ui/package-test-marker
               apt-get purge -y m-ui
               test ! -e /usr/bin/m-ui
@@ -297,7 +297,7 @@ jobs:
               /var/lib/m-ui/core/current/mihomo -d /var/lib/mihomo \
                 -f /etc/mihomo/config.yaml >/tmp/mihomo-package-test.log 2>&1 &
               mihomo_pid=$!
-              trap 'kill "$mihomo_pid" 2>/dev/null || true' EXIT
+              trap "kill \"$mihomo_pid\" 2>/dev/null || true" EXIT
               sleep 2
               su-exec m-ui /usr/bin/m-ui doctor \
                 --config /etc/m-ui/config.toml
@@ -307,11 +307,11 @@ jobs:
                 --manifest /usr/share/m-ui/bootstrap/manifest.json \
                 --channel alpha --auto-update on --check-interval 6h
               su-exec m-ui /usr/bin/m-ui core status \
-                --json --config /etc/m-ui/config.toml | grep '"channel": "alpha"'
+                --json --config /etc/m-ui/config.toml | grep "\"channel\": \"alpha\""
               printf "%s\n" preserve > /var/lib/m-ui/package-test-marker
               apk add --allow-untrusted --force-broken-world "$package"
               su-exec m-ui /usr/bin/m-ui core status \
-                --json --config /etc/m-ui/config.toml | grep '"channel": "alpha"'
+                --json --config /etc/m-ui/config.toml | grep "\"channel\": \"alpha\""
               test -f /var/lib/m-ui/package-test-marker
               apk del m-ui
               test ! -e /usr/bin/m-ui
