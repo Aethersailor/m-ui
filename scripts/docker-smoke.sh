@@ -6,10 +6,9 @@ image="${1:?usage: docker-smoke.sh IMAGE}"
 name="m-ui-smoke-${RANDOM}-${RANDOM}"
 volumes=()
 secret_directory="$(mktemp -d)"
-sudo chown 10001:10001 "$secret_directory"
 chmod 0755 "$secret_directory"
 (umask 077; printf '%s\n' 'Synthetic-Smoke-Password-2026!' >"$secret_directory/admin_password")
-sudo chown 10001:10001 "$secret_directory/admin_password"
+sudo chown 10001:10001 "$secret_directory" "$secret_directory/admin_password"
 
 cleanup() {
   docker rm -f "$name" >/dev/null 2>&1 || true
