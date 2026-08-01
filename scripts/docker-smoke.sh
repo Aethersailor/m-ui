@@ -59,7 +59,11 @@ for _ in $(seq 1 60); do
   }
   sleep 1
 done
-[[ "$(docker inspect --format '{{.State.Health.Status}}' "$name")" == "healthy" ]]
+if [[ "$(docker inspect --format '{{.State.Health.Status}}' "$name")" != "healthy" ]]; then
+  docker inspect "$name"
+  docker logs "$name"
+  exit 1
+fi
 docker exec "$name" m-ui core status --json \
   --config /etc/m-ui/config.toml >/dev/null
 docker exec "$name" /var/lib/m-ui/core/current/mihomo -v >/dev/null
