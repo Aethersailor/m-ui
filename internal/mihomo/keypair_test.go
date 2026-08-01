@@ -57,6 +57,14 @@ func TestParseRealityKeypairRejectsUnknownOrInvalidOutputWithoutEchoingSecrets(t
 	}
 }
 
+func TestParseVersionOutputUsesTheFirstNonEmptyLine(t *testing.T) {
+	t.Parallel()
+	version := parseVersionOutput([]byte("\nMihomo Meta v1.19.29 linux amd64\nUse tags: with_gvisor\n"))
+	if version != "Mihomo Meta v1.19.29 linux amd64" {
+		t.Fatalf("parseVersionOutput() = %q", version)
+	}
+}
+
 func TestLimitedBufferRejectsOversizedOutput(t *testing.T) {
 	t.Parallel()
 	buffer := limitedBuffer{limit: 4}

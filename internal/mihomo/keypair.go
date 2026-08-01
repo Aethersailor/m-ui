@@ -64,11 +64,20 @@ func (cli *CLI) Version(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("read Mihomo version: %w", err)
 	}
-	version := strings.TrimSpace(string(output))
+	version := parseVersionOutput(output)
 	if version == "" {
 		return "", errors.New("mihomo version output is empty")
 	}
 	return version, nil
+}
+
+func parseVersionOutput(output []byte) string {
+	for line := range strings.SplitSeq(string(output), "\n") {
+		if version := strings.TrimSpace(line); version != "" {
+			return version
+		}
+	}
+	return ""
 }
 
 func (cli *CLI) run(ctx context.Context, timeout time.Duration, arguments ...string) ([]byte, error) {

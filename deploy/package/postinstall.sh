@@ -43,10 +43,19 @@ create_account() {
     account="$1"
     home="$2"
     if getent passwd "$account" >/dev/null 2>&1; then
+        if [ -f /etc/alpine-release ] &&
+            ! getent group "$account" >/dev/null 2>&1
+        then
+            addgroup -S "$account"
+        fi
         return
     fi
     if [ -f /etc/alpine-release ]; then
-        adduser -S -D -H -h "$home" -s /sbin/nologin "$account"
+        if ! getent group "$account" >/dev/null 2>&1; then
+            addgroup -S "$account"
+        fi
+        adduser -S -D -H -G "$account" -h "$home" \
+            -s /sbin/nologin "$account"
     elif command -v useradd >/dev/null 2>&1; then
         useradd --system --user-group --home-dir "$home" \
             --shell /usr/sbin/nologin "$account"
