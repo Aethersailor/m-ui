@@ -58,10 +58,14 @@ func NewManagedProcess(
 	return process, nil
 }
 
-func (process *ManagedProcess) IsActive(context.Context) (bool, error) {
+func (process *ManagedProcess) IsActive(ctx context.Context) (bool, error) {
 	process.mutex.Lock()
-	defer process.mutex.Unlock()
-	return process.active, nil
+	active := process.active
+	process.mutex.Unlock()
+	if active {
+		return true, nil
+	}
+	return managedProcessActive(ctx, process.binaryPath)
 }
 
 func (process *ManagedProcess) Start(ctx context.Context) error {
