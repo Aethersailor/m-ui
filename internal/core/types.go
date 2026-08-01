@@ -100,6 +100,8 @@ func (identity ReleaseIdentity) Validate() error {
 		return errors.New("release channel identity must not be prerelease")
 	case identity.Channel == ChannelAlpha && identity.TagName != AlphaTag:
 		return errors.New("alpha channel identity must use Prerelease-Alpha")
+	case identity.Channel == ChannelAlpha && !identity.Prerelease:
+		return errors.New("alpha channel identity must be prerelease")
 	case identity.AssetID <= 0 || identity.AssetSize <= 0:
 		return errors.New("release identity asset metadata is invalid")
 	case strings.TrimSpace(identity.AssetName) == "":

@@ -10,9 +10,12 @@ root="${M_UI_ROOT:-}"
 command_name="${1:-}"
 version="latest"
 package_mode="auto"
-mihomo_channel="release"
-mihomo_auto_update="off"
-mihomo_check_interval="24h"
+mihomo_channel=""
+mihomo_auto_update=""
+mihomo_check_interval=""
+mihomo_channel_set=0
+mihomo_auto_update_set=0
+mihomo_check_interval_set=0
 archive=""
 archive_sha256=""
 admin_password_file=""
@@ -72,16 +75,19 @@ while [ "$#" -gt 0 ]; do
         --mihomo-channel)
             require_value "$@"
             mihomo_channel="$2"
+            mihomo_channel_set=1
             shift 2
             ;;
         --mihomo-auto-update)
             require_value "$@"
             mihomo_auto_update="$2"
+            mihomo_auto_update_set=1
             shift 2
             ;;
         --mihomo-check-interval)
             require_value "$@"
             mihomo_check_interval="$2"
+            mihomo_check_interval_set=1
             shift 2
             ;;
         --archive)
@@ -132,15 +138,15 @@ case "$package_mode" in
 esac
 package_requested="$package_mode"
 case "$mihomo_channel" in
-    release|alpha) ;;
+    ""|release|alpha) ;;
     *) fail "--mihomo-channel must be release or alpha" ;;
 esac
 case "$mihomo_auto_update" in
-    on|off) ;;
+    ""|on|off) ;;
     *) fail "--mihomo-auto-update must be on or off" ;;
 esac
 case "$mihomo_check_interval" in
-    6h|12h|24h|168h) ;;
+    ""|6h|12h|24h|168h) ;;
     *) fail "--mihomo-check-interval must be 6h, 12h, 24h, or 168h" ;;
 esac
 if [ -n "$root" ]; then
@@ -510,6 +516,14 @@ configure_bootstrap() {
     binary="$(target /usr/bin/m-ui)"
     bootstrap_binary="$(target /usr/lib/m-ui/bootstrap/mihomo)"
     bootstrap_manifest="$(target /usr/share/m-ui/bootstrap/manifest.json)"
+    if [ "$database_was_present" -eq 1 ] &&
+        [ -x "$(target /var/lib/m-ui/core/current/mihomo)" ] &&
+        [ -s "$(target /var/lib/m-ui/core/current/manifest.json)" ] &&
+        run_as_m_ui "$binary" core status --json \
+            --config "$(target /etc/m-ui/config.toml)" >/dev/null 2>&1
+    then
+        return
+    fi
     if [ -n "$root" ]; then
         install -d -m 0750 "$(target /var/lib/m-ui/core/current)"
         install -m 0750 "$bootstrap_binary" \
@@ -518,13 +532,17 @@ configure_bootstrap() {
             "$(target /var/lib/m-ui/core/current/manifest.json)"
         return
     fi
-    run_as_m_ui "$binary" core bootstrap \
+    set -- core bootstrap \
         --config /etc/m-ui/config.toml \
         --binary "$bootstrap_binary" \
-        --manifest "$bootstrap_manifest" \
-        --channel "$mihomo_channel" \
-        --auto-update "$mihomo_auto_update" \
-        --check-interval "$mihomo_check_interval"
+        --manifest "$bootstrap_manifest"
+    [ "$mihomo_channel_set" -eq 1 ] &&
+        set -- "$@" --channel "$mihomo_channel"
+    [ "$mihomo_auto_update_set" -eq 1 ] &&
+        set -- "$@" --auto-update "$mihomo_auto_update"
+    [ "$mihomo_check_interval_set" -eq 1 ] &&
+        set -- "$@" --check-interval "$mihomo_check_interval"
+    run_as_m_ui "$binary" "$@"
 }
 
 initialize_administrator() {

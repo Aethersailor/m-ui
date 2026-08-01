@@ -264,6 +264,97 @@ func TestFileStoreRecoversStagingAndRetainsTwoBackups(t *testing.T) {
 	}
 }
 
+func TestFileStorePostRenameDurabilityFailureIsRevertible(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	files, err := NewFileStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := files.Prepare(); err != nil {
+		t.Fatal(err)
+	}
+	source := filepath.Join(root, "source")
+	if err := os.WriteFile(source, []byte("post-rename"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	stage, _, err := files.StageAdopted(source, "post-rename", time.Unix(1, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	files.syncDirectoryHook = func(string) error {
+		return errors.New("synthetic root fsync failure")
+	}
+	activation, err := files.Activate(stage)
+	if err == nil {
+		t.Fatal("Activate() error = nil")
+	}
+	if !activation.activated {
+		t.Fatal("post-rename failure did not return an activated transaction")
+	}
+	if err := files.RevertActivation(activation); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := files.Current(); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("Current() after revert = %v, want not-exist", err)
+	}
+}
+
+func TestManagerFailClosedLatchSurvivesDatabaseMarkFailure(t *testing.T) {
+	t.Parallel()
+	fixture := newManagerFixture(t)
+	fixture.repository.failMarkDegraded = true
+	if err := fixture.manager.failAfterActivation(
+		context.Background(),
+		Activation{},
+		Manifest{},
+		false,
+		errors.New("synthetic activation failure"),
+	); err == nil {
+		t.Fatal("failAfterActivation() error = nil")
+	}
+	if !fixture.manager.FailClosed() {
+		t.Fatal("fail-closed latch was not set")
+	}
+	marked, err := fixture.files.FailClosed()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !marked {
+		t.Fatal("durable fail-closed marker was not written")
+	}
+	degraded, err := fixture.manager.systemDegraded(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !degraded {
+		t.Fatal("systemDegraded() ignored fail-closed latch")
+	}
+}
+
+func TestManagerSettingsUpdateSchedulesAndWakesCoreChecks(t *testing.T) {
+	t.Parallel()
+	fixture := newManagerFixture(t)
+	lastCheck := time.Unix(1000, 0).UTC()
+	fixture.repository.state.LastCheckAt = &lastCheck
+	var woke bool
+	fixture.manager.SetWake(func() { woke = true })
+	settings := fixture.repository.settings
+	settings.AutoUpdate = true
+	settings.CheckInterval = 6 * time.Hour
+	if err := fixture.manager.UpdateSettings(context.Background(), "admin", settings); err != nil {
+		t.Fatal(err)
+	}
+	state := fixture.repository.state
+	want := lastCheck.Add(6 * time.Hour)
+	if state.NextCheckAt == nil || !state.NextCheckAt.Equal(want) {
+		t.Fatalf("next check = %v, want %v", state.NextCheckAt, want)
+	}
+	if !woke {
+		t.Fatal("settings update did not wake the scheduler")
+	}
+}
+
 type managerFixture struct {
 	root        string
 	files       *FileStore
@@ -292,10 +383,13 @@ func newManagerFixture(t *testing.T) *managerFixture {
 	process := &fakeCoreProcess{}
 	coordinator := operation.NewCoordinator()
 	fixture := &managerFixture{
-		root:        root,
-		files:       files,
-		repository:  repository,
-		process:     process,
+		root:       root,
+		files:      files,
+		repository: repository,
+		process:    process,
+		controller: fakeCoreController{
+			path: filepath.Join(root, "current", "mihomo"),
+		},
 		coordinator: coordinator,
 	}
 	fixture.setUpstream(t, "new-runtime-version")
@@ -368,13 +462,14 @@ func (fixture *managerFixture) adopt(t *testing.T, version string) Manifest {
 }
 
 type fakeCoreRepository struct {
-	mutex      sync.Mutex
-	settings   Settings
-	state      State
-	degraded   bool
-	audit      []string
-	saveCalls  int
-	failSaveAt int
+	mutex            sync.Mutex
+	settings         Settings
+	state            State
+	degraded         bool
+	audit            []string
+	saveCalls        int
+	failSaveAt       int
+	failMarkDegraded bool
 }
 
 func (repository *fakeCoreRepository) CoreSettings(context.Context) (Settings, error) {
@@ -430,6 +525,9 @@ func (repository *fakeCoreRepository) MarkDegraded(
 ) error {
 	repository.mutex.Lock()
 	defer repository.mutex.Unlock()
+	if repository.failMarkDegraded {
+		return errors.New("synthetic degraded-state write failure")
+	}
 	repository.degraded = true
 	return nil
 }
@@ -528,9 +626,18 @@ func (*fakeCoreProcess) RecentLogs(context.Context, int) ([]mihomo.LogEntry, err
 	return nil, nil
 }
 
-type fakeCoreController struct{}
+type fakeCoreController struct {
+	path string
+}
 
-func (fakeCoreController) Version(context.Context) (mihomo.Version, error) {
+func (controller fakeCoreController) Version(context.Context) (mihomo.Version, error) {
+	if controller.path != "" {
+		content, err := os.ReadFile(controller.path)
+		if err != nil {
+			return mihomo.Version{}, err
+		}
+		return mihomo.Version{Version: strings.TrimSpace(string(content))}, nil
+	}
 	return mihomo.Version{Version: "controller-runtime-version"}, nil
 }
 func (fakeCoreController) Traffic(context.Context) (mihomo.TrafficSnapshot, error) {

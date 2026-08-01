@@ -155,16 +155,35 @@ EOF
 fi
 chown m-ui:mihomo "$mihomo_config"
 
-if command -v runuser >/dev/null 2>&1; then
-    runuser -u m-ui -- /usr/bin/m-ui core bootstrap \
-        --config "$config_path" \
-        --binary /usr/lib/m-ui/bootstrap/mihomo \
-        --manifest /usr/share/m-ui/bootstrap/manifest.json
-else
-    su-exec m-ui /usr/bin/m-ui core bootstrap \
-        --config "$config_path" \
-        --binary /usr/lib/m-ui/bootstrap/mihomo \
-        --manifest /usr/share/m-ui/bootstrap/manifest.json
+needs_bootstrap=1
+if [ "$database_was_present" -eq 1 ] &&
+    [ -x /var/lib/m-ui/core/current/mihomo ] &&
+    [ -s /var/lib/m-ui/core/current/manifest.json ]
+then
+    if command -v runuser >/dev/null 2>&1; then
+        if runuser -u m-ui -- /usr/bin/m-ui core status --json \
+            --config "$config_path" >/dev/null 2>&1
+        then
+            needs_bootstrap=0
+        fi
+    elif su-exec m-ui /usr/bin/m-ui core status --json \
+        --config "$config_path" >/dev/null 2>&1
+    then
+        needs_bootstrap=0
+    fi
+fi
+if [ "$needs_bootstrap" -eq 1 ]; then
+    if command -v runuser >/dev/null 2>&1; then
+        runuser -u m-ui -- /usr/bin/m-ui core bootstrap \
+            --config "$config_path" \
+            --binary /usr/lib/m-ui/bootstrap/mihomo \
+            --manifest /usr/share/m-ui/bootstrap/manifest.json
+    else
+        su-exec m-ui /usr/bin/m-ui core bootstrap \
+            --config "$config_path" \
+            --binary /usr/lib/m-ui/bootstrap/mihomo \
+            --manifest /usr/share/m-ui/bootstrap/manifest.json
+    fi
 fi
 
 if [ "$database_was_present" -eq 0 ] &&
@@ -203,6 +222,49 @@ if [ -d /run/systemd/system ]; then
     systemctl daemon-reload
 elif command -v rc-update >/dev/null 2>&1; then
     chmod 0755 /etc/init.d/m-ui /etc/init.d/mihomo
+fi
+
+state_file=/run/m-ui/package-upgrade-services
+if [ -r "$state_file" ]; then
+    # The file is created by our root-owned preremove hook with mode 0600.
+    # shellcheck disable=SC1090
+    . "$state_file"
+    if [ -d /run/systemd/system ]; then
+        if [ "${mihomo_enabled:-0}" -eq 1 ]; then
+            systemctl enable mihomo.service >/dev/null 2>&1 || true
+        else
+            systemctl disable mihomo.service >/dev/null 2>&1 || true
+        fi
+        if [ "${m_ui_enabled:-0}" -eq 1 ]; then
+            systemctl enable m-ui.service >/dev/null 2>&1 || true
+        else
+            systemctl disable m-ui.service >/dev/null 2>&1 || true
+        fi
+        if [ "${mihomo_active:-0}" -eq 1 ]; then
+            systemctl start mihomo.service >/dev/null 2>&1 || true
+        fi
+        if [ "${m_ui_active:-0}" -eq 1 ]; then
+            systemctl start m-ui.service >/dev/null 2>&1 || true
+        fi
+    elif command -v rc-update >/dev/null 2>&1; then
+        if [ "${mihomo_enabled:-0}" -eq 1 ]; then
+            rc-update add mihomo default >/dev/null 2>&1 || true
+        else
+            rc-update del mihomo default >/dev/null 2>&1 || true
+        fi
+        if [ "${m_ui_enabled:-0}" -eq 1 ]; then
+            rc-update add m-ui default >/dev/null 2>&1 || true
+        else
+            rc-update del m-ui default >/dev/null 2>&1 || true
+        fi
+        if [ "${mihomo_active:-0}" -eq 1 ]; then
+            rc-service mihomo start >/dev/null 2>&1 || true
+        fi
+        if [ "${m_ui_active:-0}" -eq 1 ]; then
+            rc-service m-ui start >/dev/null 2>&1 || true
+        fi
+    fi
+    rm -f "$state_file"
 fi
 
 printf '%s\n' \

@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sync/atomic"
 	"time"
 
 	"github.com/Aethersailor/m-ui/internal/mihomo"
@@ -53,6 +54,16 @@ type Manager struct {
 	healthInterval time.Duration
 	logger         *slog.Logger
 	newCLI         func(string) (mihomo.CoreCLI, error)
+	wake           atomic.Value
+	failClosed     atomic.Bool
+}
+
+// settingsStateRepository is implemented by the production SQLite store.  It
+// keeps a settings change and its scheduler state in one database transaction;
+// the optional shape preserves small command/test repositories that only need
+// the original Repository contract.
+type settingsStateRepository interface {
+	UpdateCoreSettingsAndState(context.Context, Settings, State, time.Time) error
 }
 
 func NewManager(options ManagerOptions) (*Manager, error) {
@@ -117,6 +128,40 @@ func NewManager(options ManagerOptions) (*Manager, error) {
 	return manager, nil
 }
 
+// SetWake installs the scheduler wake-up hook after both components have been
+// constructed.  It is deliberately optional so short-lived CLI control planes
+// do not need a scheduler.
+func (manager *Manager) SetWake(wake func()) {
+	if wake != nil {
+		manager.wake.Store(wake)
+	}
+}
+
+func (manager *Manager) wakeScheduler() {
+	if wake, ok := manager.wake.Load().(func()); ok && wake != nil {
+		wake()
+	}
+}
+
+func (manager *Manager) FailClosed() bool {
+	return manager.failClosed.Load()
+}
+
+func (manager *Manager) systemDegraded(ctx context.Context) (bool, error) {
+	if manager.failClosed.Load() {
+		return true, nil
+	}
+	marker, err := manager.files.FailClosed()
+	if err != nil {
+		return false, err
+	}
+	if marker {
+		manager.failClosed.Store(true)
+		return true, nil
+	}
+	return manager.repository.CoreSystemDegraded(ctx)
+}
+
 func (manager *Manager) Recover(ctx context.Context) error {
 	release, err := manager.coordinator.TryAcquire()
 	if err != nil {
@@ -125,6 +170,27 @@ func (manager *Manager) Recover(ctx context.Context) error {
 	defer release()
 	if err := manager.files.Recover(); err != nil {
 		return err
+	}
+	marker, err := manager.files.FailClosed()
+	if err != nil {
+		return err
+	}
+	if marker {
+		manager.failClosed.Store(true)
+		markContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		markErr := manager.repository.MarkDegraded(
+			markContext,
+			"managed Mihomo core recovery requires operator intervention",
+			"",
+			manager.clock().UTC(),
+		)
+		cancel()
+		if markErr != nil {
+			return errors.Join(
+				errors.New("managed Mihomo core fail-closed state could not be persisted"),
+				markErr,
+			)
+		}
 	}
 	state, err := manager.repository.CoreState(ctx)
 	if err != nil {
@@ -192,7 +258,12 @@ func (manager *Manager) Status(ctx context.Context) (Status, error) {
 		}
 		status.CurrentBinarySHA256 = manifest.BinarySHA256
 		status.RuntimeVersionMatches = status.ProcessActive &&
-			status.ControllerReachable && actual == manifest.BinaryReportedVersion
+			status.ControllerReachable &&
+			runtimeVersionsMatch(actual, manifest.BinaryReportedVersion) &&
+			runtimeVersionsMatch(
+				status.ControllerVersion,
+				manifest.BinaryReportedVersion,
+			)
 		if state.Available != nil {
 			status.UpdateAvailable =
 				state.Available.AssetDigestSHA256 != manifest.CompressedSHA256
@@ -222,7 +293,7 @@ func (manager *Manager) UpdateSettings(
 	if !current.Managed {
 		return ErrExternal
 	}
-	degraded, err := manager.repository.CoreSystemDegraded(ctx)
+	degraded, err := manager.systemDegraded(ctx)
 	if err != nil {
 		return err
 	}
@@ -234,9 +305,39 @@ func (manager *Manager) UpdateSettings(
 	settings.Managed = current.Managed
 	settings.ExternalPath = current.ExternalPath
 	now := manager.clock().UTC()
-	if err := manager.repository.UpdateCoreSettings(ctx, settings, now); err != nil {
+	state, err := manager.repository.CoreState(ctx)
+	if err != nil {
 		return err
 	}
+	if settings.Channel != current.Channel {
+		state.Available = nil
+	}
+	if !settings.AutoUpdate {
+		state.NextCheckAt = nil
+	} else {
+		anchor := now
+		if state.LastCheckAt != nil {
+			anchor = state.LastCheckAt.UTC()
+		}
+		next := anchor.Add(settings.CheckInterval)
+		if next.Before(now) {
+			next = now
+		}
+		state.NextCheckAt = &next
+	}
+	if transactional, ok := manager.repository.(settingsStateRepository); ok {
+		if err := transactional.UpdateCoreSettingsAndState(ctx, settings, state, now); err != nil {
+			return err
+		}
+	} else {
+		if err := manager.repository.UpdateCoreSettings(ctx, settings, now); err != nil {
+			return err
+		}
+		if err := manager.repository.SaveCoreState(ctx, state); err != nil {
+			return err
+		}
+	}
+	manager.wakeScheduler()
 	return manager.repository.RecordCoreAudit(
 		ctx,
 		actorAdminID,
@@ -266,7 +367,7 @@ func (manager *Manager) Check(
 	if !settings.Managed {
 		return ReleaseIdentity{}, ErrExternal
 	}
-	degraded, err := manager.repository.CoreSystemDegraded(ctx)
+	degraded, err := manager.systemDegraded(ctx)
 	if err != nil {
 		return ReleaseIdentity{}, err
 	}
@@ -349,7 +450,7 @@ func (manager *Manager) Update(
 	if !settings.Managed {
 		return Manifest{}, false, ErrExternal
 	}
-	degraded, err := manager.repository.CoreSystemDegraded(ctx)
+	degraded, err := manager.systemDegraded(ctx)
 	if err != nil {
 		return Manifest{}, false, err
 	}
@@ -454,6 +555,15 @@ func (manager *Manager) Update(
 
 	activation, err := manager.files.Activate(stagingDirectory)
 	if err != nil {
+		if activation.activated {
+			err = manager.failAfterActivation(
+				ctx,
+				activation,
+				current,
+				currentErr == nil,
+				err,
+			)
+		}
 		manager.recordUpdateFailure(ctx, actorAdminID, err)
 		return Manifest{}, false, err
 	}
@@ -545,7 +655,7 @@ func (manager *Manager) Rollback(
 	if !settings.Managed {
 		return Manifest{}, ErrExternal
 	}
-	degraded, err := manager.repository.CoreSystemDegraded(ctx)
+	degraded, err := manager.systemDegraded(ctx)
 	if err != nil {
 		return Manifest{}, err
 	}
@@ -564,6 +674,15 @@ func (manager *Manager) Rollback(
 	current, currentErr := manager.files.Current()
 	activation, err := manager.files.Activate(staged)
 	if err != nil {
+		if activation.activated {
+			err = manager.failAfterActivation(
+				ctx,
+				activation,
+				current,
+				currentErr == nil,
+				err,
+			)
+		}
 		return Manifest{}, err
 	}
 	if err := manager.restartAndVerify(
@@ -656,6 +775,9 @@ func (manager *Manager) Bootstrap(
 	}
 	activation, err := manager.files.Activate(staged)
 	if err != nil {
+		if activation.activated {
+			_ = manager.files.RevertActivation(activation)
+		}
 		return Manifest{}, false, err
 	}
 	state, err := manager.repository.CoreState(ctx)
@@ -667,6 +789,11 @@ func (manager *Manager) Bootstrap(
 	if err := manager.repository.SaveCoreState(ctx, state); err != nil {
 		_ = manager.files.RevertActivation(activation)
 		return Manifest{}, false, err
+	}
+	if manager.failClosed.Load() {
+		if err := manager.files.ClearFailClosed(); err == nil {
+			manager.failClosed.Store(false)
+		}
 	}
 	return manifest, true, nil
 }
@@ -702,6 +829,9 @@ func (manager *Manager) AdoptExternal(
 	defer manager.files.RemoveStage(staged)
 	activation, err := manager.files.Activate(staged)
 	if err != nil {
+		if activation.activated {
+			_ = manager.files.RevertActivation(activation)
+		}
 		return Manifest{}, false, err
 	}
 	state, err := manager.repository.CoreState(ctx)
@@ -713,6 +843,11 @@ func (manager *Manager) AdoptExternal(
 	if err := manager.repository.SaveCoreState(ctx, state); err != nil {
 		_ = manager.files.RevertActivation(activation)
 		return Manifest{}, false, err
+	}
+	if manager.failClosed.Load() {
+		if err := manager.files.ClearFailClosed(); err == nil {
+			manager.failClosed.Store(false)
+		}
 	}
 	return manifest, true, nil
 }
@@ -736,7 +871,12 @@ func (manager *Manager) restartAndVerify(
 			if versionErr != nil {
 				return versionErr
 			}
-			if actual != expectedVersion {
+			controllerVersion, controllerErr := manager.controller.Version(healthContext)
+			if controllerErr != nil {
+				return controllerErr
+			}
+			if !runtimeVersionsMatch(actual, expectedVersion) ||
+				!runtimeVersionsMatch(controllerVersion.Version, expectedVersion) {
 				return errors.New("running Mihomo version does not match activated candidate")
 			}
 			return nil
@@ -770,7 +910,13 @@ func (manager *Manager) restoreAfterFailure(
 	hadPrevious bool,
 ) error {
 	if !hadPrevious {
-		return errors.New("no prior managed core exists for automatic rollback")
+		revertErr := manager.files.RevertActivation(activation)
+		stopErr := manager.process.Stop(context.Background())
+		return errors.Join(
+			errors.New("no prior managed core exists for automatic rollback"),
+			revertErr,
+			stopErr,
+		)
 	}
 	recoveryContext, cancel := context.WithTimeout(
 		context.Background(),
@@ -811,6 +957,8 @@ func (manager *Manager) failAfterActivation(
 	if rollbackErr == nil {
 		return cause
 	}
+	manager.failClosed.Store(true)
+	markerErr := manager.files.MarkFailClosed()
 	markContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	markErr := manager.repository.MarkDegraded(
@@ -819,7 +967,13 @@ func (manager *Manager) failAfterActivation(
 		"",
 		manager.clock().UTC(),
 	)
-	return errors.Join(cause, rollbackErr, markErr)
+	var stopErr error
+	if markerErr != nil {
+		stopContext, stopCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		stopErr = manager.process.Stop(stopContext)
+		stopCancel()
+	}
+	return errors.Join(cause, rollbackErr, markerErr, markErr, stopErr)
 }
 
 func (manager *Manager) clearUpdateMarker() {
@@ -883,7 +1037,7 @@ func (manager *Manager) Due(ctx context.Context, now time.Time) (bool, error) {
 	if !settings.Managed || !settings.AutoUpdate {
 		return false, nil
 	}
-	degraded, err := manager.repository.CoreSystemDegraded(ctx)
+	degraded, err := manager.systemDegraded(ctx)
 	if err != nil || degraded {
 		return false, err
 	}

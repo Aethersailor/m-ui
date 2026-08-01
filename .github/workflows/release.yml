@@ -474,6 +474,10 @@ jobs:
           PRERELEASE: ${{ needs.validate.outputs.prerelease }}
         run: |
           set -euo pipefail
+          state_dir="$RUNNER_TEMP/m-ui-release-state"
+          rm -rf "$state_dir"
+          mkdir -p "$state_dir"
+          printf 'version=%s\ntarget_sha=%s\n' "$VERSION" "$TARGET_SHA" >"$state_dir/metadata"
           (
             cd release
             sha256sum --check SHA256SUMS
@@ -503,6 +507,7 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git tag -a "$VERSION" "$TARGET_SHA" -m "m-ui $VERSION"
           git push origin "refs/tags/$VERSION"
+          touch "$state_dir/tag-created"
 
           release_args=("$VERSION" release/* --draft --target "$TARGET_SHA" \
             --title "m-ui $VERSION" --generate-notes)
@@ -510,6 +515,7 @@ jobs:
             release_args+=(--prerelease)
           fi
           gh release create "${release_args[@]}"
+          touch "$state_dir/release-created"
 
       - name: Publish formal architecture images and manifests
         id: formal-images
@@ -517,9 +523,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.validate.outputs.version }}
           SHA12: ${{ needs.validate.outputs.sha12 }}
+          TARGET_SHA: ${{ needs.validate.outputs.target_sha }}
           PRERELEASE: ${{ needs.validate.outputs.prerelease }}
         run: |
           set -euo pipefail
+          state_dir="$RUNNER_TEMP/m-ui-release-state"
+          touch "$state_dir/formal-started"
           repository="ghcr.io/${GITHUB_REPOSITORY,,}"
           version_without_v="${VERSION#v}"
           IFS=. read -r major minor _ <<< "$version_without_v"
@@ -562,6 +571,7 @@ jobs:
             "${repository}:${VERSION}" --format '{{ .Manifest.Digest }}')"
           printf 'subject_name=%s\n' "$repository" >>"$GITHUB_OUTPUT"
           printf 'subject_digest=%s\n' "$digest" >>"$GITHUB_OUTPUT"
+          touch "$state_dir/formal-complete"
 
       - name: Attest release assets
         uses: actions/attest-build-provenance@43d14bc2b83dec42d39ecae14e916627a18bb661 # v3
@@ -596,14 +606,47 @@ jobs:
             release/m-ui-image-*.sbom.spdx.json \
             --clobber
           gh release edit "$VERSION" --draft=false
+          touch "$RUNNER_TEMP/m-ui-release-state/release-complete"
 
-      - name: Remove verified candidate image tags
+      - name: Clean up candidate and failed formal release state
+        if: ${{ always() }}
         env:
           GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.validate.outputs.version }}
+          SHA12: ${{ needs.validate.outputs.sha12 }}
+          TARGET_SHA: ${{ needs.validate.outputs.target_sha }}
+          PRERELEASE: ${{ needs.validate.outputs.prerelease }}
         run: |
-          set -euo pipefail
+          set +e
           repository="ghcr.io/${GITHUB_REPOSITORY,,}"
           candidate="release-candidate-${GITHUB_RUN_ID}"
+          state_dir="$RUNNER_TEMP/m-ui-release-state"
           for tag in "$candidate" "$candidate-amd64" "$candidate-arm64"; do
             docker buildx imagetools rm "${repository}:${tag}" || true
           done
+          if [ -f "$state_dir/formal-started" ] &&
+              [ ! -f "$state_dir/release-complete" ]; then
+            version_without_v="${VERSION#v}"
+            IFS=. read -r major minor _ <<< "$version_without_v"
+            for tag in "$VERSION" "$version_without_v" "${major}.${minor}" "$major" "sha-${SHA12}"; do
+              for suffix in "" "-amd64" "-arm64"; do
+                docker buildx imagetools rm "${repository}:${tag}${suffix}" || true
+              done
+            done
+            if [ "$PRERELEASE" != true ]; then
+              docker buildx imagetools rm "${repository}:latest" || true
+            fi
+          fi
+          if [ -f "$state_dir/release-created" ] &&
+              [ ! -f "$state_dir/release-complete" ]; then
+            draft="$(gh release view "$VERSION" --json isDraft -q .isDraft 2>/dev/null)"
+            if [ "$draft" = true ]; then
+              gh release delete "$VERSION" --yes || true
+            else
+              echo "::warning::formal release $VERSION is public; manual cleanup is required"
+            fi
+          fi
+          if [ -f "$state_dir/tag-created" ] &&
+              [ ! -f "$state_dir/release-complete" ]; then
+            echo "::warning::manual cleanup required for refs/tags/$VERSION at $TARGET_SHA"
+          fi

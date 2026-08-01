@@ -27,11 +27,22 @@ type FileStore struct {
 	staging       string
 	backups       string
 	expectedOwner *int
+	// These hooks are intentionally unexported and are used by package tests
+	// to inject post-rename durability failures without relying on filesystem
+	// permissions or timing.
+	syncDirectoryHook func(string) error
+	pruneBackupsHook  func(int) error
 }
 
 type Activation struct {
 	backupPath string
+	// activated is true once stagedDirectory has been renamed into current.
+	// It lets callers distinguish a pre-activation validation error from a
+	// post-switch fsync/retention error that must be reverted.
+	activated bool
 }
+
+const failClosedMarkerName = ".m-ui-fail-closed"
 
 func NewFileStore(root string) (*FileStore, error) {
 	if !filepath.IsAbs(root) {
@@ -397,7 +408,7 @@ func (store *FileStore) Activate(stagedDirectory string) (Activation, error) {
 			if err := os.Rename(store.current, backupPath); err != nil {
 				return Activation{}, fmt.Errorf("move current core to backup: %w", err)
 			}
-			if err := syncDirectory(store.root); err != nil {
+			if err := store.syncDirectory(store.root); err != nil {
 				_ = os.Rename(backupPath, store.current)
 				return Activation{}, err
 			}
@@ -408,7 +419,7 @@ func (store *FileStore) Activate(stagedDirectory string) (Activation, error) {
 			if err := os.Remove(store.current); err != nil {
 				return Activation{}, fmt.Errorf("remove empty current core directory: %w", err)
 			}
-			if err := syncDirectory(store.root); err != nil {
+			if err := store.syncDirectory(store.root); err != nil {
 				return Activation{}, err
 			}
 		}
@@ -421,13 +432,28 @@ func (store *FileStore) Activate(stagedDirectory string) (Activation, error) {
 		}
 		return Activation{}, fmt.Errorf("activate staged core: %w", err)
 	}
-	if err := syncDirectory(store.root); err != nil {
-		return Activation{backupPath: backupPath}, err
+	activation := Activation{backupPath: backupPath, activated: true}
+	if err := store.syncDirectory(store.root); err != nil {
+		return activation, err
 	}
-	if err := store.pruneBackups(2); err != nil {
-		return Activation{backupPath: backupPath}, err
+	if err := store.pruneBackupsForActivation(2); err != nil {
+		return activation, err
 	}
-	return Activation{backupPath: backupPath}, nil
+	return activation, nil
+}
+
+func (store *FileStore) syncDirectory(path string) error {
+	if store.syncDirectoryHook != nil {
+		return store.syncDirectoryHook(path)
+	}
+	return syncDirectory(path)
+}
+
+func (store *FileStore) pruneBackupsForActivation(keep int) error {
+	if store.pruneBackupsHook != nil {
+		return store.pruneBackupsHook(keep)
+	}
+	return store.pruneBackups(keep)
 }
 
 func (store *FileStore) Restore(activation Activation) error {
@@ -456,11 +482,77 @@ func (store *FileStore) Restore(activation Activation) error {
 }
 
 func (store *FileStore) RevertActivation(activation Activation) error {
+	if !activation.activated {
+		return nil
+	}
 	if activation.backupPath != "" {
 		return store.Restore(activation)
 	}
 	if err := os.RemoveAll(store.current); err != nil {
 		return fmt.Errorf("remove uncommitted managed core activation: %w", err)
+	}
+	return syncDirectory(store.root)
+}
+
+// FailClosed reports the durable safety sentinel used when a core rollback
+// cannot be completed.  The sentinel is intentionally separate from the
+// SQLite bit so a database outage cannot make an unsafe core look healthy.
+func (store *FileStore) FailClosed() (bool, error) {
+	path := filepath.Join(store.root, failClosedMarkerName)
+	info, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 ||
+		unsafeCorePermissions(info.Mode()) {
+		return false, errors.New("managed core fail-closed marker is unsafe")
+	}
+	if err := store.validateOwner(path); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (store *FileStore) MarkFailClosed() error {
+	temporary := filepath.Join(store.root, failClosedMarkerName+".tmp")
+	file, err := os.OpenFile(
+		temporary,
+		os.O_WRONLY|os.O_CREATE|os.O_TRUNC,
+		0o640,
+	)
+	if err != nil {
+		return err
+	}
+	if _, err := file.WriteString("operator intervention required\n"); err != nil {
+		_ = file.Close()
+		return err
+	}
+	if err := file.Sync(); err != nil {
+		_ = file.Close()
+		return err
+	}
+	if err := file.Close(); err != nil {
+		return err
+	}
+	if err := os.Chmod(temporary, 0o640); err != nil {
+		return err
+	}
+	if err := setCoreGroupFromParent(temporary); err != nil {
+		return err
+	}
+	if err := os.Rename(temporary, filepath.Join(store.root, failClosedMarkerName)); err != nil {
+		return err
+	}
+	return syncDirectory(store.root)
+}
+
+func (store *FileStore) ClearFailClosed() error {
+	path := filepath.Join(store.root, failClosedMarkerName)
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
 	}
 	return syncDirectory(store.root)
 }

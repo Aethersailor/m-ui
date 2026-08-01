@@ -114,6 +114,33 @@ func TestAlphaIdentityChangesWhenRollingAssetChanges(t *testing.T) {
 	}
 }
 
+func TestGitHubClientRejectsAlphaWithoutPrereleaseFlag(t *testing.T) {
+	t.Parallel()
+	payload := gzipPayload(t, []byte("alpha-without-flag"))
+	server := httptest.NewServer(http.HandlerFunc(func(
+		response http.ResponseWriter,
+		request *http.Request,
+	) {
+		writeRelease(t, response, releaseFixture{
+			ID:         103,
+			Tag:        AlphaTag,
+			Prerelease: false,
+			Assets: []assetFixture{{
+				ID:      303,
+				Name:    "mihomo-linux-amd64-alpha.gz",
+				Content: payload,
+				Digest:  sha256Hex(payload),
+				BaseURL: serverURL(request),
+			}},
+		})
+	}))
+	defer server.Close()
+	client := newTestGitHubClient(t, server.URL, "m-ui-test", "")
+	if _, err := client.Resolve(context.Background(), ChannelAlpha, "amd64"); err == nil {
+		t.Fatal("Resolve() accepted an alpha release without prerelease=true")
+	}
+}
+
 func TestGitHubClientRejectsUnsafeReleaseMetadata(t *testing.T) {
 	t.Parallel()
 	payload := gzipPayload(t, []byte("synthetic"))

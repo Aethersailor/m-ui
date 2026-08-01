@@ -31,6 +31,50 @@ func ConfigureCore(
 	return plane.core.UpdateSettings(ctx, "", settings)
 }
 
+// ConfigureCoreOptions applies only options explicitly supplied by a package
+// lifecycle caller.  Empty values preserve the existing database settings,
+// which makes repair/reinstall safe for operators who selected alpha or a
+// custom scheduler interval previously.
+func ConfigureCoreOptions(
+	ctx context.Context,
+	cfg config.Config,
+	channelValue, autoUpdateValue, checkIntervalValue string,
+) error {
+	plane, err := openCommandControlPlane(ctx, cfg)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = plane.Close() }()
+	settings, err := plane.core.Settings(ctx)
+	if err != nil {
+		return err
+	}
+	if channelValue != "" {
+		settings.Channel, err = coremanagement.ParseChannel(channelValue)
+		if err != nil {
+			return err
+		}
+	}
+	if autoUpdateValue != "" {
+		switch autoUpdateValue {
+		case "on":
+			settings.AutoUpdate = true
+		case "off":
+			settings.AutoUpdate = false
+		default:
+			return errors.New("--auto-update must be on or off")
+		}
+	}
+	if checkIntervalValue != "" {
+		interval, intervalErr := time.ParseDuration(checkIntervalValue)
+		if intervalErr != nil || coremanagement.ValidateCheckInterval(interval) != nil {
+			return errors.New("--check-interval must be 6h, 12h, 24h, or 168h")
+		}
+		settings.CheckInterval = interval
+	}
+	return plane.core.UpdateSettings(ctx, "", settings)
+}
+
 func CoreStatus(
 	ctx context.Context,
 	cfg config.Config,

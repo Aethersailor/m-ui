@@ -265,6 +265,7 @@ func Run(ctx context.Context, cfg config.Config, build version.Info) error {
 	if err != nil {
 		return fmt.Errorf("initialize core update scheduler: %w", err)
 	}
+	coreManager.SetWake(coreScheduler.Wake)
 	if err := startBackgroundServices(
 		ctx,
 		configurationPublisher,

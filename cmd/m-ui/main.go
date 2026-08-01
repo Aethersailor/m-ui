@@ -14,7 +14,6 @@ import (
 
 	"github.com/Aethersailor/m-ui/internal/app"
 	"github.com/Aethersailor/m-ui/internal/config"
-	coremanagement "github.com/Aethersailor/m-ui/internal/core"
 	"github.com/Aethersailor/m-ui/internal/version"
 )
 
@@ -92,18 +91,18 @@ func runCore(args []string) error {
 	)
 	channelValue := flags.String(
 		"channel",
-		"release",
-		"managed core channel: release or alpha",
+		"",
+		"managed core channel: release or alpha (preserve current when omitted)",
 	)
 	autoUpdateValue := flags.String(
 		"auto-update",
-		"off",
-		"managed core automatic update: on or off",
+		"",
+		"managed core automatic update: on or off (preserve current when omitted)",
 	)
 	checkIntervalValue := flags.String(
 		"check-interval",
-		"24h",
-		"managed core check interval: 6h, 12h, 24h, or 168h",
+		"",
+		"managed core check interval: 6h, 12h, 24h, or 168h (preserve current when omitted)",
 	)
 	if err := flags.Parse(args[1:]); err != nil {
 		return err
@@ -152,31 +151,12 @@ func runCore(args []string) error {
 			Manifest any  `json:"manifest"`
 		}{Changed: changed, Manifest: manifest}
 		if err == nil {
-			channel, channelErr := coremanagement.ParseChannel(*channelValue)
-			if channelErr != nil {
-				return channelErr
-			}
-			autoUpdate := false
-			switch *autoUpdateValue {
-			case "on":
-				autoUpdate = true
-			case "off":
-			default:
-				return errors.New("--auto-update must be on or off")
-			}
-			interval, intervalErr := time.ParseDuration(*checkIntervalValue)
-			if intervalErr != nil ||
-				coremanagement.ValidateCheckInterval(interval) != nil {
-				return errors.New(
-					"--check-interval must be 6h, 12h, 24h, or 168h",
-				)
-			}
-			err = app.ConfigureCore(
+			err = app.ConfigureCoreOptions(
 				ctx,
 				cfg,
-				channel,
-				autoUpdate,
-				interval,
+				*channelValue,
+				*autoUpdateValue,
+				*checkIntervalValue,
 			)
 		}
 	default:

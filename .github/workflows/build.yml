@@ -193,10 +193,20 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        image:
-          - debian:12
-          - ubuntu:24.04
-    runs-on: ubuntu-24.04
+        include:
+          - image: debian:12
+            arch: amd64
+            runner: ubuntu-24.04
+          - image: debian:12
+            arch: arm64
+            runner: ubuntu-24.04-arm
+          - image: ubuntu:24.04
+            arch: amd64
+            runner: ubuntu-24.04
+          - image: ubuntu:24.04
+            arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 15
 
     steps:
@@ -212,7 +222,7 @@ jobs:
             -v "$PWD/artifacts:/artifacts:ro" \
             "${{ matrix.image }}" sh -euxc '
               package="$(find /artifacts -maxdepth 1 \
-                -name "*linux_amd64.deb" -print -quit)"
+                -name "*linux_${{ matrix.arch }}.deb" -print -quit)"
               test -n "$package"
               apt-get update
               apt-get install -y "$package"
@@ -222,13 +232,28 @@ jobs:
               /usr/bin/m-ui version
               runuser -u m-ui -- /usr/bin/m-ui core status \
                 --json --config /etc/m-ui/config.toml
+              /var/lib/m-ui/core/current/mihomo -d /var/lib/mihomo \
+                -f /etc/mihomo/config.yaml >/tmp/mihomo-package-test.log 2>&1 &
+              mihomo_pid=$!
+              trap 'kill "$mihomo_pid" 2>/dev/null || true' EXIT
+              sleep 2
+              runuser -u m-ui -- /usr/bin/m-ui doctor \
+                --config /etc/m-ui/config.toml
+              runuser -u m-ui -- /usr/bin/m-ui core bootstrap \
+                --config /etc/m-ui/config.toml \
+                --binary /usr/lib/m-ui/bootstrap/mihomo \
+                --manifest /usr/share/m-ui/bootstrap/manifest.json \
+                --channel alpha --auto-update on --check-interval 6h
+              test "$(runuser -u m-ui -- /usr/bin/m-ui core status \
+                --json --config /etc/m-ui/config.toml | grep -c '\"channel\": \"alpha\"')" -eq 1
               printf "%s\n" preserve > /var/lib/m-ui/package-test-marker
-              /usr/lib/m-ui/manage.sh uninstall
-              test ! -e /usr/bin/m-ui
-              test ! -e /etc/systemd/system/m-ui.service
-              test ! -e /etc/systemd/system/mihomo.service
+              apt-get install --reinstall -y "$package"
+              test -x /usr/bin/m-ui
+              test "$(runuser -u m-ui -- /usr/bin/m-ui core status \
+                --json --config /etc/m-ui/config.toml | grep -c '\"channel\": \"alpha\"')" -eq 1
               test -f /var/lib/m-ui/package-test-marker
-              apt-get install -y "$package"
+              apt-get purge -y m-ui
+              test ! -e /usr/bin/m-ui
               test -f /var/lib/m-ui/package-test-marker
             '
 
@@ -236,7 +261,15 @@ jobs:
     needs:
       - prepare
       - packages
-    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 15
 
     steps:
@@ -250,9 +283,9 @@ jobs:
         run: |
           docker run --rm \
             -v "$PWD/artifacts:/artifacts:ro" \
-            alpine:3.20 sh -euxc '
+            "alpine:3.20" sh -euxc '
               package="$(find /artifacts -maxdepth 1 \
-                -name "*linux_amd64.apk" -print -quit)"
+                -name "*linux_${{ matrix.arch }}.apk" -print -quit)"
               test -n "$package"
               apk add --allow-untrusted "$package"
               test -x /usr/bin/m-ui
@@ -261,11 +294,27 @@ jobs:
               /usr/bin/m-ui version
               su-exec m-ui /usr/bin/m-ui core status \
                 --json --config /etc/m-ui/config.toml
+              /var/lib/m-ui/core/current/mihomo -d /var/lib/mihomo \
+                -f /etc/mihomo/config.yaml >/tmp/mihomo-package-test.log 2>&1 &
+              mihomo_pid=$!
+              trap 'kill "$mihomo_pid" 2>/dev/null || true' EXIT
+              sleep 2
+              su-exec m-ui /usr/bin/m-ui doctor \
+                --config /etc/m-ui/config.toml
+              su-exec m-ui /usr/bin/m-ui core bootstrap \
+                --config /etc/m-ui/config.toml \
+                --binary /usr/lib/m-ui/bootstrap/mihomo \
+                --manifest /usr/share/m-ui/bootstrap/manifest.json \
+                --channel alpha --auto-update on --check-interval 6h
+              su-exec m-ui /usr/bin/m-ui core status \
+                --json --config /etc/m-ui/config.toml | grep '"channel": "alpha"'
               printf "%s\n" preserve > /var/lib/m-ui/package-test-marker
-              /usr/lib/m-ui/manage.sh uninstall
-              test ! -e /usr/bin/m-ui
+              apk add --allow-untrusted --force-broken-world "$package"
+              su-exec m-ui /usr/bin/m-ui core status \
+                --json --config /etc/m-ui/config.toml | grep '"channel": "alpha"'
               test -f /var/lib/m-ui/package-test-marker
-              apk add --allow-untrusted "$package"
+              apk del m-ui
+              test ! -e /usr/bin/m-ui
               test -f /var/lib/m-ui/package-test-marker
             '
 

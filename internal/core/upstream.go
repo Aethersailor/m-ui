@@ -215,6 +215,9 @@ func (client *GitHubClient) Resolve(
 	if channel == ChannelAlpha && release.TagName != AlphaTag {
 		return ReleaseIdentity{}, errors.New("mihomo alpha release tag is invalid")
 	}
+	if channel == ChannelAlpha && !release.Prerelease {
+		return ReleaseIdentity{}, errors.New("mihomo alpha release is not marked prerelease")
+	}
 	asset, err := selectAsset(release.Assets, architecture)
 	if err != nil {
 		return ReleaseIdentity{}, err

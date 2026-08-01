@@ -114,6 +114,90 @@ func (managed *ManagedStore) UpdateCoreSettings(
 	return nil
 }
 
+// UpdateCoreSettingsAndState commits the user-facing core settings together
+// with the scheduler's next check in one SQLite transaction.  This prevents a
+// settings write from advertising one interval while the scheduler still has
+// a stale durable deadline (or vice versa).
+func (managed *ManagedStore) UpdateCoreSettingsAndState(
+	ctx context.Context,
+	settings core.Settings,
+	state core.State,
+	now time.Time,
+) error {
+	if err := settings.Validate(); err != nil {
+		return err
+	}
+	currentJSON, err := marshalOptional(state.Current)
+	if err != nil {
+		return errors.New("encode current core manifest")
+	}
+	availableJSON, err := marshalOptional(state.Available)
+	if err != nil {
+		return errors.New("encode available core identity")
+	}
+	tx, err := managed.store.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin core settings transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	result, err := tx.ExecContext(
+		ctx,
+		`UPDATE core_settings
+		    SET channel = ?,
+		        auto_update = ?,
+		        check_interval_seconds = ?,
+		        managed = ?,
+		        external_path = ?,
+		        updated_at = ?
+		  WHERE id = 1`,
+		settings.Channel,
+		boolInt(settings.AutoUpdate),
+		int64(settings.CheckInterval/time.Second),
+		boolInt(settings.Managed),
+		settings.ExternalPath,
+		formatTime(now),
+	)
+	if err != nil {
+		return fmt.Errorf("update core settings: %w", err)
+	}
+	if count, countErr := result.RowsAffected(); countErr != nil || count != 1 {
+		return errors.New("core settings are not initialized")
+	}
+	result, err = tx.ExecContext(
+		ctx,
+		`UPDATE core_state
+		    SET current_manifest_json = ?,
+		        available_identity_json = ?,
+		        last_check_at = ?,
+		        last_check_result = ?,
+		        last_update_at = ?,
+		        last_update_result = ?,
+		        last_error_redacted = ?,
+		        next_check_at = ?,
+		        update_in_progress = ?
+		  WHERE id = 1`,
+		currentJSON,
+		availableJSON,
+		nullableCoreTime(state.LastCheckAt),
+		state.LastCheckResult,
+		nullableCoreTime(state.LastUpdateAt),
+		state.LastUpdateResult,
+		redact.Text(state.LastErrorRedacted),
+		nullableCoreTime(state.NextCheckAt),
+		boolInt(state.UpdateInProgress),
+	)
+	if err != nil {
+		return fmt.Errorf("save core state: %w", err)
+	}
+	if count, countErr := result.RowsAffected(); countErr != nil || count != 1 {
+		return errors.New("core state is not initialized")
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit core settings transaction: %w", err)
+	}
+	return nil
+}
+
 func (managed *ManagedStore) CoreState(ctx context.Context) (core.State, error) {
 	var currentJSON, availableJSON sql.NullString
 	var lastCheckAt, lastUpdateAt, nextCheckAt sql.NullString
