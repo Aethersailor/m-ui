@@ -20,7 +20,7 @@ func ConfigureCore(
 	if err != nil {
 		return err
 	}
-	defer plane.Close()
+	defer func() { _ = plane.Close() }()
 	settings, err := plane.core.Settings(ctx)
 	if err != nil {
 		return err
@@ -39,7 +39,7 @@ func CoreStatus(
 	if err != nil {
 		return coremanagement.Status{}, err
 	}
-	defer plane.Close()
+	defer func() { _ = plane.Close() }()
 	return plane.core.Status(ctx)
 }
 
@@ -51,7 +51,7 @@ func CoreCheck(
 	if err != nil {
 		return coremanagement.ReleaseIdentity{}, err
 	}
-	defer plane.Close()
+	defer func() { _ = plane.Close() }()
 	return plane.core.Check(ctx, "")
 }
 
@@ -63,7 +63,7 @@ func CoreUpdate(
 	if err != nil {
 		return coremanagement.Manifest{}, false, err
 	}
-	defer plane.Close()
+	defer func() { _ = plane.Close() }()
 	return plane.core.Update(ctx, "")
 }
 
@@ -75,7 +75,7 @@ func CoreRollback(
 	if err != nil {
 		return coremanagement.Manifest{}, err
 	}
-	defer plane.Close()
+	defer func() { _ = plane.Close() }()
 	return plane.core.Rollback(ctx, "")
 }
 
@@ -93,7 +93,7 @@ func CoreBootstrap(
 	if err != nil {
 		return coremanagement.Manifest{}, false, err
 	}
-	defer plane.Close()
+	defer func() { _ = plane.Close() }()
 	manifest, changed, err := plane.core.Bootstrap(
 		ctx,
 		binaryPath,

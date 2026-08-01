@@ -630,7 +630,7 @@ func fileSHA256(path string, limit int64) (string, int64, error) {
 	if err != nil {
 		return "", 0, err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	hasher := sha256.New()
 	reader := &io.LimitedReader{R: file, N: limit + 1}
 	size, err := io.Copy(hasher, reader)
@@ -645,7 +645,7 @@ func copySecureFile(source, destination string, mode os.FileMode, limit int64) e
 	if err != nil {
 		return err
 	}
-	defer input.Close()
+	defer func() { _ = input.Close() }()
 	output, err := os.OpenFile(destination, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
 	if err != nil {
 		return err
@@ -691,7 +691,7 @@ func syncFile(path string) error {
 	if err != nil {
 		return err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	return file.Sync()
 }
 

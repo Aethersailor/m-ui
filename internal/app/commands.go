@@ -324,7 +324,7 @@ func Doctor(
 					return err
 				}
 				if !active {
-					return errors.New("Mihomo process is not active")
+					return errors.New("mihomo process is not active")
 				}
 				return nil
 			},

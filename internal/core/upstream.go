@@ -178,7 +178,7 @@ func (client *GitHubClient) Resolve(
 	if err != nil {
 		return ReleaseIdentity{}, errors.New("query Mihomo release metadata")
 	}
-	defer response.Body.Close()
+	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode == http.StatusNotModified {
 		client.mutex.Lock()
 		cached, ok := client.cache[cacheKey]
@@ -285,7 +285,7 @@ func (client *GitHubClient) Download(
 	if err != nil {
 		return "", 0, errors.New("download Mihomo asset")
 	}
-	defer response.Body.Close()
+	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode != http.StatusOK {
 		return "", 0, fmt.Errorf(
 			"Mihomo asset download returned HTTP %d",

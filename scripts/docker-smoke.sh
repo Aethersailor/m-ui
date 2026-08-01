@@ -90,6 +90,8 @@ docker stop --time 15 "$name" >/dev/null
 [[ "$(docker inspect --format '{{.State.ExitCode}}' "$name")" == "0" ]]
 
 history="$(docker history --no-trunc "$image")"
-! grep -Eiq '(GITHUB_TOKEN|M_UI_GITHUB_TOKEN|npm cache|go-build)' <<<"$history"
+if grep -Eiq '(GITHUB_TOKEN|M_UI_GITHUB_TOKEN|npm cache|go-build)' <<<"$history"; then
+  exit 1
+fi
 docker run --rm --entrypoint /bin/sh "$image" -c \
   'test ! -e /usr/local/go && test ! -e /root/.npm && test ! -e /src'

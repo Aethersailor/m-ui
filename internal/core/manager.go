@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"strings"
 	"time"
 
 	"github.com/Aethersailor/m-ui/internal/mihomo"
@@ -65,9 +64,9 @@ func NewManager(options ManagerOptions) (*Manager, error) {
 	case options.Files == nil:
 		return nil, errors.New("managed core file store is required")
 	case options.Process == nil:
-		return nil, errors.New("Mihomo process adapter is required")
+		return nil, errors.New("mihomo process adapter is required")
 	case options.Controller == nil:
-		return nil, errors.New("Mihomo Controller is required")
+		return nil, errors.New("mihomo controller is required")
 	case options.Coordinator == nil:
 		return nil, errors.New("runtime operation coordinator is required")
 	case !filepath.IsAbs(options.ConfigPath):
@@ -897,8 +896,4 @@ func (manager *Manager) Due(ctx context.Context, now time.Time) (bool, error) {
 
 func (manager *Manager) BinaryPath() string {
 	return manager.files.BinaryPath()
-}
-
-func sameVersion(left, right string) bool {
-	return strings.TrimSpace(left) == strings.TrimSpace(right)
 }

@@ -2,7 +2,7 @@
 
 set -eu
 
-script_directory="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+script_directory="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
 case "${1:-}" in
     --purge)
         shift
