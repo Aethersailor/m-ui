@@ -615,13 +615,11 @@ stop_and_remove_program() {
             grep -q '^install ok installed$'
     then
         dpkg --remove m-ui
-        return
     fi
     if [ -z "$root" ] && command -v apk >/dev/null 2>&1 &&
         apk info --installed m-ui >/dev/null 2>&1
     then
         apk del m-ui
-        return
     fi
     if [ -z "$root" ]; then
         if [ -d /run/systemd/system ]; then

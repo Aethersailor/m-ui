@@ -225,6 +225,8 @@ jobs:
               printf "%s\n" preserve > /var/lib/m-ui/package-test-marker
               /usr/lib/m-ui/manage.sh uninstall
               test ! -e /usr/bin/m-ui
+              test ! -e /etc/systemd/system/m-ui.service
+              test ! -e /etc/systemd/system/mihomo.service
               test -f /var/lib/m-ui/package-test-marker
               apt-get install -y "$package"
               test -f /var/lib/m-ui/package-test-marker

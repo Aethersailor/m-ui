@@ -66,6 +66,8 @@ grep -q 'preserve-me' "$test_root/var/lib/m-ui/persistent-marker"
 
 run_manage uninstall
 test ! -e "$test_root/usr/bin/m-ui"
+test ! -e "$test_root/etc/systemd/system/m-ui.service"
+test ! -e "$test_root/etc/systemd/system/mihomo.service"
 test -f "$test_root/var/lib/m-ui/persistent-marker"
 
 run_manage reinstall --package tar --archive "$archive_two" \
@@ -135,3 +137,5 @@ fi
 run_manage purge --yes
 test ! -e "$test_root/var/lib/m-ui"
 test ! -e "$test_root/etc/m-ui"
+test ! -e "$test_root/etc/systemd/system/m-ui.service"
+test ! -e "$test_root/etc/systemd/system/mihomo.service"
