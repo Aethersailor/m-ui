@@ -73,3 +73,33 @@ func TestFileStoreRejectsSymlinkedCurrentDuringActivation(t *testing.T) {
 		t.Fatal("symbolic-link current core path was accepted")
 	}
 }
+
+func TestFileStoreAllowsActivationIntoEmptyCurrentDirectory(t *testing.T) {
+	t.Parallel()
+	root := filepath.Join(t.TempDir(), "core")
+	files, err := NewFileStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := files.Prepare(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(files.current, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	source := filepath.Join(filepath.Dir(root), "source-mihomo")
+	if err := os.WriteFile(source, []byte("synthetic-core"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	stage, _, err := files.StageAdopted(source, "synthetic", time.Unix(1, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer files.RemoveStage(stage)
+	if _, err := files.Activate(stage); err != nil {
+		t.Fatalf("Activate() error = %v", err)
+	}
+	if _, err := files.Current(); err != nil {
+		t.Fatalf("Current() error = %v", err)
+	}
+}

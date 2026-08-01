@@ -362,22 +362,31 @@ func (store *FileStore) Activate(stagedDirectory string) (Activation, error) {
 				"managed current core path has an unsafe type",
 			)
 		}
-		if _, err := store.Current(); err != nil {
+		entries, readErr := os.ReadDir(store.current)
+		if readErr != nil {
 			return Activation{}, fmt.Errorf(
-				"validate current managed core before activation: %w",
-				err,
+				"inspect current managed core before activation: %w",
+				readErr,
 			)
 		}
-		backupPath = filepath.Join(
-			store.backups,
-			time.Now().UTC().Format("20060102T150405.000000000Z")+"-"+uuid.NewString(),
-		)
-		if err := os.Rename(store.current, backupPath); err != nil {
-			return Activation{}, fmt.Errorf("move current core to backup: %w", err)
-		}
-		if err := syncDirectory(store.root); err != nil {
-			_ = os.Rename(backupPath, store.current)
-			return Activation{}, err
+		if len(entries) > 0 {
+			if _, err := store.Current(); err != nil {
+				return Activation{}, fmt.Errorf(
+					"validate current managed core before activation: %w",
+					err,
+				)
+			}
+			backupPath = filepath.Join(
+				store.backups,
+				time.Now().UTC().Format("20060102T150405.000000000Z")+"-"+uuid.NewString(),
+			)
+			if err := os.Rename(store.current, backupPath); err != nil {
+				return Activation{}, fmt.Errorf("move current core to backup: %w", err)
+			}
+			if err := syncDirectory(store.root); err != nil {
+				_ = os.Rename(backupPath, store.current)
+				return Activation{}, err
+			}
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return Activation{}, fmt.Errorf("inspect current core directory: %w", err)
