@@ -5,6 +5,7 @@ package core
 import (
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -19,6 +20,35 @@ func TestFileStoreRejectsUnexpectedOwner(t *testing.T) {
 	files.expectedOwner = &unexpected
 	if err := files.Prepare(); err == nil {
 		t.Fatal("managed core root with an unexpected owner was accepted")
+	}
+}
+
+func TestFileStoreKeepsCoreExecutableForServiceGroupUnderRestrictiveUmask(t *testing.T) {
+	previous := syscall.Umask(0o077)
+	defer syscall.Umask(previous)
+	root := filepath.Join(t.TempDir(), "core")
+	files, err := NewFileStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := files.Prepare(); err != nil {
+		t.Fatal(err)
+	}
+	source := filepath.Join(filepath.Dir(root), "source-mihomo")
+	if err := os.WriteFile(source, []byte("synthetic-core"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	stage, _, err := files.StageAdopted(source, "synthetic", time.Unix(1, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer files.RemoveStage(stage)
+	info, err := os.Stat(filepath.Join(stage, "mihomo"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o750 {
+		t.Fatalf("staged core mode = %o, want 750", got)
 	}
 }
 

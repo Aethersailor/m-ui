@@ -677,6 +677,16 @@ func copySecureFile(source, destination string, mode os.FileMode, limit int64) e
 		written <= 0 || written > limit || reader.N <= 0 {
 		return errors.New("copy managed core file")
 	}
+	// The long-running m-ui service uses UMask=0077, but the native Mihomo
+	// service runs as the separate mihomo account. Restore the requested mode
+	// after creation so a verified core remains executable by that account while
+	// retaining the restrictive owner/group boundary.
+	if err := os.Chmod(destination, mode); err != nil {
+		return errors.New("set managed core file permissions")
+	}
+	if err := syncFile(destination); err != nil {
+		return errors.New("sync managed core file permissions")
+	}
 	return nil
 }
 
