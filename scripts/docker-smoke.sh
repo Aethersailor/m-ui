@@ -4,9 +4,6 @@ set -euo pipefail
 
 image="${1:?usage: docker-smoke.sh IMAGE}"
 name="m-ui-smoke-${RANDOM}-${RANDOM}"
-password_file="$(mktemp)"
-printf '%s\n' 'Synthetic-Smoke-Password-2026!' >"$password_file"
-chmod 0644 "$password_file"
 volumes=()
 
 cleanup() {
@@ -14,7 +11,6 @@ cleanup() {
   for volume in "${volumes[@]}"; do
     docker volume rm "$volume" >/dev/null 2>&1 || true
   done
-  rm -f "$password_file"
 }
 trap cleanup EXIT
 
@@ -34,6 +30,12 @@ for suffix in etc mihomo-etc data mihomo-data; do
   docker volume create "$volume" >/dev/null
   volumes+=("$volume")
 done
+secret_volume="${name}-secret"
+docker volume create "$secret_volume" >/dev/null
+volumes+=("$secret_volume")
+docker run --rm --user 10001:10001 --entrypoint /bin/sh \
+  -v "$secret_volume:/run/secrets" "$image" \
+  -c 'umask 077; printf "%s\\n" "Synthetic-Smoke-Password-2026!" > /run/secrets/admin_password; test "$(stat -c "%a" /run/secrets/admin_password)" = 600'
 
 docker run -d --name "$name" \
   --cap-drop ALL --cap-add NET_BIND_SERVICE \
@@ -43,7 +45,7 @@ docker run -d --name "$name" \
   -e M_UI_MIHOMO_CHANNEL=release \
   -e M_UI_MIHOMO_AUTO_UPDATE=off \
   -e M_UI_MIHOMO_CHECK_INTERVAL=24h \
-  -v "$password_file:/run/secrets/admin_password:ro" \
+  -v "$secret_volume:/run/secrets:ro" \
   -v "${volumes[0]}:/etc/m-ui" \
   -v "${volumes[1]}:/etc/mihomo" \
   -v "${volumes[2]}:/var/lib/m-ui" \
