@@ -289,7 +289,8 @@ jobs:
               archive="$(find /artifacts -maxdepth 1 \
                 -name "*linux_amd64.tar.gz" -print -quit)"
               test -n "$archive"
-              sha="$(grep " $(basename "$archive")" /artifacts/SHA256SUMS \
+              sha="$(grep -E "^[[:xdigit:]]{64}  $(basename "$archive")$" \
+                /artifacts/SHA256SUMS \
                 | cut -d " " -f1)"
               test "${#sha}" -eq 64
               root=/testroot
