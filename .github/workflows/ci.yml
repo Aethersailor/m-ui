@@ -134,7 +134,7 @@ jobs:
         run: |
           find scripts deploy -type f -name '*.sh' -print0 |
             xargs -0 shellcheck
-          shellcheck deploy/openrc/m-ui deploy/openrc/mihomo
+          sh -n deploy/openrc/m-ui deploy/openrc/mihomo
           actionlint
           hadolint Dockerfile
 

@@ -387,6 +387,16 @@ func (store *FileStore) Activate(stagedDirectory string) (Activation, error) {
 				_ = os.Rename(backupPath, store.current)
 				return Activation{}, err
 			}
+		} else {
+			// Linux cannot rename a directory over an existing empty directory.
+			// The empty current directory is only a fresh-volume placeholder,
+			// so remove that verified directory before installing the staged tree.
+			if err := os.Remove(store.current); err != nil {
+				return Activation{}, fmt.Errorf("remove empty current core directory: %w", err)
+			}
+			if err := syncDirectory(store.root); err != nil {
+				return Activation{}, err
+			}
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return Activation{}, fmt.Errorf("inspect current core directory: %w", err)

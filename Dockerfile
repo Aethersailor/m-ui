@@ -42,7 +42,7 @@ RUN apk add --no-cache ca-certificates libcap tini tzdata \
     && adduser -S -D -H -u 10001 -G m-ui -h /var/lib/m-ui m-ui \
     && install -d -o m-ui -g m-ui -m 0750 /etc/m-ui /etc/mihomo \
     && install -d -o m-ui -g m-ui -m 0700 \
-       /var/lib/m-ui /var/lib/m-ui/core /var/lib/m-ui/core/current \
+       /var/lib/m-ui /var/lib/m-ui/core \
        /var/lib/m-ui/core/staging /var/lib/m-ui/core/backups \
     && install -d -o m-ui -g m-ui -m 0750 /var/lib/mihomo \
     && install -d -o root -g root -m 0755 /usr/lib/m-ui/bootstrap

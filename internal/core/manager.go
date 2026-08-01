@@ -70,7 +70,7 @@ func NewManager(options ManagerOptions) (*Manager, error) {
 	case options.Coordinator == nil:
 		return nil, errors.New("runtime operation coordinator is required")
 	case !filepath.IsAbs(options.ConfigPath):
-		return nil, errors.New("Mihomo configuration path must be absolute")
+		return nil, errors.New("mihomo configuration path must be absolute")
 	}
 	if options.Architecture == "" {
 		options.Architecture = runtime.GOARCH
@@ -745,7 +745,7 @@ func (manager *Manager) restartAndVerify(
 		select {
 		case <-healthContext.Done():
 			timer.Stop()
-			return errors.New("Mihomo did not become healthy after core activation")
+			return errors.New("mihomo did not become healthy after core activation")
 		case <-timer.C:
 		}
 	}
@@ -757,7 +757,7 @@ func (manager *Manager) defaultHealthCheck(ctx context.Context) error {
 		return err
 	}
 	if !active {
-		return errors.New("Mihomo process is not active")
+		return errors.New("mihomo process is not active")
 	}
 	_, err = manager.controller.Version(ctx)
 	return err

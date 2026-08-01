@@ -10,7 +10,7 @@ current_core="/var/lib/m-ui/core/current/mihomo"
 
 install -d -m 0750 /etc/m-ui /etc/mihomo
 install -d -m 0700 /var/lib/m-ui /var/lib/m-ui/core \
-    /var/lib/m-ui/core/current /var/lib/m-ui/core/staging \
+    /var/lib/m-ui/core/staging \
     /var/lib/m-ui/core/backups
 install -d -m 0750 /var/lib/mihomo
 
