@@ -15,7 +15,7 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-COPY --from=web-builder /src/web/dist ./internal/httpapi/ui/dist
+COPY --from=web-builder /src/internal/httpapi/ui/dist ./internal/httpapi/ui/dist
 RUN CGO_ENABLED=0 GOOS=linux go build \
     -tags webembed -trimpath \
     -ldflags="-s -w \
@@ -66,4 +66,6 @@ VOLUME ["/etc/m-ui", "/etc/mihomo", "/var/lib/m-ui", "/var/lib/mihomo"]
 ENTRYPOINT ["/sbin/tini", "--", "/usr/lib/m-ui/entrypoint.sh"]
 HEALTHCHECK --interval=15s --timeout=5s --start-period=20s --retries=4 \
   CMD wget -q -T 3 -O /dev/null http://127.0.0.1:2095/api/v1/health \
-    && /usr/bin/m-ui core status --json --config /etc/m-ui/config.toml >/dev/null
+    && status="$(/usr/bin/m-ui core status --json --config /etc/m-ui/config.toml)" \
+    && printf '%s' "$status" | grep -q '"process_active":true' \
+    && printf '%s' "$status" | grep -q '"controller_reachable":true'

@@ -226,6 +226,8 @@ type Status struct {
 	State                 State    `json:"state"`
 	ActualVersion         string   `json:"actual_version"`
 	ControllerVersion     string   `json:"controller_version,omitempty"`
+	ProcessActive         bool     `json:"process_active"`
+	ControllerReachable   bool     `json:"controller_reachable"`
 	CurrentBinarySHA256   string   `json:"current_binary_sha256,omitempty"`
 	Managed               bool     `json:"managed"`
 	UpdateAvailable       bool     `json:"update_available"`

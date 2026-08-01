@@ -435,6 +435,20 @@ async function submitPassword() {
                       : t('common.disabled')
                   }}
                 </NDescriptionsItem>
+                <NDescriptionsItem :label="t('system.coreProcessActive')">
+                  {{
+                    coreStatus.process_active
+                      ? t('common.enabled')
+                      : t('common.disabled')
+                  }}
+                </NDescriptionsItem>
+                <NDescriptionsItem :label="t('system.coreControllerReachable')">
+                  {{
+                    coreStatus.controller_reachable
+                      ? t('common.enabled')
+                      : t('common.disabled')
+                  }}
+                </NDescriptionsItem>
                 <NDescriptionsItem :label="t('system.coreCurrentTag')">
                   {{
                     coreStatus.state.current?.identity.tag_name ||

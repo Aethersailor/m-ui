@@ -158,6 +158,8 @@ export interface CoreStatus {
   }
   actual_version: string
   controller_version?: string
+  process_active: boolean
+  controller_reachable: boolean
   current_binary_sha256?: string
   managed: boolean
   update_available: boolean

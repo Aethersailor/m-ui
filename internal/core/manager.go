@@ -151,13 +151,7 @@ func (manager *Manager) Status(ctx context.Context) (Status, error) {
 	if err != nil {
 		return Status{}, err
 	}
-	active, err := manager.process.IsActive(ctx)
-	if err != nil {
-		return Status{}, errors.New("check Mihomo process state")
-	}
-	if !active {
-		return Status{}, errors.New("Mihomo process is not active")
-	}
+	active, processErr := manager.process.IsActive(ctx)
 	state, err := manager.repository.CoreState(ctx)
 	if err != nil {
 		return Status{}, err
@@ -175,17 +169,22 @@ func (manager *Manager) Status(ctx context.Context) (Status, error) {
 		return Status{}, err
 	}
 	controllerVersion := ""
-	version, versionErr := manager.controller.Version(ctx)
-	if versionErr != nil {
-		return Status{}, errors.New("read running Mihomo controller version")
+	controllerReachable := false
+	if processErr == nil && active {
+		version, versionErr := manager.controller.Version(ctx)
+		if versionErr == nil {
+			controllerVersion = version.Version
+			controllerReachable = true
+		}
 	}
-	controllerVersion = version.Version
 	status := Status{
-		Settings:          settings,
-		State:             state,
-		ActualVersion:     actual,
-		ControllerVersion: controllerVersion,
-		Managed:           settings.Managed,
+		Settings:            settings,
+		State:               state,
+		ActualVersion:       actual,
+		ControllerVersion:   controllerVersion,
+		ProcessActive:       processErr == nil && active,
+		ControllerReachable: controllerReachable,
+		Managed:             settings.Managed,
 	}
 	if settings.Managed {
 		manifest, manifestErr := manager.files.Current()
@@ -193,8 +192,8 @@ func (manager *Manager) Status(ctx context.Context) (Status, error) {
 			return Status{}, manifestErr
 		}
 		status.CurrentBinarySHA256 = manifest.BinarySHA256
-		status.RuntimeVersionMatches =
-			actual == manifest.BinaryReportedVersion
+		status.RuntimeVersionMatches = status.ProcessActive &&
+			status.ControllerReachable && actual == manifest.BinaryReportedVersion
 		if state.Available != nil {
 			status.UpdateAvailable =
 				state.Available.AssetDigestSHA256 != manifest.CompressedSHA256
