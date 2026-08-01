@@ -137,6 +137,10 @@ func (store *FileStore) CreateDownloadStage() (string, string, error) {
 	if err := os.Mkdir(directory, 0o750); err != nil {
 		return "", "", fmt.Errorf("create core update staging directory: %w", err)
 	}
+	if err := os.Chmod(directory, 0o750); err != nil {
+		_ = os.RemoveAll(directory)
+		return "", "", fmt.Errorf("set core update staging directory permissions: %w", err)
+	}
 	if err := store.validateOwner(directory); err != nil {
 		_ = os.RemoveAll(directory)
 		return "", "", err
@@ -353,6 +357,9 @@ func (store *FileStore) Activate(stagedDirectory string) (Activation, error) {
 	}
 	if _, err := store.validateStagedDirectory(stagedDirectory); err != nil {
 		return Activation{}, err
+	}
+	if err := os.Chmod(stagedDirectory, 0o750); err != nil {
+		return Activation{}, fmt.Errorf("set active core directory permissions: %w", err)
 	}
 	backupPath := ""
 	currentInfo, err := os.Lstat(store.current)
@@ -692,6 +699,9 @@ func copySecureFile(source, destination string, mode os.FileMode, limit int64) e
 
 func copyDirectory(source, destination string) error {
 	if err := os.Mkdir(destination, 0o750); err != nil {
+		return err
+	}
+	if err := os.Chmod(destination, 0o750); err != nil {
 		return err
 	}
 	if err := copySecureFile(

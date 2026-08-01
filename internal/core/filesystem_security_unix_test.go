@@ -50,6 +50,16 @@ func TestFileStoreKeepsCoreExecutableForServiceGroupUnderRestrictiveUmask(t *tes
 	if got := info.Mode().Perm(); got != 0o750 {
 		t.Fatalf("staged core mode = %o, want 750", got)
 	}
+	if _, err := files.Activate(stage); err != nil {
+		t.Fatal(err)
+	}
+	currentInfo, err := os.Stat(files.current)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := currentInfo.Mode().Perm(); got != 0o750 {
+		t.Fatalf("active core directory mode = %o, want 750", got)
+	}
 }
 
 func TestFileStoreRejectsSymlinkedManagedDirectory(t *testing.T) {
