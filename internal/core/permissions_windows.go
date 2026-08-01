@@ -20,6 +20,10 @@ func executableCoreMode(os.FileMode) bool {
 	return true
 }
 
+func setCoreGroupFromParent(string) error {
+	return nil
+}
+
 func syncCoreDirectoryPlatform(string) error {
 	return nil
 }

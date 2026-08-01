@@ -8,7 +8,7 @@ Wants=network-online.target mihomo.service
 Type=simple
 User=m-ui
 Group=m-ui
-SupplementaryGroups=systemd-journal
+SupplementaryGroups=systemd-journal mihomo
 WorkingDirectory=/var/lib/m-ui
 Environment=HOME=/var/lib/m-ui
 ExecStart=/usr/bin/m-ui server --config /etc/m-ui/config.toml

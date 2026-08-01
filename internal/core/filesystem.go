@@ -141,6 +141,10 @@ func (store *FileStore) CreateDownloadStage() (string, string, error) {
 		_ = os.RemoveAll(directory)
 		return "", "", fmt.Errorf("set core update staging directory permissions: %w", err)
 	}
+	if err := setCoreGroupFromParent(directory); err != nil {
+		_ = os.RemoveAll(directory)
+		return "", "", fmt.Errorf("set core update staging directory group: %w", err)
+	}
 	if err := store.validateOwner(directory); err != nil {
 		_ = os.RemoveAll(directory)
 		return "", "", err
@@ -360,6 +364,9 @@ func (store *FileStore) Activate(stagedDirectory string) (Activation, error) {
 	}
 	if err := os.Chmod(stagedDirectory, 0o750); err != nil {
 		return Activation{}, fmt.Errorf("set active core directory permissions: %w", err)
+	}
+	if err := setCoreGroupFromParent(stagedDirectory); err != nil {
+		return Activation{}, fmt.Errorf("set active core directory group: %w", err)
 	}
 	backupPath := ""
 	currentInfo, err := os.Lstat(store.current)
@@ -691,6 +698,9 @@ func copySecureFile(source, destination string, mode os.FileMode, limit int64) e
 	if err := os.Chmod(destination, mode); err != nil {
 		return errors.New("set managed core file permissions")
 	}
+	if err := setCoreGroupFromParent(destination); err != nil {
+		return errors.New("set managed core file group")
+	}
 	if err := syncFile(destination); err != nil {
 		return errors.New("sync managed core file permissions")
 	}
@@ -702,6 +712,9 @@ func copyDirectory(source, destination string) error {
 		return err
 	}
 	if err := os.Chmod(destination, 0o750); err != nil {
+		return err
+	}
+	if err := setCoreGroupFromParent(destination); err != nil {
 		return err
 	}
 	if err := copySecureFile(
