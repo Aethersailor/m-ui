@@ -234,11 +234,11 @@ jobs:
                 --json --config /etc/m-ui/config.toml
               sed -i "s/^process_mode = \"auto\"/process_mode = \"managed\"/" \
                 /etc/m-ui/config.toml
-              /var/lib/m-ui/core/current/mihomo -d /var/lib/mihomo \
-                -f /etc/mihomo/config.yaml >/tmp/mihomo-package-test.log 2>&1 &
-              mihomo_pid=$!
-              trap "kill \"$mihomo_pid\" 2>/dev/null || true" EXIT
-              sleep 2
+              runuser -u m-ui -- /usr/bin/m-ui server \
+                --config /etc/m-ui/config.toml >/tmp/m-ui-server.log 2>&1 &
+              server_pid=$!
+              trap "kill \"$server_pid\" 2>/dev/null || true" EXIT
+              sleep 3
               runuser -u m-ui -- /usr/bin/m-ui doctor \
                 --config /etc/m-ui/config.toml
               runuser -u m-ui -- /usr/bin/m-ui core bootstrap \
@@ -298,11 +298,11 @@ jobs:
                 --json --config /etc/m-ui/config.toml
               sed -i "s/^process_mode = \"auto\"/process_mode = \"managed\"/" \
                 /etc/m-ui/config.toml
-              /var/lib/m-ui/core/current/mihomo -d /var/lib/mihomo \
-                -f /etc/mihomo/config.yaml >/tmp/mihomo-package-test.log 2>&1 &
-              mihomo_pid=$!
-              trap "kill \"$mihomo_pid\" 2>/dev/null || true" EXIT
-              sleep 2
+              su-exec m-ui /usr/bin/m-ui server \
+                --config /etc/m-ui/config.toml >/tmp/m-ui-server.log 2>&1 &
+              server_pid=$!
+              trap "kill \"$server_pid\" 2>/dev/null || true" EXIT
+              sleep 3
               su-exec m-ui /usr/bin/m-ui doctor \
                 --config /etc/m-ui/config.toml
               su-exec m-ui /usr/bin/m-ui core bootstrap \
