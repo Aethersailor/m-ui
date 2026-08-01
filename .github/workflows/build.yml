@@ -31,13 +31,11 @@ jobs:
           M_UI_GITHUB_TOKEN: ${{ github.token }}
         run: |
           bash scripts/resolve-mihomo.sh --output packaging/bootstrap
-          printf 'sha12=%s\n' "${GITHUB_SHA:0:12}" >>"$GITHUB_OUTPUT"
-          printf 'tag=%s\n' \
-            "$(jq -r '.tag_name' packaging/bootstrap/identity.json)" \
-            >>"$GITHUB_OUTPUT"
-          printf 'release_id=%s\n' \
-            "$(jq -r '.release_id' packaging/bootstrap/identity.json)" \
-            >>"$GITHUB_OUTPUT"
+          {
+            printf 'sha12=%s\n' "${GITHUB_SHA:0:12}"
+            printf 'tag=%s\n' "$(jq -r '.tag_name' packaging/bootstrap/identity.json)"
+            printf 'release_id=%s\n' "$(jq -r '.release_id' packaging/bootstrap/identity.json)"
+          } >>"$GITHUB_OUTPUT"
 
       - name: Upload locked bootstrap identity
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -318,7 +316,7 @@ jobs:
           docker build \
             --platform linux/${{ matrix.arch }} \
             --build-arg VERSION=0.1.0-snapshot-${{ needs.prepare.outputs.sha12 }} \
-            --build-arg REVISION=${GITHUB_SHA} \
+            --build-arg REVISION="${GITHUB_SHA}" \
             --build-arg CREATED="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             --tag "$IMAGE" .
           bash scripts/docker-smoke.sh "$IMAGE"

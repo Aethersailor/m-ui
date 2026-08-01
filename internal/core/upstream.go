@@ -203,17 +203,17 @@ func (client *GitHubClient) Resolve(
 		return ReleaseIdentity{}, errors.New("read Mihomo release metadata")
 	}
 	if len(body) > maxAPIResponse {
-		return ReleaseIdentity{}, errors.New("Mihomo release metadata is too large")
+		return ReleaseIdentity{}, errors.New("mihomo release metadata is too large")
 	}
 	var release githubRelease
 	if err := json.Unmarshal(body, &release); err != nil {
 		return ReleaseIdentity{}, errors.New("decode Mihomo release metadata")
 	}
 	if release.Draft || (channel == ChannelRelease && release.Prerelease) {
-		return ReleaseIdentity{}, errors.New("Mihomo release metadata does not match the requested channel")
+		return ReleaseIdentity{}, errors.New("mihomo release metadata does not match the requested channel")
 	}
 	if channel == ChannelAlpha && release.TagName != AlphaTag {
-		return ReleaseIdentity{}, errors.New("Mihomo alpha release tag is invalid")
+		return ReleaseIdentity{}, errors.New("mihomo alpha release tag is invalid")
 	}
 	asset, err := selectAsset(release.Assets, architecture)
 	if err != nil {

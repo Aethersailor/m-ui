@@ -121,11 +121,13 @@ jobs:
             echo "GitHub Release already exists" >&2
             exit 1
           fi
-          printf 'version=%s\n' "$VERSION" >>"$GITHUB_OUTPUT"
-          printf 'target_sha=%s\n' "$TARGET_SHA" >>"$GITHUB_OUTPUT"
-          printf 'target_ref=%s\n' "$TARGET_REF" >>"$GITHUB_OUTPUT"
-          printf 'prerelease=%s\n' "$PRERELEASE" >>"$GITHUB_OUTPUT"
-          printf 'sha12=%s\n' "${TARGET_SHA:0:12}" >>"$GITHUB_OUTPUT"
+          {
+            printf 'version=%s\n' "$VERSION"
+            printf 'target_sha=%s\n' "$TARGET_SHA"
+            printf 'target_ref=%s\n' "$TARGET_REF"
+            printf 'prerelease=%s\n' "$PRERELEASE"
+            printf 'sha12=%s\n' "${TARGET_SHA:0:12}"
+          } >>"$GITHUB_OUTPUT"
 
       - name: Lock official Mihomo release identity
         env:
@@ -520,7 +522,7 @@ jobs:
           set -euo pipefail
           repository="ghcr.io/${GITHUB_REPOSITORY,,}"
           version_without_v="${VERSION#v}"
-          IFS=. read -r major minor patch <<< "$version_without_v"
+          IFS=. read -r major minor _ <<< "$version_without_v"
           base_tags=("$VERSION" "$version_without_v" "${major}.${minor}" "$major")
           for arch in amd64 arm64; do
             source="m-ui:${SHA12}-${arch}"

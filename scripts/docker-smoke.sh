@@ -6,6 +6,7 @@ image="${1:?usage: docker-smoke.sh IMAGE}"
 name="m-ui-smoke-${RANDOM}-${RANDOM}"
 password_file="$(mktemp)"
 printf '%s\n' 'Synthetic-Smoke-Password-2026!' >"$password_file"
+chmod 0644 "$password_file"
 volumes=()
 
 cleanup() {
