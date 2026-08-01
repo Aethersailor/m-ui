@@ -67,5 +67,5 @@ ENTRYPOINT ["/sbin/tini", "--", "/usr/lib/m-ui/entrypoint.sh"]
 HEALTHCHECK --interval=15s --timeout=5s --start-period=20s --retries=4 \
   CMD wget -q -T 3 -O /dev/null http://127.0.0.1:2095/api/v1/health \
     && status="$(/usr/bin/m-ui core status --json --config /etc/m-ui/config.toml)" \
-    && printf '%s' "$status" | grep -q '"process_active":true' \
-    && printf '%s' "$status" | grep -q '"controller_reachable":true'
+    && printf '%s' "$status" | grep -Eq '"process_active"[[:space:]]*:[[:space:]]*true' \
+    && printf '%s' "$status" | grep -Eq '"controller_reachable"[[:space:]]*:[[:space:]]*true'
