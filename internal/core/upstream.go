@@ -332,7 +332,7 @@ func selectAsset(assets []githubAsset, architecture string) (githubAsset, error)
 	}
 	if len(matches) != 1 {
 		return githubAsset{}, fmt.Errorf(
-			"Mihomo release contains %d matching linux/%s gzip assets; expected exactly one",
+			"mihomo release contains %d matching linux/%s gzip assets; expected exactly one",
 			len(matches),
 			architecture,
 		)
@@ -352,7 +352,7 @@ func trustedGitHubHost(host string) bool {
 func validateDownloadURL(value string, allowTestHTTP bool, apiBase string) error {
 	parsed, err := url.Parse(value)
 	if err != nil || parsed.Host == "" || parsed.User != nil {
-		return errors.New("Mihomo asset download URL is invalid")
+		return errors.New("mihomo asset download URL is invalid")
 	}
 	if allowTestHTTP {
 		base, _ := url.Parse(apiBase)
@@ -361,7 +361,7 @@ func validateDownloadURL(value string, allowTestHTTP bool, apiBase string) error
 		}
 	}
 	if parsed.Scheme != "https" || !trustedGitHubHost(parsed.Hostname()) {
-		return errors.New("Mihomo asset download URL is not a trusted GitHub HTTPS URL")
+		return errors.New("mihomo asset download URL is not a trusted GitHub HTTPS URL")
 	}
 	return nil
 }

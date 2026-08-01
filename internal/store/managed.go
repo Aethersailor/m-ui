@@ -288,7 +288,7 @@ func (managed *ManagedStore) SetMihomoBinaryPath(
 	now time.Time,
 ) error {
 	if strings.TrimSpace(binaryPath) == "" {
-		return errors.New("Mihomo binary path is required")
+		return errors.New("mihomo binary path is required")
 	}
 	_, err := managed.store.db.ExecContext(
 		ctx,
