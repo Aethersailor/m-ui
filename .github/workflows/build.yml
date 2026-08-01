@@ -232,6 +232,8 @@ jobs:
               /usr/bin/m-ui version
               runuser -u m-ui -- /usr/bin/m-ui core status \
                 --json --config /etc/m-ui/config.toml
+              sed -i "s/^process_mode = \"auto\"/process_mode = \"managed\"/" \
+                /etc/m-ui/config.toml
               /var/lib/m-ui/core/current/mihomo -d /var/lib/mihomo \
                 -f /etc/mihomo/config.yaml >/tmp/mihomo-package-test.log 2>&1 &
               mihomo_pid=$!
@@ -294,6 +296,8 @@ jobs:
               /usr/bin/m-ui version
               su-exec m-ui /usr/bin/m-ui core status \
                 --json --config /etc/m-ui/config.toml
+              sed -i "s/^process_mode = \"auto\"/process_mode = \"managed\"/" \
+                /etc/m-ui/config.toml
               /var/lib/m-ui/core/current/mihomo -d /var/lib/mihomo \
                 -f /etc/mihomo/config.yaml >/tmp/mihomo-package-test.log 2>&1 &
               mihomo_pid=$!
