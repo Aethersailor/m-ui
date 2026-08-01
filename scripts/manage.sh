@@ -168,15 +168,21 @@ detect_platform() {
     if [ -n "$root" ]; then
         distro_id="${M_UI_TEST_DISTRO:-debian}"
         distro_version="${M_UI_TEST_VERSION:-12}"
+        distro_codename="${M_UI_TEST_CODENAME:-}"
     else
         [ -r /etc/os-release ] || fail "/etc/os-release is required"
         # shellcheck disable=SC1091
         . /etc/os-release
         distro_id="${ID:-}"
         distro_version="${VERSION_ID:-}"
+        distro_codename="${VERSION_CODENAME:-}"
     fi
-    case "$distro_id:$distro_version" in
+    case "$distro_id:$distro_version:$distro_codename" in
         debian:1[2-9]*|debian:[2-9][0-9]*|ubuntu:2[4-9].*|ubuntu:[3-9][0-9].*)
+            native_package="deb"
+            init_system="systemd"
+            ;;
+        debian::sid|debian::forky)
             native_package="deb"
             init_system="systemd"
             ;;
@@ -184,7 +190,7 @@ detect_platform() {
             native_package="apk"
             init_system="openrc"
             ;;
-        *) fail "supported systems are Debian 12+, Ubuntu 24.04+, and Alpine 3.20+" ;;
+        *) fail "supported systems are Debian 12+/sid, Ubuntu 24.04+, and Alpine 3.20+" ;;
     esac
     if [ "$package_mode" = "auto" ]; then
         package_mode="$native_package"

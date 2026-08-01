@@ -24,7 +24,7 @@ m-ui 不是通用 YAML 编辑器、订阅聚合器、多节点控制器或用户
 
 正式产物仅面向 Linux `amd64` 和 `arm64`：
 
-- Debian 12+、Ubuntu 24.04+：systemd、`.deb` 或 `.tar.gz`；
+- Debian 12+/sid、Ubuntu 24.04+：systemd、`.deb` 或 `.tar.gz`；
 - Alpine 3.20+：OpenRC、`.apk` 或 `.tar.gz`；
 - OCI/Docker：非 root、双架构镜像，容器内直接监督 Mihomo。
 

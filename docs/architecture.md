@@ -155,8 +155,8 @@ observability, never user billing data.
 
 ## Deployment invariants
 
-- Supported native targets are Debian 12+/Ubuntu 24.04+ with systemd and
-  Alpine 3.20+ with OpenRC, on Linux amd64 and arm64.
+- Supported native targets are Debian 12+/sid and Ubuntu 24.04+ with systemd
+  and Alpine 3.20+ with OpenRC, on Linux amd64 and arm64.
 - OCI images are non-root Linux amd64/arm64 images with a direct Mihomo
   supervisor and persistent configuration/data volumes.
 - The panel defaults to `127.0.0.1:2095`; remote access uses an SSH tunnel or a
