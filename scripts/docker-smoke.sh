@@ -62,6 +62,8 @@ done
 if [[ "$(docker inspect --format '{{.State.Health.Status}}' "$name")" != "healthy" ]]; then
   docker inspect "$name"
   docker logs "$name"
+  docker exec "$name" sh -c 'pidof mihomo || true; /var/lib/m-ui/core/current/mihomo -t -d /var/lib/mihomo -f /etc/mihomo/config.yaml || true'
+  docker exec "$name" m-ui doctor --config /etc/m-ui/config.toml || true
   exit 1
 fi
 docker exec "$name" m-ui core status --json \
