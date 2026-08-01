@@ -41,15 +41,15 @@ archives:
       - src: deploy/**/*
         dst: deploy
       - src: scripts/manage.sh
-        dst: scripts
+        dst: scripts/manage.sh
       - src: scripts/install.sh
-        dst: scripts
+        dst: scripts/install.sh
       - src: scripts/uninstall.sh
-        dst: scripts
+        dst: scripts/uninstall.sh
       - src: packaging/bootstrap/linux_{{ .Arch }}/mihomo
-        dst: bootstrap
+        dst: bootstrap/mihomo
       - src: packaging/bootstrap/linux_{{ .Arch }}/manifest.json
-        dst: bootstrap
+        dst: bootstrap/manifest.json
 
 nfpms:
   - id: linux-packages

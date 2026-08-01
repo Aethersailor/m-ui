@@ -267,6 +267,52 @@ jobs:
               test -f /var/lib/m-ui/package-test-marker
             '
 
+  tar-package-test:
+    needs:
+      - prepare
+      - packages
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    steps:
+      - name: Download snapshot packages
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: m-ui-snapshot-${{ needs.prepare.outputs.sha12 }}-linux-amd64-arm64
+          path: artifacts
+
+      - name: Test tar install, remove, persistence, and purge
+        run: |
+          docker run --rm \
+            -v "$PWD/artifacts:/artifacts:ro" \
+            debian:12 sh -euxc '
+              archive="$(find /artifacts -maxdepth 1 \
+                -name "*linux_amd64.tar.gz" -print -quit)"
+              test -n "$archive"
+              sha="$(grep " $(basename "$archive")" /artifacts/SHA256SUMS \
+                | cut -d " " -f1)"
+              test "${#sha}" -eq 64
+              root=/testroot
+              mkdir -p "$root"
+              M_UI_ROOT="$root" M_UI_TEST_DISTRO=debian \
+                M_UI_TEST_VERSION=12 sh /artifacts/manage.sh install \
+                --package tar --archive "$archive" --sha256 "$sha"
+              test -x "$root/usr/bin/m-ui"
+              test -x "$root/var/lib/m-ui/core/current/mihomo"
+              test -s "$root/var/lib/m-ui/core/current/manifest.json"
+              printf "%s\n" preserve > "$root/var/lib/m-ui/package-test-marker"
+              M_UI_ROOT="$root" sh /artifacts/manage.sh uninstall
+              test ! -e "$root/usr/bin/m-ui"
+              test -f "$root/var/lib/m-ui/package-test-marker"
+              M_UI_ROOT="$root" M_UI_TEST_DISTRO=debian \
+                M_UI_TEST_VERSION=12 sh /artifacts/manage.sh install \
+                --package tar --archive "$archive" --sha256 "$sha"
+              test -f "$root/var/lib/m-ui/package-test-marker"
+              M_UI_ROOT="$root" sh /artifacts/manage.sh purge --yes
+              test ! -e "$root/etc/m-ui"
+              test ! -e "$root/var/lib/m-ui"
+            '
+
   docker:
     needs:
       - prepare
