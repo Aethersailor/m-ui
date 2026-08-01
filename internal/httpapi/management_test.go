@@ -37,8 +37,32 @@ func TestManagementCRUDUsesAuthenticationCSRFAndPublisher(t *testing.T) {
 	if unauthenticated.Code != http.StatusUnauthorized {
 		t.Fatalf("unauthenticated status = %d", unauthenticated.Code)
 	}
+	unauthenticatedCore := performJSONRequest(
+		t,
+		environment.handler,
+		http.MethodGet,
+		"/api/v1/system/core",
+		nil,
+		nil,
+		"",
+	)
+	if unauthenticatedCore.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated core status = %d", unauthenticatedCore.Code)
+	}
 
 	sessionCookie, csrfToken := managementLogin(t, environment.handler)
+	blockedCoreUpdate := performJSONRequest(
+		t,
+		environment.handler,
+		http.MethodPost,
+		"/api/v1/system/core/update",
+		nil,
+		sessionCookie,
+		"",
+	)
+	if blockedCoreUpdate.Code != http.StatusForbidden {
+		t.Fatalf("core update without CSRF status = %d", blockedCoreUpdate.Code)
+	}
 	listenerPayload := listenerRequest{
 		Name:          "edge",
 		ListenAddress: "0.0.0.0",

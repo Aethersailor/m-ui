@@ -1,0 +1,395 @@
+name: Snapshot Build
+
+on:
+  pull_request:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: snapshot-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      sha12: ${{ steps.identity.outputs.sha12 }}
+      tag: ${{ steps.identity.outputs.tag }}
+      release_id: ${{ steps.identity.outputs.release_id }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - name: Lock official Mihomo release identity
+        id: identity
+        env:
+          M_UI_GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          bash scripts/resolve-mihomo.sh --output packaging/bootstrap
+          printf 'sha12=%s\n' "${GITHUB_SHA:0:12}" >>"$GITHUB_OUTPUT"
+          printf 'tag=%s\n' \
+            "$(jq -r '.tag_name' packaging/bootstrap/identity.json)" \
+            >>"$GITHUB_OUTPUT"
+          printf 'release_id=%s\n' \
+            "$(jq -r '.release_id' packaging/bootstrap/identity.json)" \
+            >>"$GITHUB_OUTPUT"
+
+      - name: Upload locked bootstrap identity
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: mihomo-identity-${{ steps.identity.outputs.sha12 }}
+          path: packaging/bootstrap/identity.json
+          if-no-files-found: error
+          retention-days: 14
+
+  bootstrap:
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - name: Download locked bootstrap identity
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: mihomo-identity-${{ needs.prepare.outputs.sha12 }}
+          path: packaging/bootstrap
+
+      - name: Download, verify, and run native Mihomo bootstrap
+        run: |
+          bash scripts/resolve-mihomo.sh \
+            --output packaging/bootstrap \
+            --architecture "${{ matrix.arch }}"
+          packaging/bootstrap/linux_${{ matrix.arch }}/mihomo -v
+          packaging/bootstrap/linux_${{ matrix.arch }}/mihomo \
+            -t -f internal/publisher/testdata/vless_reality.golden.yaml
+
+      - name: Upload verified native bootstrap
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: mihomo-bootstrap-${{ needs.prepare.outputs.sha12 }}-${{ matrix.arch }}
+          path: |
+            packaging/bootstrap/identity.json
+            packaging/bootstrap/linux_${{ matrix.arch }}/mihomo
+            packaging/bootstrap/linux_${{ matrix.arch }}/manifest.json
+          if-no-files-found: error
+          retention-days: 14
+
+  packages:
+    needs:
+      - prepare
+      - bootstrap
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+
+      - name: Download verified bootstraps
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          pattern: mihomo-bootstrap-${{ needs.prepare.outputs.sha12 }}-*
+          path: packaging/bootstrap
+          merge-multiple: true
+
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: 1.26.5
+          cache: true
+
+      - name: Set up Node.js
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 24.18.0
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Build frontend
+        run: |
+          npm --prefix web ci
+          npm --prefix web run build
+
+      - name: Install verified Syft
+        run: |
+          curl --fail --location --proto '=https' --proto-redir '=https' \
+            --output syft.tar.gz \
+            https://github.com/anchore/syft/releases/download/v1.44.0/syft_1.44.0_linux_amd64.tar.gz
+          echo "0e91737aee2b5baf1d255b959630194a302335d848ff97bb07921eb6205b5f5a  syft.tar.gz" |
+            sha256sum --check
+          tar -xzf syft.tar.gz syft
+          sudo install -m 0755 syft /usr/local/bin/syft
+
+      - name: Build snapshot tar, deb, apk, checksums, and SBOMs
+        uses: goreleaser/goreleaser-action@4c6ab561adb47e50c45ef534e2155934e91c40c1 # v7.2.0
+        with:
+          distribution: goreleaser
+          version: v2.17.1
+          args: release --snapshot --clean --skip=publish
+
+      - name: Verify snapshot artifact matrix
+        run: |
+          test "$(find dist -maxdepth 1 -name '*.tar.gz' | wc -l)" -eq 2
+          test "$(find dist -maxdepth 1 -name '*.deb' | wc -l)" -eq 2
+          test "$(find dist -maxdepth 1 -name '*.apk' | wc -l)" -eq 2
+          test "$(find dist -maxdepth 1 -name '*.sbom.spdx.json' | wc -l)" -ge 6
+
+      - name: Record package evidence
+        run: |
+          cp packaging/bootstrap/identity.json dist/MIHOMO_BOOTSTRAP_IDENTITY.json
+          cp scripts/manage.sh scripts/install.sh scripts/uninstall.sh dist/
+          (
+            cd dist
+            find . -maxdepth 1 -type f \
+              \( -name '*.tar.gz' -o -name '*.deb' -o -name '*.apk' \
+                 -o -name '*.sbom.spdx.json' -o -name 'manage.sh' \
+                 -o -name 'install.sh' -o -name 'uninstall.sh' \
+                 -o -name 'MIHOMO_BOOTSTRAP_IDENTITY.json' \) \
+              -printf '%f\n' | sort |
+              xargs sha256sum >SHA256SUMS
+            sha256sum --check SHA256SUMS
+          )
+          find dist -maxdepth 1 -type f -printf '%f\n' |
+            sort >dist/ARTIFACTS.txt
+
+      - name: Upload snapshot native artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: m-ui-snapshot-${{ needs.prepare.outputs.sha12 }}-linux-amd64-arm64
+          path: |
+            dist/*.tar.gz
+            dist/*.deb
+            dist/*.apk
+            dist/SHA256SUMS
+            dist/*.sbom.spdx.json
+            dist/ARTIFACTS.txt
+            dist/MIHOMO_BOOTSTRAP_IDENTITY.json
+            dist/manage.sh
+            dist/install.sh
+            dist/uninstall.sh
+          if-no-files-found: error
+          retention-days: 14
+
+  deb-package-test:
+    needs:
+      - prepare
+      - packages
+    strategy:
+      fail-fast: false
+      matrix:
+        image:
+          - debian:12
+          - ubuntu:24.04
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    steps:
+      - name: Download snapshot packages
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: m-ui-snapshot-${{ needs.prepare.outputs.sha12 }}-linux-amd64-arm64
+          path: artifacts
+
+      - name: Test deb install, remove, persistence, and reinstall
+        run: |
+          docker run --rm \
+            -v "$PWD/artifacts:/artifacts:ro" \
+            "${{ matrix.image }}" sh -euxc '
+              package="$(find /artifacts -maxdepth 1 \
+                -name "*linux_amd64.deb" -print -quit)"
+              test -n "$package"
+              apt-get update
+              apt-get install -y "$package"
+              test -x /usr/bin/m-ui
+              test -x /var/lib/m-ui/core/current/mihomo
+              test -s /var/lib/m-ui/core/current/manifest.json
+              /usr/bin/m-ui version
+              runuser -u m-ui -- /usr/bin/m-ui core status \
+                --json --config /etc/m-ui/config.toml
+              printf "%s\n" preserve > /var/lib/m-ui/package-test-marker
+              /usr/lib/m-ui/manage.sh uninstall
+              test ! -e /usr/bin/m-ui
+              test -f /var/lib/m-ui/package-test-marker
+              apt-get install -y "$package"
+              test -f /var/lib/m-ui/package-test-marker
+            '
+
+  apk-package-test:
+    needs:
+      - prepare
+      - packages
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    steps:
+      - name: Download snapshot packages
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: m-ui-snapshot-${{ needs.prepare.outputs.sha12 }}-linux-amd64-arm64
+          path: artifacts
+
+      - name: Test apk install, remove, persistence, and reinstall
+        run: |
+          docker run --rm \
+            -v "$PWD/artifacts:/artifacts:ro" \
+            alpine:3.20 sh -euxc '
+              package="$(find /artifacts -maxdepth 1 \
+                -name "*linux_amd64.apk" -print -quit)"
+              test -n "$package"
+              apk add --allow-untrusted "$package"
+              test -x /usr/bin/m-ui
+              test -x /var/lib/m-ui/core/current/mihomo
+              test -s /var/lib/m-ui/core/current/manifest.json
+              /usr/bin/m-ui version
+              su-exec m-ui /usr/bin/m-ui core status \
+                --json --config /etc/m-ui/config.toml
+              printf "%s\n" preserve > /var/lib/m-ui/package-test-marker
+              /usr/lib/m-ui/manage.sh uninstall
+              test ! -e /usr/bin/m-ui
+              test -f /var/lib/m-ui/package-test-marker
+              apk add --allow-untrusted "$package"
+              test -f /var/lib/m-ui/package-test-marker
+            '
+
+  docker:
+    needs:
+      - prepare
+      - bootstrap
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+            syft_sha: 0e91737aee2b5baf1d255b959630194a302335d848ff97bb07921eb6205b5f5a
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            syft_sha: 6f6cdcdc695721d91ce756e3b5bc3e3416599c464101f5e32e9c3f33054ee6d9
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 35
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - name: Download verified native bootstrap
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: mihomo-bootstrap-${{ needs.prepare.outputs.sha12 }}-${{ matrix.arch }}
+          path: packaging/bootstrap
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Install verified native Syft
+        run: |
+          curl --fail --location --proto '=https' --proto-redir '=https' \
+            --output syft.tar.gz \
+            "https://github.com/anchore/syft/releases/download/v1.44.0/syft_1.44.0_linux_${{ matrix.arch }}.tar.gz"
+          echo "${{ matrix.syft_sha }}  syft.tar.gz" | sha256sum --check
+          tar -xzf syft.tar.gz syft
+          sudo install -m 0755 syft /usr/local/bin/syft
+
+      - name: Build native non-root image
+        env:
+          IMAGE: m-ui:${{ needs.prepare.outputs.sha12 }}-${{ matrix.arch }}
+        run: |
+          docker build \
+            --platform linux/${{ matrix.arch }} \
+            --build-arg VERSION=0.1.0-snapshot-${{ needs.prepare.outputs.sha12 }} \
+            --build-arg REVISION=${GITHUB_SHA} \
+            --build-arg CREATED="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --tag "$IMAGE" .
+          bash scripts/docker-smoke.sh "$IMAGE"
+          docker image inspect --format '{{.Id}}' "$IMAGE" |
+            tee docker-image-id.txt
+          syft "$IMAGE" \
+            -o spdx-json=m-ui-image-${{ matrix.arch }}.sbom.spdx.json
+          docker save "$IMAGE" | gzip -1 >m-ui-image-${{ matrix.arch }}.tar.gz
+          sha256sum m-ui-image-${{ matrix.arch }}.tar.gz \
+            m-ui-image-${{ matrix.arch }}.sbom.spdx.json \
+            >docker-SHA256SUMS
+
+      - name: Push master edge architecture image
+        if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IMAGE: m-ui:${{ needs.prepare.outputs.sha12 }}-${{ matrix.arch }}
+        run: |
+          echo "$GH_TOKEN" |
+            docker login ghcr.io -u "${GITHUB_ACTOR}" --password-stdin
+          repository="ghcr.io/${GITHUB_REPOSITORY,,}"
+          docker tag "$IMAGE" "${repository}:edge-${{ matrix.arch }}"
+          docker tag "$IMAGE" \
+            "${repository}:sha-${{ needs.prepare.outputs.sha12 }}-${{ matrix.arch }}"
+          docker push "${repository}:edge-${{ matrix.arch }}"
+          docker push \
+            "${repository}:sha-${{ needs.prepare.outputs.sha12 }}-${{ matrix.arch }}"
+
+      - name: Upload native image evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: m-ui-image-${{ needs.prepare.outputs.sha12 }}-${{ matrix.arch }}
+          path: |
+            m-ui-image-${{ matrix.arch }}.tar.gz
+            docker-SHA256SUMS
+            docker-image-id.txt
+            m-ui-image-${{ matrix.arch }}.sbom.spdx.json
+          if-no-files-found: error
+          retention-days: 14
+
+  manifest:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    needs:
+      - prepare
+      - docker
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    timeout-minutes: 10
+
+    steps:
+      - name: Assemble verified multi-architecture edge manifests
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "$GH_TOKEN" |
+            docker login ghcr.io -u "${GITHUB_ACTOR}" --password-stdin
+          repository="ghcr.io/${GITHUB_REPOSITORY,,}"
+          docker buildx imagetools create \
+            --tag "${repository}:edge" \
+            "${repository}:edge-amd64" \
+            "${repository}:edge-arm64"
+          docker buildx imagetools create \
+            --tag "${repository}:sha-${{ needs.prepare.outputs.sha12 }}" \
+            "${repository}:sha-${{ needs.prepare.outputs.sha12 }}-amd64" \
+            "${repository}:sha-${{ needs.prepare.outputs.sha12 }}-arm64"
+          docker buildx imagetools inspect \
+            "${repository}:sha-${{ needs.prepare.outputs.sha12 }}" \
+            --raw >manifest.json
+          jq -e '
+            [.manifests[].platform.architecture] |
+            sort == ["amd64", "arm64"]
+          ' manifest.json

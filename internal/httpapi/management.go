@@ -8,8 +8,10 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	coremanagement "github.com/Aethersailor/m-ui/internal/core"
 	"github.com/Aethersailor/m-ui/internal/domain"
 	"github.com/Aethersailor/m-ui/internal/mihomo"
+	"github.com/Aethersailor/m-ui/internal/operation"
 	"github.com/Aethersailor/m-ui/internal/publisher"
 	"github.com/Aethersailor/m-ui/internal/service"
 	"github.com/Aethersailor/m-ui/internal/store"
@@ -161,6 +163,17 @@ type controllerTestResponse struct {
 	Version mihomo.Version `json:"version"`
 }
 
+type coreSettingsRequest struct {
+	Channel       string `json:"channel"`
+	AutoUpdate    bool   `json:"auto_update"`
+	CheckInterval string `json:"check_interval"`
+}
+
+type coreUpdateResponse struct {
+	Changed  bool                    `json:"changed"`
+	Manifest coremanagement.Manifest `json:"manifest"`
+}
+
 type runtimeStatusResponse struct {
 	Active          bool                   `json:"active"`
 	Degraded        bool                   `json:"degraded"`
@@ -219,6 +232,7 @@ func mountManagementRoutes(
 		protected.Get("/config/revisions", handler.listRevisions)
 		protected.Get("/config/revisions/{revisionID}", handler.getRevision)
 		protected.Get("/settings", handler.getSettings)
+		protected.Get("/system/core", handler.getCore)
 		protected.Get("/audit-logs", handler.listAuditEntries)
 
 		protected.Group(func(mutations chi.Router) {
@@ -282,8 +296,114 @@ func mountManagementRoutes(
 				"/settings/test-controller",
 				handler.testController,
 			)
+			mutations.Put("/system/core/settings", handler.updateCoreSettings)
+			mutations.Post("/system/core/check", handler.checkCore)
+			mutations.Post("/system/core/update", handler.updateCore)
+			mutations.Post("/system/core/rollback", handler.rollbackCore)
 		})
 	})
+}
+
+func (handler managementHandler) getCore(
+	response http.ResponseWriter,
+	request *http.Request,
+) {
+	status, err := handler.manager.CoreStatus(request.Context())
+	if err != nil {
+		handler.writeError(response, request, err)
+		return
+	}
+	writePrivateJSON(response, http.StatusOK, status)
+}
+
+func (handler managementHandler) updateCoreSettings(
+	response http.ResponseWriter,
+	request *http.Request,
+) {
+	var input coreSettingsRequest
+	if decodeJSON(response, request, &input) != nil {
+		return
+	}
+	channel, err := coremanagement.ParseChannel(input.Channel)
+	if err != nil {
+		handler.writeError(response, request, service.ErrValidation)
+		return
+	}
+	interval, err := time.ParseDuration(input.CheckInterval)
+	if err != nil || coremanagement.ValidateCheckInterval(interval) != nil {
+		handler.writeError(response, request, service.ErrValidation)
+		return
+	}
+	current, err := handler.manager.CoreSettings(request.Context())
+	if err != nil {
+		handler.writeError(response, request, err)
+		return
+	}
+	current.Channel = channel
+	current.AutoUpdate = input.AutoUpdate
+	current.CheckInterval = interval
+	if err := handler.manager.UpdateCoreSettings(
+		request.Context(),
+		currentAuthSession(request.Context()).Admin.ID,
+		current,
+	); err != nil {
+		handler.writeError(response, request, err)
+		return
+	}
+	status, err := handler.manager.CoreStatus(request.Context())
+	if err != nil {
+		handler.writeError(response, request, err)
+		return
+	}
+	writePrivateJSON(response, http.StatusOK, status)
+}
+
+func (handler managementHandler) checkCore(
+	response http.ResponseWriter,
+	request *http.Request,
+) {
+	identity, err := handler.manager.CheckCore(
+		request.Context(),
+		currentAuthSession(request.Context()).Admin.ID,
+	)
+	if err != nil {
+		handler.writeError(response, request, err)
+		return
+	}
+	writePrivateJSON(response, http.StatusOK, identity)
+}
+
+func (handler managementHandler) updateCore(
+	response http.ResponseWriter,
+	request *http.Request,
+) {
+	manifest, changed, err := handler.manager.UpdateCore(
+		request.Context(),
+		currentAuthSession(request.Context()).Admin.ID,
+	)
+	if err != nil {
+		handler.writeError(response, request, err)
+		return
+	}
+	writePrivateJSON(response, http.StatusOK, coreUpdateResponse{
+		Changed:  changed,
+		Manifest: manifest,
+	})
+}
+
+func (handler managementHandler) rollbackCore(
+	response http.ResponseWriter,
+	request *http.Request,
+) {
+	manifest, err := handler.manager.RollbackCore(
+		request.Context(),
+		currentAuthSession(request.Context()).Admin.ID,
+	)
+	if err != nil {
+		handler.writeError(response, request, err)
+		return
+	}
+	writePrivateJSON(response, http.StatusOK, manifest)
 }
 
 func (handler managementHandler) listListeners(
@@ -931,6 +1051,38 @@ func (handler managementHandler) writeError(
 			http.StatusServiceUnavailable,
 			"SYSTEM_DEGRADED",
 			"Configuration changes are blocked until recovery is completed.",
+		)
+	case errors.Is(err, operation.ErrBusy):
+		writeAPIError(
+			response,
+			request,
+			http.StatusConflict,
+			"CORE_OPERATION_IN_PROGRESS",
+			"Another Mihomo runtime operation is already in progress.",
+		)
+	case errors.Is(err, coremanagement.ErrDegraded):
+		writeAPIError(
+			response,
+			request,
+			http.StatusServiceUnavailable,
+			"SYSTEM_DEGRADED",
+			"Core updates are blocked until degraded state is recovered.",
+		)
+	case errors.Is(err, coremanagement.ErrExternal):
+		writeAPIError(
+			response,
+			request,
+			http.StatusUnprocessableEntity,
+			"CORE_NOT_MANAGED",
+			"The configured external Mihomo core is read-only and cannot be updated.",
+		)
+	case errors.Is(err, coremanagement.ErrNoBackup):
+		writeAPIError(
+			response,
+			request,
+			http.StatusConflict,
+			"CORE_BACKUP_UNAVAILABLE",
+			"No previous managed Mihomo core backup is available.",
 		)
 	default:
 		writeAPIError(

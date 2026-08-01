@@ -24,17 +24,21 @@ m-ui single binary (user m-ui)
   |-- SQLite store
   |-- desired-state compiler
   |-- transactional publisher
+  |-- verified core updater and scheduler
+  |-- shared runtime operation coordinator
   |-- runtime collector
   |-- expiry scheduler
   |
   |-- fixed CLI invocation ------------> mihomo binary
   |-- loopback REST API ---------------> Mihomo controller
-  `-- fixed sudo systemctl commands ---> mihomo.service (user mihomo)
+  `-- fixed service adapter ----------> systemd/OpenRC/managed Mihomo
 ```
 
-m-ui and Mihomo run as separate systemd services and separate unprivileged
-users. m-ui receives no general root or shell access. Its sudoers entry permits
-only fixed lifecycle operations on `mihomo.service`.
+On native systems m-ui and Mihomo run as separate services and separate
+unprivileged users. m-ui receives no general root or shell access. Debian and
+Ubuntu use a fixed sudoers policy for `mihomo.service`; Alpine uses a fixed doas
+policy for the literal `rc-service mihomo` operations. In the OCI image one
+non-root UID runs m-ui and its bounded Mihomo supervisor without an init system.
 
 ## Package responsibilities
 
@@ -48,10 +52,15 @@ only fixed lifecycle operations on `mihomo.service`.
   models plus validation.
 - `internal/httpapi`: REST routing, middleware, DTOs, and stable error responses.
 - `internal/mihomo`: Controller HTTP client, fixed-argument CLI runner, systemd
-  adapter, and runtime snapshots.
+  and OpenRC adapters, non-root managed supervisor, and runtime snapshots.
+- `internal/core`: fixed-upstream release resolution, digest verification,
+  candidate staging, activation, rollback, and core manifests.
+- `internal/operation`: shared exclusion for publication, core lifecycle, and
+  manual runtime operations.
 - `internal/publisher`: compilation, candidate validation, atomic publication,
   health checking, revision management, and recovery.
 - `internal/scheduler`: UTC expiry scans and batched publication.
+  It also schedules optional core checks/updates with bounded backoff.
 - `internal/service`: use-case orchestration independent from HTTP transport.
 - `internal/store`: SQLite migrations and repositories using `database/sql`.
 - `internal/version`: build-injected version, commit, date, and dirty state.
@@ -90,6 +99,16 @@ rolls back database changes. A database commit failure also restores and
 reloads the old configuration. If recovery itself fails, m-ui records degraded
 state and rejects subsequent mutations until an operator repairs the indicated
 revision.
+
+Core updates use the same operation coordinator as configuration publication
+and runtime actions. A candidate is selected by exact Linux architecture from a
+fixed official GitHub repository, size- and digest-checked, decompressed into a
+same-filesystem staging directory, executed for version and configuration
+validation, then atomically activated. The previous core remains a bounded
+backup until the new process and authenticated Controller are healthy and
+durable state is committed. A failed activation restores and restarts the old
+core using an independent bounded recovery context; inability to restore is a
+degraded condition.
 
 ## Determinism and revisions
 
@@ -136,8 +155,10 @@ observability, never user billing data.
 
 ## Deployment invariants
 
-- Supported targets are systemd-based Debian 12+ and Ubuntu 24.04+ on Linux
-  amd64 and arm64.
+- Supported native targets are Debian 12+/Ubuntu 24.04+ with systemd and
+  Alpine 3.20+ with OpenRC, on Linux amd64 and arm64.
+- OCI images are non-root Linux amd64/arm64 images with a direct Mihomo
+  supervisor and persistent configuration/data volumes.
 - The panel defaults to `127.0.0.1:2095`; remote access uses an SSH tunnel or a
   separately managed loopback reverse proxy.
 - The Mihomo Controller remains on loopback.
@@ -150,5 +171,5 @@ observability, never user billing data.
 
 No other protocols or transports, multi-node control, multi-administrator RBAC,
 per-user quota enforcement, permanent public subscriptions, arbitrary
-third-party YAML import, Docker packaging, automatic TLS certificates, firewall
-automation, or reverse-proxy installation are part of v0.1.
+third-party YAML import, automatic TLS certificates, firewall automation, or
+reverse-proxy installation are part of v0.1.

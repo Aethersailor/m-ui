@@ -14,6 +14,8 @@ import (
 	"github.com/Aethersailor/m-ui/internal/store"
 )
 
+var errSchedulerDependency = errors.New("scheduler dependency is required")
+
 var errNoExpiredUsers = errors.New("no expired users require publication")
 
 type configurationPublisher interface {

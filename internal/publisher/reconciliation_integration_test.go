@@ -832,6 +832,58 @@ func TestStartupClearDegradedFailureDoesNotReportRecovery(t *testing.T) {
 	}
 }
 
+func TestStartupClearAndCompensationFailureIsFatal(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	fixture := newActiveSQLiteFixture(t)
+	if err := fixture.repository.MarkDegraded(
+		ctx,
+		"synthetic degraded state",
+		fixture.revision.ID,
+		fixture.effectiveTime,
+	); err != nil {
+		t.Fatal(err)
+	}
+	repository := &clearAndMarkFaultRepository{
+		PublicationRepository: fixture.repository,
+		clearErr: errors.New(
+			"synthetic clear failure secret=clear-sensitive-value",
+		),
+		markErr: errors.New(
+			"synthetic mark failure private_key=mark-sensitive-value",
+		),
+	}
+	instance := fixture.newPublisher(t, repository)
+
+	err := instance.ReconcileStartup(ctx)
+	if err == nil {
+		t.Fatal("ReconcileStartup() error = nil")
+	}
+	if errors.Is(err, ErrStartupDegraded) {
+		t.Fatalf(
+			"ReconcileStartup() error = %v, must be fatal and not wrap ErrStartupDegraded",
+			err,
+		)
+	}
+	if repository.clearCalls.Load() != 1 || repository.markCalls.Load() != 1 {
+		t.Fatalf(
+			"ClearDegraded/MarkDegraded calls = %d/%d, want 1/1",
+			repository.clearCalls.Load(),
+			repository.markCalls.Load(),
+		)
+	}
+	if !repository.clearReleased.Load() {
+		t.Fatal("ClearDegraded context was not released before MarkDegraded")
+	}
+	if !repository.independentMarkContext.Load() {
+		t.Fatal("MarkDegraded did not receive a fresh independent context")
+	}
+	if strings.Contains(err.Error(), "clear-sensitive-value") ||
+		strings.Contains(err.Error(), "mark-sensitive-value") {
+		t.Fatalf("ReconcileStartup() leaked sensitive error text: %v", err)
+	}
+}
+
 func TestStartupClearsDegradedAfterRevalidatingMatchingActiveYAML(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -1269,6 +1321,41 @@ func (repository *clearFaultRepository) ClearDegraded(
 ) error {
 	repository.clearCalls.Add(1)
 	return repository.clearErr
+}
+
+type clearAndMarkFaultRepository struct {
+	store.PublicationRepository
+	clearErr               error
+	markErr                error
+	clearContext           context.Context
+	clearCalls             atomic.Int32
+	markCalls              atomic.Int32
+	clearReleased          atomic.Bool
+	independentMarkContext atomic.Bool
+}
+
+func (repository *clearAndMarkFaultRepository) ClearDegraded(
+	ctx context.Context,
+	_ time.Time,
+) error {
+	repository.clearCalls.Add(1)
+	repository.clearContext = ctx
+	return repository.clearErr
+}
+
+func (repository *clearAndMarkFaultRepository) MarkDegraded(
+	ctx context.Context,
+	_, _ string,
+	_ time.Time,
+) error {
+	repository.markCalls.Add(1)
+	select {
+	case <-repository.clearContext.Done():
+		repository.clearReleased.Store(true)
+	default:
+	}
+	repository.independentMarkContext.Store(ctx != repository.clearContext)
+	return repository.markErr
 }
 
 func (repository *commitFaultRepository) BeginImmediate(

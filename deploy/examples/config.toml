@@ -22,7 +22,9 @@ ui_language = "en-US"
 public_host = "localhost"
 
 [mihomo]
-binary_path = "/usr/local/bin/mihomo"
+binary_path = "/var/lib/m-ui/core/current/mihomo"
+managed_core = true
+process_mode = "auto"
 config_directory = "/etc/mihomo"
 config_path = "/etc/mihomo/config.yaml"
 controller_address = "127.0.0.1:9090"

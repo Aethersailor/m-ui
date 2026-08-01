@@ -108,6 +108,62 @@ export interface AuditEntry {
   created_at: string
 }
 
+export interface CoreIdentity {
+  channel: 'release' | 'alpha'
+  repository: 'MetaCubeX/mihomo'
+  release_id: number
+  tag_name: string
+  prerelease: boolean
+  published_at: string
+  target_commitish?: string
+  asset_id: number
+  asset_name: string
+  asset_size: number
+  asset_digest_sha256: string
+  binary_reported_version?: string
+}
+
+export interface CoreManifest {
+  schema_version: number
+  source: 'downloaded' | 'bootstrap' | 'adopted'
+  verified_source: boolean
+  identity: CoreIdentity
+  compressed_sha256: string
+  binary_sha256: string
+  binary_size: number
+  binary_reported_version: string
+  installed_at: string
+}
+
+export interface CoreSettings {
+  channel: 'release' | 'alpha'
+  auto_update: boolean
+  check_interval: '6h0m0s' | '12h0m0s' | '24h0m0s' | '168h0m0s'
+  managed: boolean
+  external_path?: string
+}
+
+export interface CoreStatus {
+  settings: CoreSettings
+  state: {
+    current?: CoreManifest
+    available?: CoreIdentity
+    last_check_at?: string
+    last_check_result?: string
+    last_update_at?: string
+    last_update_result?: string
+    last_error_redacted?: string
+    next_check_at?: string
+    update_in_progress: boolean
+  }
+  actual_version: string
+  controller_version?: string
+  current_binary_sha256?: string
+  managed: boolean
+  update_available: boolean
+  runtime_version_matches: boolean
+}
+
 export interface Share {
   uri: string
   qr_content: string
@@ -364,6 +420,40 @@ export function testController(
   csrfToken: string,
 ): Promise<{ version: RuntimeStatus['version'] }> {
   return mutation('/api/v1/settings/test-controller', csrfToken)
+}
+
+export function getCoreStatus(): Promise<CoreStatus> {
+  return apiRequest<CoreStatus>('/api/v1/system/core')
+}
+
+export function updateCoreSettings(
+  csrfToken: string,
+  input: Pick<CoreSettings, 'channel' | 'auto_update' | 'check_interval'>,
+): Promise<CoreStatus> {
+  return mutation(
+    '/api/v1/system/core/settings',
+    csrfToken,
+    'PUT',
+    input,
+  )
+}
+
+export function checkCore(
+  csrfToken: string,
+): Promise<CoreIdentity> {
+  return mutation('/api/v1/system/core/check', csrfToken)
+}
+
+export function updateCore(
+  csrfToken: string,
+): Promise<{ changed: boolean; manifest: CoreManifest }> {
+  return mutation('/api/v1/system/core/update', csrfToken)
+}
+
+export function rollbackCore(
+  csrfToken: string,
+): Promise<CoreManifest> {
+  return mutation('/api/v1/system/core/rollback', csrfToken)
 }
 
 export async function listAuditEntries(): Promise<AuditEntry[]> {

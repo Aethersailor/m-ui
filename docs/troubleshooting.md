@@ -5,9 +5,11 @@
 ```sh
 sudo systemctl --no-pager --full status m-ui mihomo
 sudo journalctl -u m-ui -u mihomo -n 200 --no-pager
-/usr/local/bin/m-ui version
-/usr/local/bin/mihomo -v
-sudo -u m-ui /usr/local/bin/m-ui doctor --config /etc/m-ui/config.toml
+/usr/bin/m-ui version
+/var/lib/m-ui/core/current/mihomo -v
+sudo -u m-ui /usr/bin/m-ui doctor --config /etc/m-ui/config.toml
+sudo -u m-ui /usr/bin/m-ui core status \
+  --json --config /etc/m-ui/config.toml
 sudo -u m-ui test -r /etc/m-ui/config.toml
 sudo -u m-ui test -w /var/lib/m-ui
 sudo -u mihomo test -r /etc/mihomo/config.yaml
@@ -34,7 +36,9 @@ Required modes:
 /etc/m-ui/config.toml      root:m-ui 0640
 /etc/mihomo                m-ui:mihomo 2750
 /etc/mihomo/config.yaml    m-ui:mihomo 0640
-/var/lib/m-ui              m-ui:m-ui 0700
+/var/lib/m-ui              m-ui:mihomo 0710
+/var/lib/m-ui/core         m-ui:mihomo 2710
+/var/lib/m-ui/core/current m-ui:mihomo 0750
 /var/lib/m-ui/master.key   m-ui:m-ui 0600
 ```
 
@@ -46,7 +50,7 @@ encrypted values would become unreadable.
 Validate the active configuration without changing it:
 
 ```sh
-sudo -u mihomo /usr/local/bin/mihomo \
+sudo -u mihomo /var/lib/m-ui/core/current/mihomo \
   -t -d /var/lib/mihomo -f /etc/mihomo/config.yaml
 sudo journalctl -u mihomo -b --no-pager
 ```
@@ -80,6 +84,29 @@ The Controller secret must match the managed Mihomo YAML. Do not post either
 file publicly. If the service is active but the panel remains offline, inspect
 the m-ui journal for a redacted Controller error.
 
+## Core check or update fails
+
+Start with read-only status:
+
+```sh
+sudo -u m-ui /usr/bin/m-ui core status \
+  --json --config /etc/m-ui/config.toml
+sudo -u m-ui /usr/bin/m-ui core check \
+  --config /etc/m-ui/config.toml
+```
+
+A busy response means a configuration publication, runtime action, or another
+core operation owns the shared coordinator; wait for that bounded operation to
+finish. An external-core response means updates are intentionally disabled for
+the preserved custom binary path. Rate-limit and network failures leave the
+current binary unchanged.
+
+If activation validation fails, inspect the redacted m-ui/Mihomo logs and the
+manifest under `core/current`; do not copy a new binary into place. A successful
+automatic rollback records a failed update but does not enter degraded mode.
+If both activation and rollback fail, follow the degraded procedure and
+preserve `core/current`, `core/backups`, SQLite and logs together.
+
 ## Degraded mode
 
 Degraded mode means m-ui could not prove or restore a consistent relationship
@@ -103,6 +130,11 @@ not started. A first installation with no active revision is not degraded and
 startup intentionally leaves its bootstrap YAML untouched.
 
 Deleting `system_state`, revisions, or the database is not a repair.
+
+If startup exits instead of serving a degraded read-only panel, inspect for a
+second database/storage failure while persisting the degraded marker. This
+fail-closed outcome is intentional: m-ui will not continue when it cannot prove
+that the durable safety state matches memory.
 
 ## Revision cleanup warning
 

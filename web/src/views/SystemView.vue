@@ -3,12 +3,15 @@ import {
   NAlert,
   NButton,
   NCard,
+  NDescriptions,
+  NDescriptionsItem,
   NEmpty,
   NForm,
   NFormItem,
   NInput,
   NSelect,
   NSpace,
+  NSwitch,
   NTabPane,
   NTabs,
   NTag,
@@ -22,13 +25,19 @@ import { useRouter } from 'vue-router'
 
 import { changePassword } from '@/api/auth'
 import {
+  checkCore,
+  getCoreStatus,
   getRuntimeLogs,
   listAuditEntries,
   runRuntimeAction,
+  rollbackCore,
   testController,
   testCore,
+  updateCore,
+  updateCoreSettings,
   updateSettings,
   type Settings,
+  type CoreStatus,
 } from '@/api/management'
 import AppShell from '@/components/AppShell.vue'
 import PageHeader from '@/components/PageHeader.vue'
@@ -47,11 +56,18 @@ const dialog = useDialog()
 const message = useMessage()
 const loading = ref(true)
 const saving = ref(false)
+const coreBusy = ref(false)
+const coreStatus = ref<CoreStatus | null>(null)
 const activeTab = ref('settings')
 const settingsForm = reactive<Settings>({
   panel_title: 'm-ui',
   ui_language: 'en-US',
   public_host: 'localhost',
+})
+const coreForm = reactive({
+  channel: 'release' as 'release' | 'alpha',
+  auto_update: false,
+  check_interval: '24h0m0s' as CoreStatus['settings']['check_interval'],
 })
 const passwords = reactive({
   current: '',
@@ -68,13 +84,33 @@ const themeOptions = computed(() => [
   { label: t('theme.light'), value: 'light' },
   { label: t('theme.dark'), value: 'dark' },
 ])
+const coreChannelOptions = computed(() => [
+  { label: t('system.coreRelease'), value: 'release' },
+  { label: t('system.coreAlpha'), value: 'alpha' },
+])
+const coreIntervalOptions = [
+  { label: '6h', value: '6h0m0s' },
+  { label: '12h', value: '12h0m0s' },
+  { label: '24h', value: '24h0m0s' },
+  { label: '7d', value: '168h0m0s' },
+]
 
 onMounted(load)
 
 async function load() {
   loading.value = true
   try {
-    await Promise.all([management.loadSystem(), management.refreshRuntime()])
+    const [, , loadedCore] = await Promise.all([
+      management.loadSystem(),
+      management.refreshRuntime(),
+      getCoreStatus(),
+    ])
+    coreStatus.value = loadedCore
+    Object.assign(coreForm, {
+      channel: loadedCore.settings.channel,
+      auto_update: loadedCore.settings.auto_update,
+      check_interval: loadedCore.settings.check_interval,
+    })
     if (management.settings) {
       Object.assign(settingsForm, management.settings)
     }
@@ -83,6 +119,65 @@ async function load() {
   } finally {
     loading.value = false
   }
+}
+
+async function saveCoreSettings() {
+  coreBusy.value = true
+  try {
+    coreStatus.value = await updateCoreSettings(auth.csrfToken, {
+      ...coreForm,
+    })
+    message.success(t('common.saved'))
+  } catch (error) {
+    message.error(t(errorTranslationKey(error)))
+  } finally {
+    coreBusy.value = false
+  }
+}
+
+async function runCoreCheck() {
+  coreBusy.value = true
+  try {
+    await checkCore(auth.csrfToken)
+    coreStatus.value = await getCoreStatus()
+    message.success(t('system.coreCheckDone'))
+  } catch (error) {
+    message.error(t(errorTranslationKey(error)))
+  } finally {
+    coreBusy.value = false
+  }
+}
+
+function confirmCoreAction(action: 'update' | 'rollback') {
+  dialog.warning({
+    title: t(
+      action === 'update'
+        ? 'system.coreUpdateConfirm'
+        : 'system.coreRollbackConfirm',
+    ),
+    content: t('system.coreTransactionHint'),
+    positiveText: t(
+      action === 'update' ? 'system.coreUpdate' : 'system.coreRollback',
+    ),
+    negativeText: t('common.cancel'),
+    async onPositiveClick() {
+      coreBusy.value = true
+      try {
+        if (action === 'update') {
+          await updateCore(auth.csrfToken)
+        } else {
+          await rollbackCore(auth.csrfToken)
+        }
+        coreStatus.value = await getCoreStatus()
+        await management.refreshRuntime()
+        message.success(t('system.coreActionDone'))
+      } catch (error) {
+        message.error(t(errorTranslationKey(error)))
+      } finally {
+        coreBusy.value = false
+      }
+    },
+  })
 }
 
 async function saveSettings() {
@@ -295,6 +390,181 @@ async function submitPassword() {
                 </NButton>
               </NSpace>
             </div>
+            <NCard
+              :title="t('system.coreVersion')"
+              size="small"
+              class="section-gap core-card"
+            >
+              <NAlert
+                v-if="coreStatus?.settings.channel === 'alpha'"
+                type="warning"
+                :bordered="false"
+                class="section-gap"
+              >
+                {{ t('system.coreAlphaWarning') }}
+              </NAlert>
+              <NAlert
+                v-if="coreStatus && !coreStatus.managed"
+                type="info"
+                :bordered="false"
+                class="section-gap"
+              >
+                {{ t('system.coreExternal') }}
+              </NAlert>
+              <NAlert
+                v-if="management.runtime?.degraded"
+                type="error"
+                :bordered="false"
+                class="section-gap"
+              >
+                {{ t('system.coreDegraded') }}
+              </NAlert>
+              <NDescriptions
+                v-if="coreStatus"
+                label-placement="top"
+                :column="2"
+                class="section-gap"
+              >
+                <NDescriptionsItem :label="t('system.coreActualVersion')">
+                  {{ coreStatus.actual_version || t('common.unknown') }}
+                </NDescriptionsItem>
+                <NDescriptionsItem :label="t('system.coreManaged')">
+                  {{
+                    coreStatus.managed
+                      ? t('common.enabled')
+                      : t('common.disabled')
+                  }}
+                </NDescriptionsItem>
+                <NDescriptionsItem :label="t('system.coreCurrentTag')">
+                  {{
+                    coreStatus.state.current?.identity.tag_name ||
+                    t('common.unknown')
+                  }}
+                </NDescriptionsItem>
+                <NDescriptionsItem :label="t('system.coreSHA')">
+                  <code>{{
+                    coreStatus.current_binary_sha256?.slice(0, 12) ||
+                    t('common.unknown')
+                  }}</code>
+                </NDescriptionsItem>
+                <NDescriptionsItem :label="t('system.coreAvailable')">
+                  {{
+                    coreStatus.state.available?.tag_name ||
+                    t('common.unknown')
+                  }}
+                </NDescriptionsItem>
+                <NDescriptionsItem :label="t('system.coreLastCheck')">
+                  {{
+                    coreStatus.state.last_check_at
+                      ? formatDateTime(coreStatus.state.last_check_at, locale)
+                      : t('common.never')
+                  }}
+                </NDescriptionsItem>
+                <NDescriptionsItem :label="t('system.coreLastUpdate')">
+                  {{
+                    coreStatus.state.last_update_at
+                      ? formatDateTime(coreStatus.state.last_update_at, locale)
+                      : t('common.never')
+                  }}
+                </NDescriptionsItem>
+                <NDescriptionsItem :label="t('system.coreNextCheck')">
+                  {{
+                    coreStatus.state.next_check_at
+                      ? formatDateTime(coreStatus.state.next_check_at, locale)
+                      : t('common.never')
+                  }}
+                </NDescriptionsItem>
+              </NDescriptions>
+              <NForm
+                class="settings-form section-gap"
+                @submit.prevent="saveCoreSettings"
+              >
+                <div class="form-grid">
+                  <NFormItem :label="t('system.coreChannel')">
+                    <NSelect
+                      v-model:value="coreForm.channel"
+                      :options="coreChannelOptions"
+                      :disabled="
+                        !coreStatus?.managed ||
+                        management.runtime?.degraded ||
+                        coreStatus?.state.update_in_progress
+                      "
+                    />
+                  </NFormItem>
+                  <NFormItem :label="t('system.coreInterval')">
+                    <NSelect
+                      v-model:value="coreForm.check_interval"
+                      :options="coreIntervalOptions"
+                      :disabled="
+                        !coreStatus?.managed ||
+                        management.runtime?.degraded ||
+                        coreStatus?.state.update_in_progress
+                      "
+                    />
+                  </NFormItem>
+                  <NFormItem :label="t('system.coreAutoUpdate')">
+                    <NSwitch
+                      v-model:value="coreForm.auto_update"
+                      :disabled="
+                        !coreStatus?.managed ||
+                        management.runtime?.degraded ||
+                        coreStatus?.state.update_in_progress
+                      "
+                    />
+                  </NFormItem>
+                </div>
+                <NSpace>
+                  <NButton
+                    attr-type="submit"
+                    :loading="coreBusy"
+                    :disabled="
+                      !coreStatus?.managed ||
+                      management.runtime?.degraded ||
+                      coreStatus?.state.update_in_progress
+                    "
+                  >
+                    {{ t('common.save') }}
+                  </NButton>
+                  <NButton
+                    secondary
+                    :loading="coreBusy"
+                    :disabled="
+                      !coreStatus?.managed ||
+                      management.runtime?.degraded ||
+                      coreStatus?.state.update_in_progress
+                    "
+                    @click="runCoreCheck"
+                  >
+                    {{ t('system.coreCheck') }}
+                  </NButton>
+                  <NButton
+                    type="primary"
+                    :loading="coreBusy"
+                    :disabled="
+                      !coreStatus?.managed ||
+                      management.runtime?.degraded ||
+                      coreStatus?.state.update_in_progress
+                    "
+                    @click="confirmCoreAction('update')"
+                  >
+                    {{ t('system.coreUpdate') }}
+                  </NButton>
+                  <NButton
+                    type="warning"
+                    secondary
+                    :loading="coreBusy"
+                    :disabled="
+                      !coreStatus?.managed ||
+                      management.runtime?.degraded ||
+                      coreStatus?.state.update_in_progress
+                    "
+                    @click="confirmCoreAction('rollback')"
+                  >
+                    {{ t('system.coreRollback') }}
+                  </NButton>
+                </NSpace>
+              </NForm>
+            </NCard>
           </NTabPane>
 
           <NTabPane name="logs" :tab="t('system.logs')">

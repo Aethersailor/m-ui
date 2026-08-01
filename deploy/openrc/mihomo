@@ -1,0 +1,28 @@
+#!/sbin/openrc-run
+
+name="mihomo"
+description="Mihomo proxy core managed by m-ui"
+command="/var/lib/m-ui/core/current/mihomo"
+command_args="-d /var/lib/mihomo -f /etc/mihomo/config.yaml"
+command_user="mihomo:mihomo"
+directory="/var/lib/mihomo"
+pidfile="/run/mihomo.pid"
+command_background="yes"
+output_log="/var/log/mihomo.log"
+error_log="/var/log/mihomo.log"
+
+depend() {
+    need net
+}
+
+start_pre() {
+    checkpath --directory --owner mihomo:mihomo --mode 0750 /var/lib/mihomo
+    checkpath --file --owner mihomo:mihomo --mode 0640 /var/log/mihomo.log
+    /sbin/setcap cap_net_bind_service=+ep /var/lib/m-ui/core/current/mihomo
+}
+
+reload() {
+    ebegin "Reloading ${name}"
+    start-stop-daemon --signal HUP --pidfile "${pidfile}"
+    eend $?
+}

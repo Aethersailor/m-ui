@@ -1,0 +1,22 @@
+#!/sbin/openrc-run
+
+name="m-ui"
+description="m-ui Mihomo management interface"
+command="/usr/bin/m-ui"
+command_args="server --config /etc/m-ui/config.toml"
+command_user="m-ui:m-ui"
+directory="/var/lib/m-ui"
+pidfile="/run/m-ui.pid"
+command_background="yes"
+output_log="/var/log/m-ui.log"
+error_log="/var/log/m-ui.log"
+
+depend() {
+    need net
+    need mihomo
+}
+
+start_pre() {
+    checkpath --directory --owner m-ui:m-ui --mode 0700 /var/lib/m-ui
+    checkpath --file --owner m-ui:m-ui --mode 0600 /var/log/m-ui.log
+}

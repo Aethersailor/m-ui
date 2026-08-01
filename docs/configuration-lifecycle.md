@@ -83,6 +83,45 @@ No active revision is the valid initial bootstrap state. Startup does not
 rewrite or validate the bootstrap YAML and does not mark that state degraded.
 Failure to open or read the database remains a startup failure.
 
+If reconciliation determines that degraded state is required, the persisted
+degraded marker is part of the safety boundary. A failed attempt to clear or
+write that marker is retried with a fresh bounded compensation context. If the
+compensation write also fails, startup returns a fatal error that is not
+classified as the ordinary persisted-degraded result, and no HTTP server or
+background runner is started.
+
+## Mihomo core lifecycle
+
+Core settings and observed state are stored in SQLite; verified binaries and
+manifests live below `/var/lib/m-ui/core`. The configured external binary path
+is preserved during migration. A managed installation either bootstraps the
+release-packaged core or explicitly adopts the existing local binary once.
+
+For an update, m-ui:
+
+1. resolves a release or rolling alpha identity from the fixed
+   `MetaCubeX/mihomo` GitHub API endpoint;
+2. selects exactly one `linux/amd64-compatible` or `linux/arm64` gzip asset;
+3. requires the API-provided SHA-256 digest and a bounded declared size;
+4. streams to same-filesystem staging with a bounded response and verifies the
+   compressed digest before decompression;
+5. verifies regular-file type, owner, mode, decompressed size and binary hash;
+6. runs the candidate for its actual version and `-t -f` validation;
+7. atomically activates it, restarts Mihomo, and checks both process and
+   authenticated Controller health;
+8. commits the manifest/state and retains at most two verified backups.
+
+On any post-activation failure, the previous binary is restored and restarted
+with a fresh bounded recovery context. If that recovery fails, durable degraded
+state blocks later updates and publications. Startup removes interrupted
+staging directories, revalidates the current manifest against the binary, and
+clears stale in-progress flags; it never treats a tag string alone as proof of
+the installed core.
+
+Configuration publication, core check/update/rollback, and manual runtime
+actions share one cancellable coordinator. A conflicting manual request fails
+with a stable busy response, while schedulers retry with bounded backoff.
+
 ## Revisions and rollback
 
 Revision YAML and state snapshots live under `/var/lib/m-ui/revisions`, mode

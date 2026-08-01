@@ -8,6 +8,9 @@ export function errorTranslationKey(error: unknown): string {
     'RESOURCE_NOT_FOUND',
     'REQUEST_FAILED',
     'INTERNAL_ERROR',
+    'CORE_OPERATION_IN_PROGRESS',
+    'CORE_NOT_MANAGED',
+    'CORE_BACKUP_UNAVAILABLE',
   ])
   return supported.has(code) ? `errors.${code}` : 'common.error'
 }

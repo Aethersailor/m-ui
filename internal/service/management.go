@@ -7,8 +7,10 @@ import (
 	"strings"
 	"time"
 
+	coremanagement "github.com/Aethersailor/m-ui/internal/core"
 	"github.com/Aethersailor/m-ui/internal/domain"
 	"github.com/Aethersailor/m-ui/internal/mihomo"
+	"github.com/Aethersailor/m-ui/internal/operation"
 	"github.com/Aethersailor/m-ui/internal/publisher"
 	"github.com/Aethersailor/m-ui/internal/redact"
 	"github.com/Aethersailor/m-ui/internal/store"
@@ -59,23 +61,27 @@ type RuntimeStatus struct {
 }
 
 type ManagerOptions struct {
-	Store      *store.ManagedStore
-	Publisher  *publisher.Publisher
-	CLI        mihomo.CoreCLI
-	Controller mihomo.CoreController
-	Process    mihomo.CoreProcess
-	Runtime    *RuntimeMonitor
-	Clock      func() time.Time
+	Store       *store.ManagedStore
+	Publisher   *publisher.Publisher
+	CLI         mihomo.CoreCLI
+	Controller  mihomo.CoreController
+	Process     mihomo.CoreProcess
+	Runtime     *RuntimeMonitor
+	Core        *coremanagement.Manager
+	Coordinator *operation.Coordinator
+	Clock       func() time.Time
 }
 
 type Manager struct {
-	store      *store.ManagedStore
-	publisher  *publisher.Publisher
-	cli        mihomo.CoreCLI
-	controller mihomo.CoreController
-	process    mihomo.CoreProcess
-	runtime    *RuntimeMonitor
-	clock      func() time.Time
+	store       *store.ManagedStore
+	publisher   *publisher.Publisher
+	cli         mihomo.CoreCLI
+	controller  mihomo.CoreController
+	process     mihomo.CoreProcess
+	runtime     *RuntimeMonitor
+	core        *coremanagement.Manager
+	coordinator *operation.Coordinator
+	clock       func() time.Time
 }
 
 func NewManager(options ManagerOptions) (*Manager, error) {
@@ -96,14 +102,19 @@ func NewManager(options ManagerOptions) (*Manager, error) {
 	if options.Clock == nil {
 		options.Clock = time.Now
 	}
+	if options.Coordinator == nil {
+		options.Coordinator = operation.NewCoordinator()
+	}
 	return &Manager{
-		store:      options.Store,
-		publisher:  options.Publisher,
-		cli:        options.CLI,
-		controller: options.Controller,
-		process:    options.Process,
-		runtime:    options.Runtime,
-		clock:      options.Clock,
+		store:       options.Store,
+		publisher:   options.Publisher,
+		cli:         options.CLI,
+		controller:  options.Controller,
+		process:     options.Process,
+		runtime:     options.Runtime,
+		core:        options.Core,
+		coordinator: options.Coordinator,
+		clock:       options.Clock,
 	}, nil
 }
 
@@ -636,6 +647,11 @@ func (manager *Manager) RuntimeAction(
 	ctx context.Context,
 	actorAdminID, action string,
 ) error {
+	release, lockErr := manager.coordinator.TryAcquire()
+	if lockErr != nil {
+		return lockErr
+	}
+	defer release()
 	var err error
 	switch action {
 	case "start":
@@ -667,6 +683,65 @@ func (manager *Manager) RuntimeAction(
 		})
 	}
 	return errors.Join(err, idErr)
+}
+
+func (manager *Manager) CoreStatus(
+	ctx context.Context,
+) (coremanagement.Status, error) {
+	if manager.core == nil {
+		return coremanagement.Status{}, errors.New("core management is unavailable")
+	}
+	return manager.core.Status(ctx)
+}
+
+func (manager *Manager) CoreSettings(
+	ctx context.Context,
+) (coremanagement.Settings, error) {
+	if manager.core == nil {
+		return coremanagement.Settings{}, errors.New("core management is unavailable")
+	}
+	return manager.core.Settings(ctx)
+}
+
+func (manager *Manager) UpdateCoreSettings(
+	ctx context.Context,
+	actorAdminID string,
+	settings coremanagement.Settings,
+) error {
+	if manager.core == nil {
+		return errors.New("core management is unavailable")
+	}
+	return manager.core.UpdateSettings(ctx, actorAdminID, settings)
+}
+
+func (manager *Manager) CheckCore(
+	ctx context.Context,
+	actorAdminID string,
+) (coremanagement.ReleaseIdentity, error) {
+	if manager.core == nil {
+		return coremanagement.ReleaseIdentity{}, errors.New("core management is unavailable")
+	}
+	return manager.core.Check(ctx, actorAdminID)
+}
+
+func (manager *Manager) UpdateCore(
+	ctx context.Context,
+	actorAdminID string,
+) (coremanagement.Manifest, bool, error) {
+	if manager.core == nil {
+		return coremanagement.Manifest{}, false, errors.New("core management is unavailable")
+	}
+	return manager.core.Update(ctx, actorAdminID)
+}
+
+func (manager *Manager) RollbackCore(
+	ctx context.Context,
+	actorAdminID string,
+) (coremanagement.Manifest, error) {
+	if manager.core == nil {
+		return coremanagement.Manifest{}, errors.New("core management is unavailable")
+	}
+	return manager.core.Rollback(ctx, actorAdminID)
 }
 
 func (manager *Manager) TestCore(

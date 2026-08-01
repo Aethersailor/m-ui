@@ -54,6 +54,8 @@ type Panel struct {
 
 type Mihomo struct {
 	BinaryPath        string `toml:"binary_path"`
+	ManagedCore       bool   `toml:"managed_core"`
+	ProcessMode       string `toml:"process_mode"`
 	ConfigDirectory   string `toml:"config_directory"`
 	ConfigPath        string `toml:"config_path"`
 	ControllerAddress string `toml:"controller_address"`
@@ -88,7 +90,9 @@ func Default() Config {
 			PublicHost: "localhost",
 		},
 		Mihomo: Mihomo{
-			BinaryPath:        "/usr/local/bin/mihomo",
+			BinaryPath:        "/var/lib/m-ui/core/current/mihomo",
+			ManagedCore:       true,
+			ProcessMode:       "auto",
 			ConfigDirectory:   "/etc/mihomo",
 			ConfigPath:        "/etc/mihomo/config.yaml",
 			ControllerAddress: "127.0.0.1:9090",
@@ -208,6 +212,21 @@ func (c Config) Validate() error {
 	}
 	if c.Mihomo.ServiceName != "mihomo.service" {
 		return fmt.Errorf("mihomo.service_name must be mihomo.service")
+	}
+	switch c.Mihomo.ProcessMode {
+	case "auto", "systemd", "openrc", "managed":
+	default:
+		return fmt.Errorf(
+			"mihomo.process_mode must be auto, systemd, openrc, or managed",
+		)
+	}
+	if c.Mihomo.ManagedCore &&
+		filepath.Clean(c.Mihomo.BinaryPath) != filepath.Clean(
+			"/var/lib/m-ui/core/current/mihomo",
+		) {
+		return fmt.Errorf(
+			"mihomo.binary_path must use the managed core path when managed_core is true",
+		)
 	}
 	if c.Mihomo.HistoryLimit < 1 || c.Mihomo.HistoryLimit > 100 {
 		return fmt.Errorf("mihomo.history_limit must be between 1 and 100")

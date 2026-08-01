@@ -153,12 +153,22 @@ func (managed *ManagedStore) EnsureInitialSettings(
 		{settingPanelAddress, settings.PanelListenAddress},
 		{settingPanelPort, strconv.Itoa(int(settings.PanelListenPort))},
 		{settingTrustedProxies, string(trustedProxies)},
-		{settingMihomoBinary, settings.MihomoBinaryPath},
 		{settingMihomoConfigDir, settings.MihomoConfigDir},
 		{settingMihomoConfigPath, settings.MihomoConfigPath},
 		{settingControllerAddress, settings.ControllerAddress},
 		{settingMihomoService, settings.MihomoServiceName},
 		{settingHistoryLimit, strconv.Itoa(settings.HistoryLimit)},
+	}
+	if _, err := transaction.ExecContext(
+		ctx,
+		`INSERT INTO settings(key, value, updated_at)
+		 VALUES (?, ?, ?)
+		 ON CONFLICT(key) DO NOTHING`,
+		settingMihomoBinary,
+		settings.MihomoBinaryPath,
+		formatTime(now),
+	); err != nil {
+		return fmt.Errorf("seed managed setting %q: %w", settingMihomoBinary, err)
 	}
 	for _, item := range advanced {
 		if _, err := transaction.ExecContext(
@@ -270,6 +280,28 @@ func (managed *ManagedStore) Settings(ctx context.Context) (RuntimeSettings, err
 		},
 		ControllerSecret: string(secret),
 	}, nil
+}
+
+func (managed *ManagedStore) SetMihomoBinaryPath(
+	ctx context.Context,
+	binaryPath string,
+	now time.Time,
+) error {
+	if strings.TrimSpace(binaryPath) == "" {
+		return errors.New("Mihomo binary path is required")
+	}
+	_, err := managed.store.db.ExecContext(
+		ctx,
+		`UPDATE settings SET value = ?, updated_at = ?
+		  WHERE key = ?`,
+		binaryPath,
+		formatTime(now),
+		settingMihomoBinary,
+	)
+	if err != nil {
+		return fmt.Errorf("update Mihomo binary path: %w", err)
+	}
+	return nil
 }
 
 func (managed *ManagedStore) ReadDesiredState(

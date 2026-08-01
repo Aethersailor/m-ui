@@ -62,9 +62,35 @@ Both long-running services run as dedicated non-root users:
   below 1024 without root;
 - the m-ui sudoers policy allows only start, stop, restart, reload, and
   is-active operations for the literal `mihomo.service` unit.
+- the Alpine doas policy allows only the equivalent literal
+  `/sbin/rc-service mihomo` operations;
+- the OCI image runs as `10001:10001`, drops all capabilities except
+  `NET_BIND_SERVICE`, and uses no init-system or package-management privilege.
 
 m-ui intentionally does not have a general shell, package-manager access,
 firewall access, or permission to manage arbitrary systemd units.
+
+The managed core tree is owned by `m-ui:mihomo`. Parent directories give
+Mihomo traversal/read/execute access to only the current verified binary while
+database, master key and revision data remain private to m-ui. The updater
+rejects symbolic links, group/other-writable files, unexpected owners, invalid
+manifests, oversized content and digest mismatches.
+
+## Build and update supply chain
+
+Runtime core resolution is fixed to the official `MetaCubeX/mihomo` repository
+and trusted GitHub HTTPS hosts. Redirect count, response sizes, asset sizes and
+decompressed sizes are bounded. Optional API tokens come only from
+`M_UI_GITHUB_TOKEN`, are never placed in URLs or logs, and are not copied into
+download requests.
+
+Release builds pin every GitHub Action by commit SHA. The build locks one
+Mihomo release identity, verifies its API digest, and executes each architecture
+on a native runner. tar, deb, apk and OCI artifacts use the same identity and
+m-ui commit. SPDX SBOMs and SHA-256 checksums accompany downloadable artifacts.
+The formal release workflow is manual, requires an exact semantic version and
+the exact current `origin/master` SHA, and can complete a dry run without
+creating any remote object.
 
 ## Logs and audit records
 

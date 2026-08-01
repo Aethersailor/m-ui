@@ -8,9 +8,77 @@ import (
 	"testing"
 	"time"
 
+	coremanagement "github.com/Aethersailor/m-ui/internal/core"
 	muicrypto "github.com/Aethersailor/m-ui/internal/crypto"
 	"github.com/Aethersailor/m-ui/internal/domain"
 )
+
+func TestCoreSettingsAndStateRoundTrip(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	database, err := Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	var key muicrypto.MasterKey
+	sealer, err := muicrypto.NewSealer(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	managed, err := NewManagedStore(database, sealer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Unix(100, 0).UTC()
+	settings := coremanagement.Settings{
+		Channel:       coremanagement.ChannelAlpha,
+		AutoUpdate:    true,
+		CheckInterval: 6 * time.Hour,
+		Managed:       true,
+	}
+	if err := managed.EnsureCoreSettings(ctx, settings, now); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := managed.CoreSettings(ctx)
+	if err != nil || stored != settings {
+		t.Fatalf("CoreSettings() = %#v, %v", stored, err)
+	}
+	identity := coremanagement.ReleaseIdentity{
+		Channel:           coremanagement.ChannelAlpha,
+		Repository:        coremanagement.UpstreamRepository,
+		ReleaseID:         1,
+		TagName:           coremanagement.AlphaTag,
+		Prerelease:        true,
+		PublishedAt:       now,
+		AssetID:           2,
+		AssetName:         "mihomo-linux-amd64-compatible-alpha.gz",
+		AssetSize:         3,
+		AssetDigestSHA256: strings.Repeat("a", 64),
+	}
+	next := now.Add(6 * time.Hour)
+	state := coremanagement.State{
+		Available:         &identity,
+		LastCheckAt:       &now,
+		LastCheckResult:   "success",
+		LastErrorRedacted: "secret=value",
+		NextCheckAt:       &next,
+		UpdateInProgress:  true,
+	}
+	if err := managed.SaveCoreState(ctx, state); err != nil {
+		t.Fatal(err)
+	}
+	storedState, err := managed.CoreState(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if storedState.Available == nil ||
+		storedState.Available.AssetDigestSHA256 != identity.AssetDigestSHA256 ||
+		storedState.LastErrorRedacted == "secret=value" ||
+		!storedState.UpdateInProgress {
+		t.Fatalf("CoreState() = %#v", storedState)
+	}
+}
 
 func TestManagedStoreRoundTripsEncryptedStateAndRevisionTransitions(t *testing.T) {
 	t.Parallel()

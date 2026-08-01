@@ -5,15 +5,17 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
-	"os/exec"
 	"strings"
 	"time"
 
 	"github.com/Aethersailor/m-ui/internal/config"
+	coremanagement "github.com/Aethersailor/m-ui/internal/core"
 	muicrypto "github.com/Aethersailor/m-ui/internal/crypto"
 	"github.com/Aethersailor/m-ui/internal/domain"
 	"github.com/Aethersailor/m-ui/internal/mihomo"
+	"github.com/Aethersailor/m-ui/internal/operation"
 	"github.com/Aethersailor/m-ui/internal/publisher"
 	"github.com/Aethersailor/m-ui/internal/store"
 )
@@ -24,6 +26,8 @@ type commandControlPlane struct {
 	cli        *mihomo.CLI
 	controller *mihomo.Controller
 	publisher  *publisher.Publisher
+	core       *coremanagement.Manager
+	process    mihomo.CoreProcess
 }
 
 func openCommandControlPlane(
@@ -63,7 +67,31 @@ func openCommandControlPlane(
 	if err != nil {
 		return nil, fmt.Errorf("load managed settings: %w", err)
 	}
-	cli, err := mihomo.NewCLI(settings.MihomoBinaryPath)
+	coreDefaults := coremanagement.Settings{
+		Channel:       coremanagement.ChannelRelease,
+		AutoUpdate:    false,
+		CheckInterval: coremanagement.DefaultCheckInterval,
+		Managed:       cfg.Mihomo.ManagedCore,
+	}
+	if !coreDefaults.Managed {
+		coreDefaults.ExternalPath = settings.MihomoBinaryPath
+	}
+	if err := managed.EnsureCoreSettings(
+		ctx,
+		coreDefaults,
+		time.Now().UTC(),
+	); err != nil {
+		return nil, fmt.Errorf("initialize core settings: %w", err)
+	}
+	coreSettings, err := managed.CoreSettings(ctx)
+	if err != nil {
+		return nil, err
+	}
+	binaryPath := coreSettings.ExternalPath
+	if coreSettings.Managed {
+		binaryPath = coremanagement.ManagedBinaryPath
+	}
+	cli, err := mihomo.NewCLI(binaryPath)
 	if err != nil {
 		return nil, fmt.Errorf("initialize Mihomo CLI: %w", err)
 	}
@@ -74,9 +102,49 @@ func openCommandControlPlane(
 	if err != nil {
 		return nil, fmt.Errorf("initialize Mihomo Controller: %w", err)
 	}
-	process, err := mihomo.NewSystemdProcess(settings.MihomoServiceName)
+	process, err := mihomo.NewProcess(
+		ctx,
+		cfg.Mihomo.ProcessMode,
+		binaryPath,
+		settings.MihomoConfigPath,
+		settings.MihomoServiceName,
+		slog.Default(),
+	)
 	if err != nil {
-		return nil, fmt.Errorf("initialize systemd adapter: %w", err)
+		return nil, fmt.Errorf("initialize process adapter: %w", err)
+	}
+	coordinator, err := operation.NewFileCoordinator(
+		"/var/lib/m-ui/runtime-operation.lock",
+	)
+	if err != nil {
+		return nil, err
+	}
+	files, err := coremanagement.NewFileStore("/var/lib/m-ui/core")
+	if err != nil {
+		return nil, err
+	}
+	upstream, err := coremanagement.NewGitHubClient(
+		coremanagement.GitHubClientOptions{},
+	)
+	if err != nil {
+		return nil, err
+	}
+	coreManager, err := coremanagement.NewManager(
+		coremanagement.ManagerOptions{
+			Repository:  managed,
+			Upstream:    upstream,
+			Files:       files,
+			Process:     process,
+			Controller:  controller,
+			Coordinator: coordinator,
+			ConfigPath:  settings.MihomoConfigPath,
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+	if err := coreManager.Recover(ctx); err != nil {
+		return nil, err
 	}
 	configurationPublisher, err := publisher.New(
 		managed,
@@ -90,6 +158,7 @@ func openCommandControlPlane(
 			HistoryLimit:      settings.HistoryLimit,
 			HealthTimeout:     10 * time.Second,
 			HealthInterval:    250 * time.Millisecond,
+			Coordinator:       coordinator,
 		},
 	)
 	if err != nil {
@@ -102,6 +171,8 @@ func openCommandControlPlane(
 		cli:        cli,
 		controller: controller,
 		publisher:  configurationPublisher,
+		core:       coreManager,
+		process:    process,
 	}, nil
 }
 
@@ -174,7 +245,15 @@ func Doctor(
 		{
 			name: "Mihomo binary",
 			run: func() error {
-				info, err := os.Stat(cfg.Mihomo.BinaryPath)
+				coreSettings, err := plane.managed.CoreSettings(ctx)
+				if err != nil {
+					return err
+				}
+				binaryPath := coreSettings.ExternalPath
+				if coreSettings.Managed {
+					binaryPath = coremanagement.ManagedBinaryPath
+				}
+				info, err := os.Stat(binaryPath)
 				if err != nil {
 					return err
 				}
@@ -238,40 +317,14 @@ func Doctor(
 			},
 		},
 		{
-			name: "mihomo.service",
+			name: "Mihomo process adapter",
 			run: func() error {
-				command := exec.CommandContext(
-					ctx,
-					"/usr/bin/systemctl",
-					"show",
-					"--property=LoadState",
-					"--value",
-					"mihomo.service",
-				)
-				value, err := command.Output()
+				active, err := plane.process.IsActive(ctx)
 				if err != nil {
-					return errors.New("query mihomo.service")
+					return err
 				}
-				if strings.TrimSpace(string(value)) != "loaded" {
-					return errors.New("mihomo.service is not loaded")
-				}
-				return nil
-			},
-		},
-		{
-			name: "restricted sudoers command",
-			run: func() error {
-				command := exec.CommandContext(
-					ctx,
-					"/usr/bin/sudo",
-					"-n",
-					"-l",
-					"/usr/bin/systemctl",
-					"restart",
-					"mihomo.service",
-				)
-				if err := command.Run(); err != nil {
-					return errors.New("fixed Mihomo systemctl command is not allowed")
+				if !active {
+					return errors.New("Mihomo process is not active")
 				}
 				return nil
 			},

@@ -11,7 +11,7 @@ Group=mihomo
 WorkingDirectory=/var/lib/mihomo
 Environment=HOME=/var/lib/mihomo
 Environment=SAFE_PATHS=/etc/mihomo
-ExecStart=/usr/local/bin/mihomo -d /var/lib/mihomo -f /etc/mihomo/config.yaml
+ExecStart=/var/lib/m-ui/core/current/mihomo -d /var/lib/mihomo -f /etc/mihomo/config.yaml
 ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure
 RestartSec=3s

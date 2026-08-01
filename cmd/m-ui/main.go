@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/Aethersailor/m-ui/internal/app"
 	"github.com/Aethersailor/m-ui/internal/config"
+	coremanagement "github.com/Aethersailor/m-ui/internal/core"
 	"github.com/Aethersailor/m-ui/internal/version"
 )
 
@@ -25,6 +27,11 @@ Usage:
   m-ui admin reset-password --password-file <path> [--username admin]
   m-ui config validate [--config /etc/m-ui/config.toml]
   m-ui config rollback --config /etc/m-ui/config.toml <revision-id>
+  m-ui core status [--json] [--config /etc/m-ui/config.toml]
+  m-ui core check [--json] [--config /etc/m-ui/config.toml]
+  m-ui core update [--json] [--config /etc/m-ui/config.toml]
+  m-ui core rollback [--json] [--config /etc/m-ui/config.toml]
+  m-ui core bootstrap [--binary PATH] [--manifest PATH] [--json]
 `
 
 func main() {
@@ -52,6 +59,8 @@ func run(args []string) error {
 		return runDoctor(args[1:])
 	case "config":
 		return runConfig(args[1:])
+	case "core":
+		return runCore(args[1:])
 	case "help", "-h", "--help":
 		fmt.Print(usage)
 		return nil
@@ -59,6 +68,139 @@ func run(args []string) error {
 		fmt.Fprint(os.Stderr, usage)
 		return fmt.Errorf("unknown command %q", args[0])
 	}
+}
+
+func runCore(args []string) error {
+	if len(args) == 0 {
+		fmt.Fprint(os.Stderr, usage)
+		return errors.New("core requires status, check, update, rollback, or bootstrap")
+	}
+	command := args[0]
+	flags := flag.NewFlagSet("core "+command, flag.ContinueOnError)
+	flags.SetOutput(os.Stderr)
+	configPath := flags.String("config", "", "path to the m-ui TOML configuration")
+	jsonOutput := flags.Bool("json", false, "emit machine-readable JSON")
+	binaryPath := flags.String(
+		"binary",
+		"/usr/lib/m-ui/bootstrap/mihomo",
+		"verified bootstrap Mihomo binary",
+	)
+	manifestPath := flags.String(
+		"manifest",
+		"/usr/share/m-ui/bootstrap/manifest.json",
+		"verified bootstrap Mihomo manifest",
+	)
+	channelValue := flags.String(
+		"channel",
+		"release",
+		"managed core channel: release or alpha",
+	)
+	autoUpdateValue := flags.String(
+		"auto-update",
+		"off",
+		"managed core automatic update: on or off",
+	)
+	checkIntervalValue := flags.String(
+		"check-interval",
+		"24h",
+		"managed core check interval: 6h, 12h, 24h, or 168h",
+	)
+	if err := flags.Parse(args[1:]); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		return errors.New("core commands accept no positional arguments")
+	}
+	cfg, err := config.Load(*configPath)
+	if err != nil {
+		return fmt.Errorf("load configuration: %w", err)
+	}
+	timeout := 60 * time.Second
+	if command == "update" {
+		timeout = 5 * time.Minute
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	var output any
+	switch command {
+	case "status":
+		output, err = app.CoreStatus(ctx, cfg)
+	case "check":
+		output, err = app.CoreCheck(ctx, cfg)
+	case "update":
+		var changed bool
+		var manifest any
+		manifest, changed, err = app.CoreUpdate(ctx, cfg)
+		output = struct {
+			Changed  bool `json:"changed"`
+			Manifest any  `json:"manifest"`
+		}{Changed: changed, Manifest: manifest}
+	case "rollback":
+		output, err = app.CoreRollback(ctx, cfg)
+	case "bootstrap":
+		var changed bool
+		var manifest any
+		manifest, changed, err = app.CoreBootstrap(
+			ctx,
+			cfg,
+			*binaryPath,
+			*manifestPath,
+		)
+		output = struct {
+			Changed  bool `json:"changed"`
+			Manifest any  `json:"manifest"`
+		}{Changed: changed, Manifest: manifest}
+		if err == nil {
+			channel, channelErr := coremanagement.ParseChannel(*channelValue)
+			if channelErr != nil {
+				return channelErr
+			}
+			autoUpdate := false
+			switch *autoUpdateValue {
+			case "on":
+				autoUpdate = true
+			case "off":
+			default:
+				return errors.New("--auto-update must be on or off")
+			}
+			interval, intervalErr := time.ParseDuration(*checkIntervalValue)
+			if intervalErr != nil ||
+				coremanagement.ValidateCheckInterval(interval) != nil {
+				return errors.New(
+					"--check-interval must be 6h, 12h, 24h, or 168h",
+				)
+			}
+			err = app.ConfigureCore(
+				ctx,
+				cfg,
+				channel,
+				autoUpdate,
+				interval,
+			)
+		}
+	default:
+		return fmt.Errorf("unknown core command %q", command)
+	}
+	if err != nil {
+		return err
+	}
+	if *jsonOutput {
+		encoder := json.NewEncoder(os.Stdout)
+		encoder.SetIndent("", "  ")
+		return encoder.Encode(output)
+	}
+	switch value := output.(type) {
+	case interface{ String() string }:
+		fmt.Println(value.String())
+	default:
+		encoded, encodeErr := json.MarshalIndent(output, "", "  ")
+		if encodeErr != nil {
+			return encodeErr
+		}
+		fmt.Println(string(encoded))
+	}
+	return nil
 }
 
 func runDoctor(args []string) error {

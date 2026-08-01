@@ -1,0 +1,11 @@
+.git
+.github
+.cache
+dist
+packaging/bootstrap/*/asset.gz
+web/node_modules
+internal/httpapi/ui/dist
+coverage
+*.db
+*.log
+master.key

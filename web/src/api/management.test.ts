@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 
-import { setListenerEnabled } from './management'
+import { setListenerEnabled, updateCore } from './management'
 
 describe('management API', () => {
   it('sends authenticated mutations with the CSRF header', async () => {
@@ -48,6 +48,41 @@ describe('management API', () => {
     expect(init.credentials).toBe('same-origin')
     expect(new Headers(init.headers).get('X-CSRF-Token')).toBe(
       'synthetic-csrf-token',
+    )
+  })
+
+  it('routes core updates through the authenticated CSRF mutation path', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          changed: false,
+          manifest: {
+            schema_version: 1,
+            source: 'bootstrap',
+            verified_source: true,
+            compressed_sha256: 'a'.repeat(64),
+            binary_sha256: 'b'.repeat(64),
+            binary_size: 123,
+            binary_reported_version: 'Mihomo Meta v1.0.0',
+            installed_at: '2026-07-30T00:00:00Z',
+          },
+        }),
+        {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        },
+      ),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const result = await updateCore('synthetic-core-csrf')
+
+    expect(result.changed).toBe(false)
+    const [path, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(path).toBe('/api/v1/system/core/update')
+    expect(init.method).toBe('POST')
+    expect(new Headers(init.headers).get('X-CSRF-Token')).toBe(
+      'synthetic-core-csrf',
     )
   })
 })

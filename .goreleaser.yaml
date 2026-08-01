@@ -1,0 +1,185 @@
+version: 2
+
+project_name: m-ui
+
+builds:
+  - id: m-ui
+    main: ./cmd/m-ui
+    binary: m-ui
+    tags:
+      - webembed
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -trimpath
+    ldflags:
+      - >-
+        -s -w
+        -X github.com/Aethersailor/m-ui/internal/version.version={{ .Version }}
+        -X github.com/Aethersailor/m-ui/internal/version.commit={{ .ShortCommit }}
+        -X github.com/Aethersailor/m-ui/internal/version.date={{ .Date }}
+        -X github.com/Aethersailor/m-ui/internal/version.dirty=false
+
+archives:
+  - id: native
+    ids:
+      - m-ui
+    formats:
+      - tar.gz
+    name_template: "m-ui_{{ .Version }}_linux_{{ .Arch }}"
+    files:
+      - src: README.md
+      - src: LICENSE
+      - src: THIRD_PARTY_NOTICES.md
+      - src: docs/**/*
+        dst: docs
+      - src: deploy/**/*
+        dst: deploy
+      - src: scripts/manage.sh
+        dst: scripts
+      - src: scripts/install.sh
+        dst: scripts
+      - src: scripts/uninstall.sh
+        dst: scripts
+      - src: packaging/bootstrap/linux_{{ .Arch }}/mihomo
+        dst: bootstrap
+      - src: packaging/bootstrap/linux_{{ .Arch }}/manifest.json
+        dst: bootstrap
+
+nfpms:
+  - id: linux-packages
+    ids:
+      - m-ui
+    package_name: m-ui
+    file_name_template: "m-ui_{{ .Version }}_linux_{{ .Arch }}"
+    vendor: Aethersailor
+    homepage: https://github.com/Aethersailor/m-ui
+    maintainer: Aethersailor
+    description: Focused single-host Mihomo management interface
+    license: GPL-3.0
+    formats:
+      - deb
+      - apk
+    bindir: /usr/bin
+    contents:
+      - src: packaging/bootstrap/linux_{{ .Arch }}/mihomo
+        dst: /usr/lib/m-ui/bootstrap/mihomo
+        file_info:
+          mode: 0755
+          owner: root
+          group: root
+      - src: packaging/bootstrap/linux_{{ .Arch }}/manifest.json
+        dst: /usr/share/m-ui/bootstrap/manifest.json
+        file_info:
+          mode: 0644
+          owner: root
+          group: root
+      - src: scripts/manage.sh
+        dst: /usr/lib/m-ui/manage.sh
+        file_info:
+          mode: 0755
+          owner: root
+          group: root
+      - src: scripts/install.sh
+        dst: /usr/lib/m-ui/install.sh
+        file_info:
+          mode: 0755
+          owner: root
+          group: root
+      - src: scripts/uninstall.sh
+        dst: /usr/lib/m-ui/uninstall.sh
+        file_info:
+          mode: 0755
+          owner: root
+          group: root
+      - src: deploy/examples/config.toml
+        dst: /usr/share/doc/m-ui/config.toml.example
+      - src: README.md
+        dst: /usr/share/doc/m-ui/README.md
+      - src: LICENSE
+        dst: /usr/share/doc/m-ui/LICENSE
+      - src: THIRD_PARTY_NOTICES.md
+        dst: /usr/share/doc/m-ui/THIRD_PARTY_NOTICES.md
+      - src: deploy/systemd/m-ui.service
+        dst: /lib/systemd/system/m-ui.service
+        packager: deb
+      - src: deploy/systemd/mihomo.service
+        dst: /lib/systemd/system/mihomo.service
+        packager: deb
+      - src: deploy/sudoers/m-ui
+        dst: /etc/sudoers.d/m-ui
+        packager: deb
+        file_info:
+          mode: 0440
+          owner: root
+          group: root
+      - src: deploy/openrc/m-ui
+        dst: /etc/init.d/m-ui
+        packager: apk
+        file_info:
+          mode: 0755
+          owner: root
+          group: root
+      - src: deploy/openrc/mihomo
+        dst: /etc/init.d/mihomo
+        packager: apk
+        file_info:
+          mode: 0755
+          owner: root
+          group: root
+      - src: deploy/doas/m-ui.conf
+        dst: /etc/doas.d/m-ui.conf
+        packager: apk
+        file_info:
+          mode: 0400
+          owner: root
+          group: root
+    scripts:
+      preinstall: deploy/package/preinstall.sh
+      postinstall: deploy/package/postinstall.sh
+      preremove: deploy/package/preremove.sh
+      postremove: deploy/package/postremove.sh
+    overrides:
+      deb:
+        dependencies:
+          - ca-certificates
+          - curl
+          - sudo
+          - tzdata
+      apk:
+        dependencies:
+          - ca-certificates
+          - curl
+          - doas
+          - libcap
+          - openrc
+          - su-exec
+          - tzdata
+
+checksum:
+  name_template: SHA256SUMS
+  algorithm: sha256
+
+sboms:
+  - id: archive-sbom
+    artifacts: archive
+    documents:
+      - "{{ .ArtifactName }}.sbom.spdx.json"
+  - id: package-sbom
+    artifacts: package
+    documents:
+      - "{{ .ArtifactName }}.sbom.spdx.json"
+
+snapshot:
+  version_template: "0.1.0-snapshot-{{ .ShortCommit }}"
+
+changelog:
+  disable: true
+
+release:
+  disable: true

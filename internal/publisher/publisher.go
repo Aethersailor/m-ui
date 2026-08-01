@@ -17,6 +17,7 @@ import (
 
 	"github.com/Aethersailor/m-ui/internal/domain"
 	"github.com/Aethersailor/m-ui/internal/mihomo"
+	"github.com/Aethersailor/m-ui/internal/operation"
 	"github.com/Aethersailor/m-ui/internal/redact"
 	"github.com/Aethersailor/m-ui/internal/store"
 )
@@ -48,18 +49,20 @@ type Options struct {
 	HealthTimeout     time.Duration
 	HealthInterval    time.Duration
 	Logger            *slog.Logger
+	Coordinator       *operation.Coordinator
 }
 
 type Publisher struct {
-	repository store.PublicationRepository
-	compiler   Compiler
-	cli        mihomo.CoreCLI
-	controller mihomo.CoreController
-	process    mihomo.CoreProcess
-	options    Options
-	logger     *slog.Logger
-	now        func() time.Time
-	mutex      sync.Mutex
+	repository  store.PublicationRepository
+	compiler    Compiler
+	cli         mihomo.CoreCLI
+	controller  mihomo.CoreController
+	process     mihomo.CoreProcess
+	options     Options
+	logger      *slog.Logger
+	now         func() time.Time
+	mutex       sync.Mutex
+	coordinator *operation.Coordinator
 }
 
 type publicationFileState struct {
@@ -119,15 +122,19 @@ func New(
 	if options.Logger == nil {
 		options.Logger = slog.Default()
 	}
+	if options.Coordinator == nil {
+		options.Coordinator = operation.NewCoordinator()
+	}
 	return &Publisher{
-		repository: repository,
-		compiler:   compiler,
-		cli:        cli,
-		controller: controller,
-		process:    process,
-		options:    options,
-		logger:     options.Logger,
-		now:        func() time.Time { return time.Now().UTC() },
+		repository:  repository,
+		compiler:    compiler,
+		cli:         cli,
+		controller:  controller,
+		process:     process,
+		options:     options,
+		logger:      options.Logger,
+		now:         func() time.Time { return time.Now().UTC() },
+		coordinator: options.Coordinator,
 	}, nil
 }
 
@@ -135,6 +142,11 @@ func (publisher *Publisher) Publish(
 	ctx context.Context,
 	request Request,
 ) (domain.Revision, error) {
+	release, err := publisher.coordinator.Acquire(ctx)
+	if err != nil {
+		return domain.Revision{}, err
+	}
+	defer release()
 	publisher.mutex.Lock()
 	defer publisher.mutex.Unlock()
 	return publisher.publishLocked(ctx, request)
@@ -208,6 +220,11 @@ func (publisher *Publisher) ValidateCurrent(
 }
 
 func (publisher *Publisher) ReconcileStartup(ctx context.Context) error {
+	release, err := publisher.coordinator.Acquire(ctx)
+	if err != nil {
+		return err
+	}
+	defer release()
 	publisher.mutex.Lock()
 	defer publisher.mutex.Unlock()
 
@@ -399,25 +416,42 @@ func (publisher *Publisher) clearStartupDegraded(
 	revisionID string,
 ) error {
 	clearContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-	defer cancel()
-	if err := publisher.repository.ClearDegraded(
+	err := publisher.repository.ClearDegraded(
 		clearContext,
 		publisher.now().UTC(),
-	); err != nil {
+	)
+	// The compensation must not inherit a context that may already have been
+	// consumed by ClearDegraded. Release it before allocating a fresh,
+	// independently bounded context.
+	cancel()
+	if err != nil {
 		reason := "verified startup recovery completed but degraded state could not be cleared"
+		markContext, markCancel := context.WithTimeout(
+			context.WithoutCancel(ctx),
+			5*time.Second,
+		)
 		markErr := publisher.repository.MarkDegraded(
-			clearContext,
+			markContext,
 			reason,
 			revisionID,
 			publisher.now().UTC(),
 		)
-		return errors.Join(
-			fmt.Errorf(
-				"%w: clear degraded state after verified startup recovery: %s",
-				ErrStartupDegraded,
+		markCancel()
+		if markErr != nil {
+			// This is a fatal consistency failure: the verified YAML and the
+			// persisted degraded bit disagree, and the compensation could not
+			// restore fail-closed state. Deliberately do not wrap or join
+			// ErrStartupDegraded; callers must refuse to start HTTP or runners.
+			return fmt.Errorf(
+				"startup state consistency failure: clear degraded state: %s; persist degraded compensation: %s",
 				redact.Text(err.Error()),
-			),
-			markErr,
+				redact.Text(markErr.Error()),
+			)
+		}
+		return fmt.Errorf(
+			"%w: clear degraded state after verified startup recovery: %s",
+			ErrStartupDegraded,
+			redact.Text(err.Error()),
 		)
 	}
 	return nil
@@ -450,6 +484,11 @@ func (publisher *Publisher) Rollback(
 	ctx context.Context,
 	revisionID, actorAdminID string,
 ) (domain.Revision, error) {
+	release, err := publisher.coordinator.Acquire(ctx)
+	if err != nil {
+		return domain.Revision{}, err
+	}
+	defer release()
 	publisher.mutex.Lock()
 	defer publisher.mutex.Unlock()
 

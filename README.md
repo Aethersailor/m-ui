@@ -1,398 +1,258 @@
 # m-ui
 
-一个用于管理 Mihomo 服务端节点的轻量级 Web 面板。
+m-ui 是一个面向单台服务器、单个 Mihomo 实例的轻量级管理面板。它以
+SQLite 中的结构化状态为事实来源，确定性生成 Mihomo YAML，并通过校验、原子
+发布、健康检查和自动回滚来管理 VLESS/TCP/REALITY/XTLS Vision 节点。
 
-m-ui 面向希望使用 Mihomo 搭建和管理自建节点的用户，提供 Listener、用户、到期时间、分享链接、二维码、运行状态和配置回滚等常用功能。
+## v0.1 能做什么
 
-它不是通用 Mihomo 配置编辑器，也不是多节点集群面板。m-ui v0.1 专注于把单台服务器上的节点管理做得简单、可靠并且可恢复。
+- 管理多个 VLESS REALITY Listener 和每个 Listener 的多个用户；
+- 生成 UUID、REALITY 密钥、Short ID、分享链接、二维码和客户端 YAML；
+- 管理用户启用状态和到期时间，并批量发布到期变更；
+- 查看实例级版本、流量、内存、连接数和脱敏日志；
+- 通过 systemd、OpenRC 或容器内监督器管理一个本地 Mihomo 进程；
+- 在发布前执行固定参数的真实 `mihomo -t` 校验；
+- 保存结构化 Revision，支持配置回滚和启动一致性恢复；
+- 管理 Mihomo 核心的 release/alpha 检查、更新和回滚；
+- 提供中英文界面、深浅色主题和移动端布局。
 
-## 主要功能
+m-ui 不是通用 YAML 编辑器、订阅聚合器、多节点控制器或用户计费系统。v0.1
+不支持其他协议/传输、多管理员 RBAC、公开订阅端点、精确用户流量、配额、限速
+或任意第三方 YAML 导入。
 
-- 管理多个 VLESS REALITY Listener，未来增加更多协议
-- 每个 Listener 可添加多个用户
-- 支持用户启用、停用和到期时间
-- 自动生成 UUID、REALITY 密钥和 Short ID
-- 生成 VLESS 分享链接和二维码
-- 生成 Mihomo 客户端 YAML
-- 查看 Mihomo 服务状态、版本、内存、流量和连接数
-- 在面板中启动、停止、重启或重载 Mihomo
-- 配置发布前自动执行真实的 `mihomo -t` 校验
-- 保存配置历史，并支持一键回滚
-- 记录登录、配置修改和服务操作日志
-- 支持简体中文、英文、浅色和深色主题
-- 支持桌面端和移动端浏览器
+## 支持平台与产物
 
-## 当前支持范围
+正式产物仅面向 Linux `amd64` 和 `arm64`：
 
-m-ui v0.1 当前支持：
+- Debian 12+、Ubuntu 24.04+：systemd、`.deb` 或 `.tar.gz`；
+- Alpine 3.20+：OpenRC、`.apk` 或 `.tar.gz`；
+- OCI/Docker：非 root、双架构镜像，容器内直接监督 Mihomo。
 
-```text
-VLESS
-└── TCP
-    └── REALITY
-        └── XTLS Vision
-```
+每个正式或快照构建锁定同一个官方 Mihomo release identity，再分别在原生
+amd64/arm64 Runner 下载、校验 SHA-256、执行 `mihomo -v` 和 `mihomo -t`。
+归档、deb、apk、SBOM、校验和及容器镜像都来自同一 m-ui 提交。
 
-运行环境：
+## 原生安装
 
-- Debian 12 或更高版本
-- Ubuntu 24.04 或更高版本
-- systemd
-- amd64
-- arm64
-
-m-ui 和 Mihomo 以两个独立的 systemd 服务运行。
-
-## 快速安装
-
-从 Release 页面选择需要安装的版本，将下面的 `v0.1.0` 替换为对应版本号：
+从目标 GitHub Release 下载 `manage.sh` 与 `SHA256SUMS`，先验证脚本，再安装：
 
 ```sh
 version=v0.1.0
+base="https://github.com/Aethersailor/m-ui/releases/download/${version}"
 
-curl -fLO "https://github.com/Aethersailor/m-ui/releases/download/${version}/install.sh"
-curl -fLO "https://github.com/Aethersailor/m-ui/releases/download/${version}/SHA256SUMS"
+curl --fail --location --proto '=https' -O "${base}/manage.sh"
+curl --fail --location --proto '=https' -O "${base}/SHA256SUMS"
+grep ' manage.sh$' SHA256SUMS | sha256sum --check
 
-grep ' install.sh$' SHA256SUMS | sha256sum -c -
-sudo sh install.sh --version "$version"
+chmod 0755 manage.sh
+sudo ./manage.sh install --version "$version" --package auto
 ```
 
-安装脚本会自动完成：
+安装器仅接受官方 HTTPS 下载地址，校验所选包的 SHA-256，拒绝路径穿越归档，
+创建独立的 `m-ui`/`mihomo` 用户，初始化已校验核心、配置、数据库目录和服务
+文件，并执行健康检查。它不会修改 SSH、防火墙、反向代理、证书或 Cloudflare。
+全新安装会输出一次性 `admin` 密码；自动化环境可传入权限受限的
+`--admin-password-file PATH`，此时脚本不会回显密码内容。
 
-- 安装 m-ui
-- 安装或复用 Mihomo
-- 创建独立的系统用户
-- 安装并启用 systemd 服务
-- 生成管理员初始密码
-- 生成 Mihomo Controller 密钥
-- 校验初始 Mihomo 配置
-- 启动并检查两个服务
+常用生命周期命令：
 
-安装完成后，终端会显示：
-
-```text
-Panel: http://127.0.0.1:2095/
-Username: admin
-One-time initial password: <初始密码>
+```sh
+sudo ./manage.sh status
+sudo ./manage.sh doctor
+sudo ./manage.sh update --version v0.1.1
+sudo ./manage.sh reinstall --version v0.1.1
+sudo ./manage.sh uninstall
+sudo ./manage.sh purge --yes
 ```
 
-初始密码只显示一次，请及时保存。
+`uninstall` 只移除程序和服务文件，保留 `/etc/m-ui`、`/etc/mihomo`、
+`/var/lib/m-ui` 和 `/var/lib/mihomo`。只有显式 `purge` 才删除这些数据。
 
-> [!NOTE]
-> 安装脚本不会修改 SSH、防火墙、反向代理、TLS 证书或 Cloudflare 配置。
+也可以使用已经下载并自行校验的本地产物：
+
+```sh
+sudo ./manage.sh install \
+  --package tar \
+  --archive ./m-ui_0.1.0_linux_amd64.tar.gz \
+  --sha256 <64位SHA-256>
+```
 
 ## 访问面板
 
-m-ui 默认只监听：
-
-```text
-127.0.0.1:2095
-```
-
-首次使用建议通过 SSH 隧道访问：
+原生部署默认仅监听 `127.0.0.1:2095`。首次访问建议使用 SSH 隧道：
 
 ```sh
 ssh -L 2095:127.0.0.1:2095 user@server
 ```
 
-然后在本机浏览器打开：
+然后打开 `http://127.0.0.1:2095/`。长期域名访问请使用自行维护的 HTTPS
+反向代理，并将 `/etc/m-ui/config.toml` 中的 `cookie_secure` 设为 `true`。
+不要将 Mihomo Controller 的 `127.0.0.1:9090` 暴露到公网。
+
+反向代理示例见 [docs/reverse-proxy.md](docs/reverse-proxy.md)。
+
+## Mihomo 核心管理
+
+核心文件由 m-ui 管理在：
 
 ```text
-http://127.0.0.1:2095/
+/var/lib/m-ui/core/current/
+/var/lib/m-ui/core/staging/
+/var/lib/m-ui/core/backups/
 ```
 
-需要通过域名长期访问时，请自行配置 Caddy 或 Nginx HTTPS 反向代理，并保持 m-ui 继续监听本机回环地址。
-
-启用 HTTPS 后，应修改：
-
-```text
-/etc/m-ui/config.toml
-```
-
-将以下配置设为：
-
-```toml
-[security]
-cookie_secure = true
-```
-
-随后重启 m-ui：
+面板“系统”页可查看实际运行版本、来源、渠道、上游身份、最近检查/更新结果，
+并执行检查、更新或回滚。CLI 等价命令为：
 
 ```sh
-sudo systemctl restart m-ui
+sudo -u m-ui /usr/bin/m-ui core status \
+  --config /etc/m-ui/config.toml --json
+sudo -u m-ui /usr/bin/m-ui core check \
+  --config /etc/m-ui/config.toml
+sudo -u m-ui /usr/bin/m-ui core update \
+  --config /etc/m-ui/config.toml
+sudo -u m-ui /usr/bin/m-ui core rollback \
+  --config /etc/m-ui/config.toml
 ```
 
-反向代理示例见：
+支持 `release` 和滚动的 `alpha` 渠道。alpha 以 release ID、资产 ID 和摘要
+识别，而不是只比较固定 tag。更新器只访问固定的官方 GitHub API/下载主机，
+要求资产元数据提供可信 SHA-256，限制响应、下载和解压大小，拒绝符号链接和
+异常所有者/权限，并在候选上依次执行版本与配置校验。激活、运行验证或持久化
+失败会恢复上一核心；恢复失败才进入 degraded 状态。
 
-[docs/reverse-proxy.md](docs/reverse-proxy.md)
+配置发布、核心更新/回滚和运行时动作共用一个协调器，冲突操作返回忙碌，不会
+并发替换核心或配置。degraded 状态下禁止写操作和自动核心更新。
 
-> [!WARNING]
-> 不要将 Mihomo Controller 的 `9090` 端口暴露到公网。
+## Docker/Compose
 
-## 基本使用流程
+Compose 示例位于 [deploy/docker/compose.yml](deploy/docker/compose.yml)：
 
-登录面板后，通常按照以下顺序使用：
+```sh
+cd deploy/docker
+printf '%s\n' 'replace-with-a-strong-password' > admin-password.txt
+chmod 0600 admin-password.txt
+docker compose up -d
+docker compose ps
+```
 
-1. 新建 Listener
-2. 设置监听端口、Server Name、目标地址等 REALITY 参数
-3. 新建用户并设置名称、UUID 和到期时间
-4. 保存配置
-5. 复制分享链接、二维码或 Mihomo 客户端 YAML
-6. 在客户端导入并连接
+镜像使用 UID/GID `10001:10001`，丢弃全部 capability 后只添加
+`NET_BIND_SERVICE`，启用 `no-new-privileges`，不包含 Go/Node 构建工具链或
+源码。Compose 使用 host network，以便动态 Listener 直接绑定宿主端口；这也
+意味着必须自行维护宿主机防火墙。Controller 始终位于容器网络命名空间回环。
 
-保存 Listener 或用户时，m-ui 会先生成候选配置，再调用 Mihomo 对配置进行校验。
+以下四个目录必须持久化：
 
-只有校验和服务健康检查全部通过后，新配置才会正式生效。失败时会自动恢复上一份可用配置。
+```text
+/etc/m-ui
+/etc/mihomo
+/var/lib/m-ui
+/var/lib/mihomo
+```
 
-## 用户到期
+详情见 [deploy/docker/README.md](deploy/docker/README.md)。
 
-m-ui 会定期检查用户到期时间。
+## 配置发布与故障闭锁
 
-用户到期后会被自动停用。若某个已启用 Listener 的最后一个有效用户因本次到期检查被停用，该 Listener 也会自动停用。
+所有 Listener、用户、设置和到期变更都进入同一个发布事务：
 
-为已经停用的 Listener 新增用户时，Listener 不会自动重新启用，需要管理员手动确认并启用。
+1. 从 SQLite 读取并变更类型化状态；
+2. 生成同文件系统候选 YAML 并 fsync；
+3. 以固定参数运行真实 `mihomo -t -f <candidate>`；
+4. 原子替换、重载、健康检查并写入 Revision；
+5. 提交 SQLite；失败时同时恢复活动文件和结构化状态。
 
-## 服务管理
+如果 SQLite `COMMIT` 返回不确定结果，m-ui 会使用独立、有限时恢复上下文重新
+读取持久化状态并分类处理。若恢复动作失败，必须先成功持久化 degraded 状态；
+若 degraded 持久化也失败，进程启动会直接失败，绝不会在内存中假装 degraded
+并继续提供写服务。
 
-查看服务状态：
+## 服务、诊断和日志
+
+systemd：
 
 ```sh
 sudo systemctl status m-ui mihomo
-```
-
-查看日志：
-
-```sh
 sudo journalctl -u m-ui -u mihomo --since today
+sudo -u m-ui /usr/bin/m-ui doctor --config /etc/m-ui/config.toml
 ```
 
-重启 m-ui：
+OpenRC：
 
 ```sh
-sudo systemctl restart m-ui
+sudo rc-service m-ui status
+sudo rc-service mihomo status
+sudo tail -n 200 /var/log/m-ui.log /var/log/mihomo.log
+sudo -u m-ui /usr/bin/m-ui doctor --config /etc/m-ui/config.toml
 ```
 
-重启 Mihomo：
+配置历史回滚：
 
 ```sh
-sudo systemctl restart mihomo
+sudo -u m-ui /usr/bin/m-ui config rollback \
+  --config /etc/m-ui/config.toml REVISION_ID
 ```
 
-运行诊断：
-
-```sh
-sudo -u m-ui /usr/local/bin/m-ui doctor \
-  --config /etc/m-ui/config.toml
-```
-
-校验当前数据库生成的配置：
-
-```sh
-sudo -u m-ui /usr/local/bin/m-ui config validate \
-  --config /etc/m-ui/config.toml
-```
-
-## 重置管理员密码
-
-为避免新密码进入 Shell 历史，可以使用临时文件：
+管理员密码重置建议使用权限为 `0600` 的临时密码文件，避免进入 Shell 历史：
 
 ```sh
 sudo install -o m-ui -g m-ui -m 0600 /dev/null /var/lib/m-ui/new-password
 sudoedit /var/lib/m-ui/new-password
-
-sudo -u m-ui /usr/local/bin/m-ui admin reset-password \
+sudo -u m-ui /usr/bin/m-ui admin reset-password \
   --config /etc/m-ui/config.toml \
+  --username admin \
   --password-file /var/lib/m-ui/new-password
-
 sudo rm -f /var/lib/m-ui/new-password
-sudo systemctl restart m-ui
 ```
 
-重置密码后，已有登录会话将失效。
+更多诊断见 [docs/troubleshooting.md](docs/troubleshooting.md)。
 
-## 配置历史与回滚
+## 备份
 
-m-ui 会为成功发布的配置保留历史版本。
-
-当新配置出现问题时，可以在面板中选择历史版本进行回滚。
-
-也可以使用命令行执行紧急回滚：
-
-```sh
-sudo -u m-ui /usr/local/bin/m-ui config rollback \
-  --config /etc/m-ui/config.toml REVISION_ID
-```
-
-回滚时，m-ui 会重新生成并校验配置，而不是直接把旧 YAML 文件覆盖到当前配置。
-
-## 数据备份
-
-建议一起备份以下目录：
-
-```text
-/etc/m-ui/
-/etc/mihomo/
-/var/lib/m-ui/
-```
-
-冷备份示例：
+数据库和 `master.key` 必须作为一个一致性集合备份：
 
 ```sh
 sudo systemctl stop m-ui mihomo
-
 sudo tar -C / -czf m-ui-backup.tar.gz \
-  etc/m-ui etc/mihomo var/lib/m-ui
-
+  etc/m-ui etc/mihomo var/lib/m-ui var/lib/mihomo
 sudo systemctl start mihomo m-ui
 ```
 
-> [!IMPORTANT]
-> `/var/lib/m-ui/master.key` 必须与数据库一起备份。
->
-> 缺少对应的 Master Key 时，数据库中保存的 Mihomo Controller 密钥和 REALITY 私钥将无法解密。
+备份包含密码学密钥、节点配置和用户标识，应离线保存并限制权限。缺失原
+`master.key` 时，数据库中的 Controller Secret 和 REALITY 私钥无法解密。
 
-备份文件包含密码学密钥和节点信息，请妥善保存。
+## 开发与验证
 
-## 升级
-
-升级前建议先备份：
-
-```text
-/etc/m-ui/
-/etc/mihomo/
-/var/lib/m-ui/
-```
-
-然后下载目标版本的安装脚本和校验文件，重新执行安装命令。
-
-安装器会保留现有数据库、管理员密码和已有配置。
-
-## 卸载
-
-保留配置和数据，仅移除程序及服务：
-
-```sh
-sudo sh scripts/uninstall.sh
-```
-
-永久删除程序、配置、数据库和密钥：
-
-```sh
-sudo sh scripts/uninstall.sh --purge
-```
-
-执行 `--purge` 前请先确认备份有效。
-
-## 当前限制
-
-m-ui v0.1 暂不支持：
-
-- VMess、Trojan、Shadowsocks、Hysteria、TUIC 等其他协议
-- WebSocket、gRPC、XHTTP 等其他传输方式
-- VLESS Encryption、ML-KEM 等扩展能力
-- 多服务器和多节点集中管理
-- 多管理员和权限分级
-- 用户级流量统计、流量配额、限速或设备数限制
-- 公共订阅地址和订阅聚合
-- 导入或编辑任意 Mihomo YAML
-- Docker 部署
-- 自动配置防火墙、域名、证书或反向代理
-
-面板中显示的流量和连接数属于整个 Mihomo 实例，不能作为用户计费数据。
-
-## 常见问题
-
-### 可以导入现有 Mihomo 配置吗？
-
-不可以。
-
-m-ui 只管理它自己创建的结构化配置，不支持无损导入或接管任意第三方 YAML。
-
-### 可以同时用其他面板修改 Mihomo 配置吗？
-
-不建议。
-
-`/etc/mihomo/config.yaml` 由 m-ui 自动生成，下一次保存配置时会覆盖外部修改。
-
-### 支持 Docker 吗？
-
-v0.1 不支持。当前版本采用 systemd 原生部署。
-
-### 支持多个管理员吗？
-
-v0.1 只有一个管理员账户，不提供 RBAC。
-
-### 能统计每个用户用了多少流量吗？
-
-不能。
-
-Mihomo Controller 提供的是实例级运行数据，m-ui 不会将其伪装成精确的用户级流量统计。
-
-## 安全说明
-
-m-ui 默认将面板和 Mihomo Controller 绑定在本机回环地址。
-
-项目还包括：
-
-- Argon2id 管理员密码哈希
-- Session 与 CSRF 防护
-- 登录限速
-- REALITY 私钥和 Controller 密钥加密存储
-- 独立非 root 服务用户
-- 受限的 sudoers 权限
-- 配置发布前真实 Mihomo 校验
-- 配置失败自动恢复
-- 敏感日志和审计信息脱敏
-
-不要在公开 Issue 中提交：
-
-- 管理员密码
-- `master.key`
-- REALITY 私钥
-- Controller Secret
-- 完整 UUID
-- 完整分享链接
-
-安全漏洞请私下联系项目维护者。
-
-## 开发
-
-依赖：
-
-- Go 1.26.5
-- Node.js 24.18.0
-- npm
-- GNU Make
-- Linux
-
-运行检查：
+依赖 Go 1.26.5、Node.js 24.18.0、npm、GNU Make 和 Linux：
 
 ```sh
 npm --prefix web ci
-
 go test ./...
 go vet ./...
 go test -race ./...
-
 npm --prefix web run lint
 npm --prefix web run typecheck
 npm --prefix web run test
 npm --prefix web run build
-
 make build
 make smoke
 ```
 
-前端使用 Vue 3 和 TypeScript，构建结果会嵌入 Go 二进制，正式部署时不需要单独运行 Node.js 服务。
+`make smoke` 会锁定一个官方 Mihomo identity，校验下载摘要，并使用真实核心
+验证服务端/客户端生成配置。快照工作流还构建并验收 tar/deb/apk、SPDX SBOM
+和原生双架构容器。正式 Release 只能通过手工工作流、显式或自动递增版本模式、
+远端 target ref、prerelease 选择和精确 `RELEASE` 确认触发；常规 push 不会创建
+Tag 或 Release。
 
-## 相关文档
+## 文档
 
 - [架构说明](docs/architecture.md)
+- [配置与核心生命周期](docs/configuration-lifecycle.md)
 - [安全模型](docs/security.md)
-- [配置生命周期](docs/configuration-lifecycle.md)
-- [反向代理](docs/reverse-proxy.md)
 - [故障排除](docs/troubleshooting.md)
+- [Docker 部署](deploy/docker/README.md)
+- [构建与发行策略](docs/release.md)
 
 ## License
 
-本项目采用 [GNU General Public License v3.0](LICENSE) 开源。
+本项目采用 [GNU General Public License v3.0](LICENSE)。
