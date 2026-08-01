@@ -4,7 +4,9 @@ package core
 
 import (
 	"os"
+	"os/user"
 	"path/filepath"
+	"strconv"
 	"syscall"
 )
 
@@ -15,7 +17,24 @@ func currentOwnerID() *int {
 
 func ownedByExpectedUser(info os.FileInfo, expected int) bool {
 	stat, ok := info.Sys().(*syscall.Stat_t)
-	return ok && int(stat.Uid) == expected
+	if !ok {
+		return false
+	}
+	if int(stat.Uid) == expected {
+		return true
+	}
+	// The long-running service owns managed files as m-ui, while root-run
+	// administrative commands must still be able to audit that state. Keep
+	// the fallback narrow: only root may accept the dedicated service UID.
+	if expected != 0 || os.Geteuid() != 0 {
+		return false
+	}
+	serviceUser, err := user.Lookup("m-ui")
+	if err != nil {
+		return false
+	}
+	serviceUID, err := strconv.Atoi(serviceUser.Uid)
+	return err == nil && serviceUID != 0 && int(stat.Uid) == serviceUID
 }
 
 func unsafeCorePermissions(mode os.FileMode) bool {
