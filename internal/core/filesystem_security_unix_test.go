@@ -69,7 +69,7 @@ func TestFileStoreRejectsSymlinkedCurrentDuringActivation(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer files.RemoveStage(stage)
-	if err := files.Activate(stage); err == nil {
+	if _, err := files.Activate(stage); err == nil {
 		t.Fatal("symbolic-link current core path was accepted")
 	}
 }
