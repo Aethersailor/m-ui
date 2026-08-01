@@ -34,8 +34,13 @@ func tryPlatformFileLock(path string) (func(), bool, error) {
 		closeFile()
 		return nil, false, errors.New("inspect runtime operation lock")
 	}
+	// The service normally creates this lock as m-ui, while administrative
+	// commands may inspect it as root. Root is allowed to audit and lock the
+	// trusted path; an unprivileged caller still requires ownership by itself
+	// (or root) and the file must remain private to its owner/group.
+	ownerOK := int(stat.Uid) == os.Geteuid() || int(stat.Uid) == 0 || os.Geteuid() == 0
 	if stat.Mode&unix.S_IFMT != unix.S_IFREG ||
-		(int(stat.Uid) != os.Geteuid() && int(stat.Uid) != 0) ||
+		!ownerOK ||
 		stat.Mode&0o007 != 0 {
 		closeFile()
 		return nil, false, errors.New(
