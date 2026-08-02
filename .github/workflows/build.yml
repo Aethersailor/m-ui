@@ -298,6 +298,8 @@ jobs:
                 --json --config /etc/m-ui/config.toml
               test -x /sbin/rc-service
               test -x /sbin/rc-update
+              openrc sysinit || true
+              openrc boot || true
               rc-update add mihomo default
               rc-update add m-ui default
               wait_service() {
