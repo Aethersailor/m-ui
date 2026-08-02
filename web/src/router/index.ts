@@ -6,6 +6,7 @@ import { useSetupStore } from '@/stores/setup'
 import { usePreferencesStore } from '@/stores/preferences'
 import { useThemeStore } from '@/stores/theme'
 import LoginView from '@/views/LoginView.vue'
+import InitializationErrorView from '@/views/InitializationErrorView.vue'
 import SetupView from '@/views/SetupView.vue'
 
 export const router = createRouter({
@@ -57,6 +58,12 @@ export const router = createRouter({
       component: SetupView,
       meta: { public: true },
     },
+    {
+      path: '/initialization-error',
+      name: 'initialization-error',
+      component: InitializationErrorView,
+      meta: { public: true },
+    },
   ],
 })
 
@@ -65,11 +72,20 @@ router.beforeEach(async (to) => {
   const setup = useSetupStore(pinia)
   const preferences = usePreferencesStore(pinia)
   const theme = useThemeStore(pinia)
-  let setupAvailable = true
+  let setupRequestFailed = false
   try {
     await setup.initialize()
   } catch {
-    setupAvailable = false
+    setupRequestFailed = true
+  }
+  const setupAvailable = !setupRequestFailed && !setup.errorCode
+  if (!setupAvailable) {
+    preferences.initialize()
+    theme.initialize()
+    if (to.name !== 'initialization-error') {
+      return { name: 'initialization-error' }
+    }
+    return true
   }
   if (setupAvailable && setup.status) {
     preferences.initialize(setup.status.language_default)
