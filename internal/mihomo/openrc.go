@@ -43,7 +43,7 @@ func newOpenRCProcess(
 		lifecycleMarker: runWithRuntimeLifecycleMarker,
 		binaryPath:      binaryPath,
 		configPath:      configPath,
-		processActive:   managedProcessActive,
+		processActive:   openRCProcessActive,
 	}, nil
 }
 
