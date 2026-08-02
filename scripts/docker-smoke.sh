@@ -4,7 +4,7 @@ set -euo pipefail
 
 image="${1:?usage: docker-smoke.sh IMAGE}"
 name="m-ui-smoke-${RANDOM}-${RANDOM}"
-data_directory="$(mktemp -d)"
+data_directory="$(mktemp -d /opt/m-ui-smoke.XXXXXX)"
 mkdir -p "$data_directory/etc/m-ui" "$data_directory/etc/mihomo" \
   "$data_directory/var/lib/m-ui" "$data_directory/var/lib/mihomo"
 
