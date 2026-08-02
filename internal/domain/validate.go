@@ -236,7 +236,7 @@ func ValidateConnectEndpoint(endpoint Endpoint, field string) error {
 func ValidateControllerEndpointPair(bind, connect Endpoint) error {
 	if bind.Port != connect.Port {
 		return fmt.Errorf(
-			"Mihomo external-controller bind and m-ui Controller connect ports must match",
+			"mihomo external-controller bind and m-ui Controller connect ports must match",
 		)
 	}
 	if connect.Host != "127.0.0.1" && connect.Host != "::1" {
@@ -248,20 +248,20 @@ func ValidateControllerEndpointPair(bind, connect Endpoint) error {
 	case "127.0.0.1", "0.0.0.0":
 		if connect.Host != "127.0.0.1" {
 			return fmt.Errorf(
-				"Mihomo IPv4 bind %s requires m-ui Controller connect host 127.0.0.1",
+				"mihomo IPv4 bind %s requires m-ui Controller connect host 127.0.0.1",
 				bind.Host,
 			)
 		}
 	case "::1", "::":
 		if connect.Host != "::1" {
 			return fmt.Errorf(
-				"Mihomo IPv6 bind %s requires m-ui Controller connect host ::1",
+				"mihomo IPv6 bind %s requires m-ui Controller connect host ::1",
 				bind.Host,
 			)
 		}
 	default:
 		return fmt.Errorf(
-			"Mihomo external-controller bind host %s is not one of the supported loopback or wildcard addresses",
+			"mihomo external-controller bind host %s is not one of the supported loopback or wildcard addresses",
 			bind.Host,
 		)
 	}
