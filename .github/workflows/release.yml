@@ -654,33 +654,157 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.validate.outputs.version }}
-          SHA12: ${{ needs.validate.outputs.sha12 }}
           TARGET_SHA: ${{ needs.validate.outputs.target_sha }}
-          PRERELEASE: ${{ needs.validate.outputs.prerelease }}
         run: |
           set +e
           repository="ghcr.io/${GITHUB_REPOSITORY,,}"
           candidate="release-candidate-${GITHUB_RUN_ID}"
           state_dir="$RUNNER_TEMP/m-ui-release-state"
-          for tag in "$candidate" "$candidate-amd64" "$candidate-arm64"; do
-            docker buildx imagetools rm "${repository}:${tag}" || true
-          done
+
+          cleanup_status=success
+          cleanup_summary=()
+          candidate_tags=(
+            "$candidate"
+            "$candidate-amd64"
+            "$candidate-arm64"
+          )
+          declare -A deleted_version_ids=()
+
+          note_cleanup() {
+            cleanup_summary+=("$1")
+          }
+
+          owner="${GITHUB_REPOSITORY%%/*}"
+          package="${GITHUB_REPOSITORY#*/}"
+          package_versions_endpoint=
+          owner_type="$(gh api "/users/${owner}" -q .type 2>/dev/null || true)"
+          case "$owner_type" in
+            User)
+              package_versions_endpoint="/users/${owner}/packages/container/${package}/versions"
+              ;;
+            Organization)
+              package_versions_endpoint="/orgs/${owner}/packages/container/${package}/versions"
+              ;;
+            *)
+              echo "::warning::cannot resolve GitHub Packages owner type for ${owner}; candidate tags will be retained"
+              cleanup_status=blocked
+              note_cleanup "owner type for ${owner} could not be resolved"
+              ;;
+          esac
+
+          package_versions_file="$state_dir/package-versions.json"
+          package_versions_flat="$state_dir/package-versions-flat.json"
+          refresh_package_versions() {
+            if [ -z "$package_versions_endpoint" ]; then
+              return 1
+            fi
+            if ! gh api --paginate --slurp \
+              "${package_versions_endpoint}?per_page=100" \
+              >"$package_versions_file"; then
+              return 1
+            fi
+            jq -e "add // []" "$package_versions_file" >"$package_versions_flat"
+          }
+
+          cleanup_package_tags() {
+            local label="$1"
+            shift
+            local target_tag tag_record version_id non_allowed tags_json
+            local allowed_json
+            local target_tags=("$@")
+            if [ -z "$package_versions_endpoint" ]; then
+              cleanup_status=blocked
+              note_cleanup "${label}: GitHub Packages API endpoint unavailable"
+              return
+            fi
+            if ! refresh_package_versions; then
+              echo "::warning::${label}: cannot enumerate GitHub Packages versions; no deletion attempted"
+              cleanup_status=blocked
+              note_cleanup "${label}: package version enumeration failed"
+              return
+            fi
+            allowed_json="$(printf '%s\n' "${cleanup_allowed_tags[@]}" |
+              jq -Rsc 'split("\n") | map(select(length > 0))')"
+            for target_tag in "${target_tags[@]}"; do
+              tag_record="$(jq -c --arg tag "$target_tag" \
+                'map(select((.metadata.container.tags // []) | index($tag) != null)) | .[0] // empty' \
+                "$package_versions_flat")"
+              if [ -z "$tag_record" ]; then
+                echo "::notice::${label}: ${target_tag} is absent"
+                continue
+              fi
+              version_id="$(jq -r '.id // empty' <<<"$tag_record")"
+              tags_json="$(jq -c '.metadata.container.tags // []' <<<"$tag_record")"
+              non_allowed="$(jq -r --argjson allowed "$allowed_json" \
+                '.metadata.container.tags // [] | map(. as $tag | select(($allowed | index($tag)) == null)) | .[]?' \
+                <<<"$tag_record")"
+              if [ -n "$non_allowed" ]; then
+                echo "::warning::${label}: retaining ${target_tag}; package version ${version_id} also has non-target tags: ${non_allowed//$'\n'/, }"
+                cleanup_status=blocked
+                note_cleanup "${label}: ${target_tag} shares package version ${version_id} with non-target tags ${tags_json}"
+                continue
+              fi
+              if [ -n "${deleted_version_ids[$version_id]:-}" ]; then
+                continue
+              fi
+              if gh api --method DELETE \
+                "${package_versions_endpoint}/${version_id}" >/dev/null; then
+                deleted_version_ids[$version_id]=1
+                echo "::notice::${label}: deleted package version ${version_id} containing only target tags ${tags_json}"
+              else
+                echo "::warning::${label}: failed to delete package version ${version_id}; target ${target_tag} retained"
+                cleanup_status=blocked
+                note_cleanup "${label}: deletion failed for package version ${version_id}"
+              fi
+            done
+            if ! refresh_package_versions; then
+              echo "::warning::${label}: cannot re-enumerate GitHub Packages versions for deletion verification"
+              cleanup_status=blocked
+              note_cleanup "${label}: post-delete enumeration failed"
+              return
+            fi
+            for target_tag in "${target_tags[@]}"; do
+              if jq -e --arg tag "$target_tag" \
+                'any(.[]; (.metadata.container.tags // []) | index($tag) != null)' \
+                "$package_versions_flat" >/dev/null; then
+                echo "::warning::${label}: ${target_tag} still exists after cleanup"
+                cleanup_status=blocked
+                note_cleanup "${label}: ${target_tag} remains after deletion verification"
+              else
+                echo "::notice::${label}: verified ${target_tag} absent"
+              fi
+            done
+          }
+
+          new_formal_tags=()
           if [ -f "$state_dir/promotion-started" ] &&
               [ ! -f "$state_dir/release-complete" ]; then
             snapshot="$state_dir/formal-tag-snapshot"
             if [ -r "$snapshot" ]; then
               while IFS=$'\t' read -r tag digest; do
                 [ -n "$tag" ] || continue
-                docker buildx imagetools rm "${repository}:${tag}" || true
                 if [ "$digest" != "-" ]; then
                   docker buildx imagetools create \
                     --tag "${repository}:${tag}" \
                     "${repository}@${digest}" || \
                     echo "::warning::failed to restore ${repository}:${tag} at ${digest}"
+                else
+                  new_formal_tags+=("$tag")
                 fi
               done <"$snapshot"
+            else
+              echo "::warning::formal tag snapshot is unavailable; no formal tag deletion will be attempted"
+              cleanup_status=blocked
+              note_cleanup "failed promotion: formal tag snapshot unavailable"
             fi
           fi
+
+          cleanup_allowed_tags=("${candidate_tags[@]}" "${new_formal_tags[@]}")
+          cleanup_package_tags "candidate cleanup" "${candidate_tags[@]}"
+          if [ "${#new_formal_tags[@]}" -gt 0 ]; then
+            cleanup_package_tags "failed-promotion cleanup" "${new_formal_tags[@]}"
+          fi
+
           if [ -f "$state_dir/release-created" ] &&
               [ ! -f "$state_dir/release-complete" ]; then
             draft="$(gh release view "$VERSION" --json isDraft -q .isDraft 2>/dev/null)"
@@ -693,4 +817,26 @@ jobs:
           if [ -f "$state_dir/tag-created" ] &&
               [ ! -f "$state_dir/release-complete" ]; then
             echo "::warning::manual cleanup required for refs/tags/$VERSION at $TARGET_SHA"
+          fi
+          {
+            echo '### Release cleanup'
+            echo "- candidate tags: ${candidate_tags[*]}"
+            if [ "$cleanup_status" = success ]; then
+              echo '- candidate cleanup status: success'
+            else
+              echo '- candidate cleanup status: blocked or incomplete'
+            fi
+            if [ "${#cleanup_summary[@]}" -gt 0 ]; then
+              for note in "${cleanup_summary[@]}"; do
+                echo "- $note"
+              done
+            fi
+            if [ -f "$state_dir/release-complete" ]; then
+              echo '- formal release marker: complete'
+            else
+              echo '- formal release marker: incomplete'
+            fi
+          } >>"$GITHUB_STEP_SUMMARY"
+          if [ "$cleanup_status" != success ]; then
+            echo '::warning::formal publication may be complete, but release cleanup was not fully completed safely; see the job summary'
           fi

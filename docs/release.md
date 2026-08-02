@@ -41,7 +41,16 @@ tests, package lifecycle checks and container smoke tests succeed. It validates
 all assets and image digests, pushes immutable candidate architecture tags,
 creates an annotated tag and draft GitHub Release, then publishes the formal
 GHCR multi-architecture labels, provenance attestations and the verified draft.
-Candidate image tags are removed after success. The release contains:
+
+Cleanup uses the GitHub Packages versions API rather than an unsupported
+`docker buildx imagetools rm` command. Before deleting a package version, the
+workflow enumerates every tag attached to that version. It deletes a version
+only when all of its tags are run-scoped candidate or newly-created failed-
+promotion tags; if a formal tag shares the version, deletion is refused and the
+job summary records the retained candidate tag. The cleanup status and every
+residual tag are therefore explicit and auditable. If the package API does not
+grant the workflow admin access, no deletion is attempted and the summary marks
+cleanup as blocked. The release contains:
 
 ```text
 m-ui_<version>_linux_amd64.tar.gz
