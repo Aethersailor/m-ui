@@ -32,7 +32,7 @@ func openRuntimeLockFile(path string, create bool) (*os.File, error) {
 	ownerOK := uint32(os.Geteuid()) == stat.Uid || stat.Uid == 0 || os.Geteuid() == 0
 	if stat.Mode&unix.S_IFMT != unix.S_IFREG || !ownerOK {
 		_ = file.Close()
-		return nil, errors.New("Mihomo lifecycle marker has unsafe type or owner")
+		return nil, errors.New("mihomo lifecycle marker has unsafe type or owner")
 	}
 	if err := unix.Fchmod(fileDescriptor, 0o600); err != nil {
 		_ = file.Close()

@@ -106,7 +106,7 @@ func beginRuntimeLifecycleMarkerAt(path string) (func(), error) {
 	}
 	if busy {
 		_ = file.Close()
-		return nil, errors.New("Mihomo lifecycle marker is held by another owner")
+		return nil, errors.New("mihomo lifecycle marker is held by another owner")
 	}
 	if err := file.Truncate(0); err != nil {
 		_ = unlockRuntimeLockFile(file)
@@ -142,7 +142,7 @@ func ClearRuntimeLifecycleMarker() error {
 		return err
 	}
 	if live {
-		return errors.New("Mihomo lifecycle marker is held by a live owner")
+		return errors.New("mihomo lifecycle marker is held by a live owner")
 	}
 	if probe == nil {
 		return nil
