@@ -256,6 +256,95 @@ func TestLoginFailureIsRateLimited(t *testing.T) {
 	}
 }
 
+func TestSetupTransportRequiresOneStructuralSameOrigin(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		host       string
+		remote     string
+		origin     []string
+		forwarded  string
+		wantAccept bool
+	}{
+		{
+			name:       "ipv4",
+			host:       "127.0.0.1:2095",
+			remote:     "127.0.0.1:40000",
+			origin:     []string{"http://127.0.0.1:2095"},
+			wantAccept: true,
+		},
+		{
+			name:       "localhost default port",
+			host:       "localhost",
+			remote:     "127.0.0.1:40000",
+			origin:     []string{"http://localhost"},
+			wantAccept: true,
+		},
+		{
+			name:       "ipv6",
+			host:       "[::1]:2095",
+			remote:     "[::1]:40000",
+			origin:     []string{"http://[::1]:2095"},
+			wantAccept: true,
+		},
+		{
+			name:   "origin path",
+			host:   "127.0.0.1:2095",
+			remote: "127.0.0.1:40000",
+			origin: []string{"http://127.0.0.1:2095/setup"},
+		},
+		{
+			name:   "origin userinfo",
+			host:   "127.0.0.1:2095",
+			remote: "127.0.0.1:40000",
+			origin: []string{"http://user@127.0.0.1:2095"},
+		},
+		{
+			name:   "origin port mismatch",
+			host:   "127.0.0.1:2095",
+			remote: "127.0.0.1:40000",
+			origin: []string{"http://127.0.0.1:80"},
+		},
+		{
+			name:   "duplicate origin",
+			host:   "127.0.0.1:2095",
+			remote: "127.0.0.1:40000",
+			origin: []string{"http://127.0.0.1:2095", "http://evil.test"},
+		},
+		{
+			name:      "forwarded",
+			host:      "127.0.0.1:2095",
+			remote:    "127.0.0.1:40000",
+			origin:    []string{"http://127.0.0.1:2095"},
+			forwarded: "for=127.0.0.1",
+		},
+		{
+			name:   "non loopback peer",
+			host:   "127.0.0.1:2095",
+			remote: "192.0.2.10:40000",
+			origin: []string{"http://127.0.0.1:2095"},
+		},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodPost, "http://"+test.host+"/", nil)
+			request.RemoteAddr = test.remote
+			request.Host = test.host
+			for _, origin := range test.origin {
+				request.Header.Add("Origin", origin)
+			}
+			if test.forwarded != "" {
+				request.Header.Set("Forwarded", test.forwarded)
+			}
+			if got := setupTransportAllowed(request); got != test.wantAccept {
+				t.Fatalf("setup transport allowed = %v, want %v", got, test.wantAccept)
+			}
+		})
+	}
+}
+
 func TestChangePasswordRevokesCurrentSession(t *testing.T) {
 	t.Parallel()
 

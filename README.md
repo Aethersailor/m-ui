@@ -249,8 +249,13 @@ M_UI_IMAGE_TAG=vX.Y.Z
 #### 3. 选择持久化目录
 
 Compose 默认只需要一个持久化根目录 `/opt/m-ui`，也可以通过 `.env` 中的
-`M_UI_DATA_DIR` 指定其他绝对路径。目录内部会自动创建四个与程序内部
-路径对应的子目录；不需要创建密码文件或 Docker Secret。
+`M_UI_DATA_DIR` 指定其他绝对路径。启动 Compose 前执行一次目录准备命令；
+它会校验路径组件、拒绝符号链接和宽泛系统目录，并创建四个与程序内部
+路径对应的子目录。不需要创建密码文件或 Docker Secret。
+
+```sh
+sudo sh deploy/docker/prepare-data-root.sh "${M_UI_DATA_DIR:-/opt/m-ui}"
+```
 
 #### 4. 启动服务
 
@@ -316,14 +321,14 @@ sudo docker compose ps
 
 #### 7. 持久化数据
 
-Compose 使用四个命名卷：
+Compose 使用一个宿主持久化根目录中的四个固定 bind mount：
 
 | Volume | 容器路径 | 内容 |
 |---|---|---|
-| `m-ui-etc` | `/etc/m-ui` | m-ui 配置 |
-| `mihomo-etc` | `/etc/mihomo` | Mihomo 配置 |
-| `m-ui-data` | `/var/lib/m-ui` | 数据库、密钥、Revision 和核心 |
-| `mihomo-data` | `/var/lib/mihomo` | Mihomo 运行数据 |
+| `etc/m-ui` | `/etc/m-ui` | m-ui 配置 |
+| `etc/mihomo` | `/etc/mihomo` | Mihomo 配置 |
+| `var/lib/m-ui` | `/var/lib/m-ui` | 数据库、密钥、Revision 和核心 |
+| `var/lib/mihomo` | `/var/lib/mihomo` | Mihomo 运行数据 |
 
 停止并删除容器：
 

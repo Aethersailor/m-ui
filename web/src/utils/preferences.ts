@@ -1,5 +1,7 @@
 export type LanguageMode = 'auto' | 'zh-CN' | 'en-US'
 
+import { readStoredValue } from './storage'
+
 export const languageStorageKey = 'm-ui-language-mode'
 
 export function isLanguageMode(value: string | null): value is LanguageMode {
@@ -7,7 +9,7 @@ export function isLanguageMode(value: string | null): value is LanguageMode {
 }
 
 export function readLanguageMode(): LanguageMode {
-  const saved = localStorage.getItem(languageStorageKey)
+  const saved = readStoredValue(languageStorageKey)
   return isLanguageMode(saved) ? saved : 'auto'
 }
 

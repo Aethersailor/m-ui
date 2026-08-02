@@ -507,6 +507,26 @@ func (managed *ManagedStore) Settings(ctx context.Context) (RuntimeSettings, err
 	}, nil
 }
 
+// UILanguage returns only the public panel language default. Keep this query
+// separate from Settings so the unauthenticated setup status endpoint never
+// needs to decrypt or expose unrelated managed settings.
+func (managed *ManagedStore) UILanguage(ctx context.Context) (string, error) {
+	var language string
+	if err := managed.store.db.QueryRowContext(
+		ctx,
+		"SELECT value FROM settings WHERE key = ?",
+		settingUILanguage,
+	).Scan(&language); err != nil {
+		return "", fmt.Errorf("read UI language: %w", err)
+	}
+	switch language {
+	case "auto", "en-US", "zh-CN":
+		return language, nil
+	default:
+		return "", errors.New("stored UI language is invalid")
+	}
+}
+
 func endpointSettingsFromValues(values map[string]string) (EndpointSettings, error) {
 	panelPort, err := strconv.ParseUint(values[settingPanelPort], 10, 16)
 	if err != nil || panelPort == 0 {

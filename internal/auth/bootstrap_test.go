@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -165,6 +167,134 @@ func TestConcurrentSetupAllowsExactlyOneWinner(t *testing.T) {
 		t.Fatalf("concurrent setup results = winners:%d completed:%d", winners, completed)
 	}
 	count, err := database.AdminCount(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("administrator count = %d, want 1", count)
+	}
+}
+
+func TestResetPasswordRollsBackWhenAuditInsertionFails(t *testing.T) {
+	database, service, token := newBootstrapTestService(t)
+	if _, err := service.CompleteSetup(
+		context.Background(),
+		token,
+		"admin",
+		"synthetic-bootstrap-password",
+		"127.0.0.1",
+		"synthetic-agent",
+	); err != nil {
+		t.Fatal(err)
+	}
+	before, err := database.AdminByUsername(context.Background(), "admin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.DB().Exec(`
+		CREATE TRIGGER reset_audit_failure
+		BEFORE INSERT ON audit_logs
+		WHEN NEW.action = 'auth.password_reset'
+		BEGIN SELECT RAISE(ABORT, 'synthetic audit failure'); END`); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := service.ResetPassword(
+		context.Background(),
+		"admin",
+		"synthetic-recovery-password",
+	); err == nil {
+		t.Fatal("password reset unexpectedly succeeded")
+	}
+	after, err := database.AdminByUsername(context.Background(), "admin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.PasswordHash != before.PasswordHash {
+		t.Fatal("password hash changed after audit failure")
+	}
+	var sessions int
+	if err := database.DB().QueryRow(
+		"SELECT COUNT(*) FROM sessions WHERE admin_user_id = ?",
+		before.ID,
+	).Scan(&sessions); err != nil {
+		t.Fatal(err)
+	}
+	if sessions != 1 {
+		t.Fatalf("session count after audit failure = %d, want 1", sessions)
+	}
+}
+
+func TestIndependentStoresAllowExactlyOneBootstrapWinner(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "m-ui.db")
+	first, err := store.Open(context.Background(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = first.Close() }()
+	second, err := store.Open(context.Background(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = second.Close() }()
+	now := time.Now().UTC()
+	seed := store.BootstrapSeed{
+		TokenHash:       HashToken("synthetic-independent-token"),
+		TokenCiphertext: "synthetic-sealed-token",
+		CreatedAt:       now,
+	}
+	if err := first.EnsureBootstrap(context.Background(), seed, now); err != nil {
+		t.Fatal(err)
+	}
+	completion := func(id string) store.BootstrapCompletion {
+		return store.BootstrapCompletion{
+			Admin: store.Admin{
+				ID: id, Username: "admin", PasswordHash: "synthetic-hash",
+				PasswordChangedAt: now, CreatedAt: now, UpdatedAt: now,
+			},
+			Session: store.Session{
+				ID: id + "-session", AdminUserID: id,
+				SessionTokenHash: id + "-session-hash", CSRFTokenHash: id + "-csrf-hash",
+				ExpiresAt: now.Add(time.Hour), LastSeenAt: now, CreatedAt: now,
+			},
+			Audit: store.AuditEntry{
+				ID: id + "-audit", ActorAdminID: id,
+				Action: "auth.bootstrap_complete", ResourceType: "administrator",
+				ResourceID: id, Result: "success",
+				SummaryRedacted: "synthetic bootstrap", CreatedAt: now,
+			},
+		}
+	}
+	results := make(chan error, 2)
+	var group sync.WaitGroup
+	group.Add(2)
+	go func() {
+		defer group.Done()
+		results <- first.CompleteBootstrap(
+			context.Background(), seed.TokenHash, completion("first"), now,
+		)
+	}()
+	go func() {
+		defer group.Done()
+		results <- second.CompleteBootstrap(
+			context.Background(), seed.TokenHash, completion("second"), now,
+		)
+	}()
+	group.Wait()
+	close(results)
+	winners := 0
+	for result := range results {
+		if result == nil {
+			winners++
+			continue
+		}
+		if !errors.Is(result, store.ErrBootstrapCompleted) {
+			t.Fatalf("independent store completion error = %v", result)
+		}
+	}
+	if winners != 1 {
+		t.Fatalf("independent store winners = %d, want 1", winners)
+	}
+	count, err := first.AdminCount(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}

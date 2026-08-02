@@ -545,6 +545,12 @@ func (manager *Manager) EditableSettings(
 	}, nil
 }
 
+// UILanguage is the narrow public preference read used before authentication
+// so the first page can select the configured default without loading secrets.
+func (manager *Manager) UILanguage(ctx context.Context) (string, error) {
+	return manager.store.UILanguage(ctx)
+}
+
 func (manager *Manager) UpdateSettings(
 	ctx context.Context,
 	actorAdminID string,

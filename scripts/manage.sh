@@ -312,6 +312,19 @@ write_initial_configuration() {
     config_path="$(target /etc/m-ui/config.toml)"
     mihomo_config="$(target /etc/mihomo/config.yaml)"
     master_key="$(target /var/lib/m-ui/master.key)"
+    database_path="$(target /var/lib/m-ui/m-ui.db)"
+    if [ -L "$master_key" ] || [ -L "$database_path" ]; then
+        fail "refusing symbolic-link database or master key"
+    fi
+    if [ -e "$database_path" ] && [ ! -f "$database_path" ]; then
+        fail "database path is not a regular file"
+    fi
+    if [ -e "$master_key" ] && [ ! -f "$master_key" ]; then
+        fail "master key path is not a regular file"
+    fi
+    if [ -e "$database_path" ] && [ ! -f "$master_key" ]; then
+        fail "database exists but master key is missing; refusing to generate a replacement"
+    fi
     if [ ! -f "$master_key" ]; then
         dd if=/dev/urandom of="$master_key" bs=32 count=1 status=none
         chmod 0600 "$master_key"

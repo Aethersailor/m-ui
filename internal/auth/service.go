@@ -42,6 +42,14 @@ type Repository interface {
 		string,
 		time.Time,
 	) (store.Admin, bool, error)
+	ResetAdminPasswordWithAudit(
+		context.Context,
+		string,
+		string,
+		string,
+		time.Time,
+		store.AuditEntry,
+	) (store.Admin, bool, error)
 	UpdateAdminPassword(context.Context, string, string, time.Time) error
 	CreateSession(context.Context, store.Session) error
 	AuthSessionByTokenHash(
@@ -154,26 +162,27 @@ func (s *Service) ResetPassword(
 		return store.Admin{}, false, err
 	}
 	now := s.clock().UTC()
-	admin, created, err := s.repository.ResetAdminPassword(
+	auditID, err := newOpaqueID(s.random)
+	if err != nil {
+		return store.Admin{}, false, err
+	}
+	admin, created, err := s.repository.ResetAdminPasswordWithAudit(
 		ctx,
 		id,
 		username,
 		passwordHash,
 		now,
+		store.AuditEntry{
+			ID:              auditID,
+			Action:          "auth.password_reset",
+			ResourceType:    "administrator",
+			Result:          "success",
+			SummaryRedacted: "Administrator password was reset locally.",
+			CreatedAt:       now,
+		},
 	)
 	if err != nil {
 		return store.Admin{}, false, err
-	}
-	if err := s.writeAudit(
-		ctx,
-		"",
-		"auth.password_reset",
-		"administrator",
-		admin.ID,
-		"success",
-		"Administrator password was reset locally.",
-	); err != nil {
-		return admin, created, fmt.Errorf("record password reset audit: %w", err)
 	}
 	return admin, created, nil
 }

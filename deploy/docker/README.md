@@ -10,12 +10,14 @@ setting `M_UI_DATA_DIR`:
 ```sh
 export M_UI_DATA_DIR=/opt/m-ui
 export M_UI_IMAGE_TAG=v0.1.0
+sh deploy/docker/prepare-data-root.sh "$M_UI_DATA_DIR"
 docker compose -f deploy/docker/compose.yml up -d
 docker compose -f deploy/docker/compose.yml ps
 ```
 
-Compose creates this deterministic layout and maps it to the paths already
-used by m-ui:
+The preparation command validates every path component, rejects symlinks and
+system-wide or world-writable roots, and creates this deterministic layout.
+Compose then bind-mounts it to the paths already used by m-ui:
 
 ```text
 /opt/m-ui/
@@ -25,8 +27,9 @@ used by m-ui:
 └── var/lib/mihomo/ -> /var/lib/mihomo
 ```
 
-The one-shot `data-init` service prepares ownership and exits before the
-non-root main service starts. It has no network access. No administrator
+The one-shot `data-init` service validates the fixed directory trees, prepares
+ownership, and exits before the non-root main service starts. It has no network
+access. No administrator
 password file, environment variable, Docker Secret, or generated password is
 needed.
 
@@ -84,11 +87,13 @@ deploy/docker/migrate-volumes.sh \
   --yes
 ```
 
-The migration refuses a non-empty target, copies metadata into a staging
-directory, verifies the expected four directories and the database/master-key
-pair, and leaves every source volume untouched. It never removes a volume;
-retain the sources until the new deployment has passed its health and login
-checks.
+The migration refuses a non-empty target, requires the source volumes to be
+unused, rejects links and special files, copies metadata into a staging
+directory, checks the database/master-key pair, and runs the image database
+doctor (SQLite integrity check plus managed-secret decryption) before the
+staged root is switched into place. It leaves every source volume untouched.
+It never removes a volume; retain the sources until the new deployment has
+passed its health and login checks.
 
 The old named-volume shape is retained in `compose.legacy.yml` only for this
 migration and rollback path.

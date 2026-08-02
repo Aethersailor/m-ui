@@ -26,6 +26,8 @@ do
 done
 
 docker run --rm --user 0:0 --network none \
+  --cap-drop ALL --cap-add CHOWN --cap-add DAC_OVERRIDE --cap-add FOWNER \
+  --security-opt no-new-privileges \
   -e M_UI_INIT_DATA=1 \
   -v "$data_directory/etc/m-ui:/etc/m-ui" \
   -v "$data_directory/etc/mihomo:/etc/mihomo" \

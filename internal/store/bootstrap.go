@@ -62,7 +62,15 @@ func (s *Store) BootstrapState(ctx context.Context) (BootstrapState, error) {
 		return BootstrapState{}, err
 	}
 	state.Required = count == 0 && state.ConsumedAt == nil
-	if state.Required && (state.TokenHash == "" || state.TokenCiphertext == "") {
+	if count == 0 && state.ConsumedAt != nil {
+		return BootstrapState{}, ErrBootstrapUnavailable
+	}
+	if state.ConsumedAt == nil &&
+		(state.TokenHash == "" || state.TokenCiphertext == "") {
+		return BootstrapState{}, ErrBootstrapUnavailable
+	}
+	if state.ConsumedAt != nil &&
+		(state.TokenHash != "" || state.TokenCiphertext != "") {
 		return BootstrapState{}, ErrBootstrapUnavailable
 	}
 	return state, nil

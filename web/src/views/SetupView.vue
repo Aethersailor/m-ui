@@ -14,6 +14,8 @@ import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 
 import { completeSetup } from '@/api/setup'
+
+import { getSetupToken } from '@/setup-token'
 import { useAuthStore } from '@/stores/auth'
 import { usePreferencesStore } from '@/stores/preferences'
 import { useSetupStore } from '@/stores/setup'
@@ -77,16 +79,7 @@ const canSubmit = computed(
 onMounted(() => {
   preferences.initialize()
   theme.initialize()
-  const fragment = window.location.hash
-  const params = new URLSearchParams(fragment.replace(/^#/, ''))
-  token.value = params.get('token') ?? ''
-  if (fragment) {
-    window.history.replaceState(
-      null,
-      document.title,
-      `${window.location.pathname}${window.location.search}`,
-    )
-  }
+  token.value = getSetupToken()
   if (!token.value) {
     formError.value = 'MISSING_TOKEN'
   }

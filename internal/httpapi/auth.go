@@ -8,6 +8,7 @@ import (
 	"math"
 	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -30,8 +31,9 @@ const (
 type authContextKey struct{}
 
 type authHandler struct {
-	service      *auth.Service
-	cookieSecure bool
+	service         *auth.Service
+	cookieSecure    bool
+	languageDefault func(context.Context) (string, error)
 }
 
 type loginRequest struct {
@@ -56,8 +58,9 @@ type loginResponse struct {
 }
 
 type setupStatusResponse struct {
-	State          string `json:"state"`
-	PasswordPolicy struct {
+	State           string `json:"state"`
+	LanguageDefault string `json:"language_default"`
+	PasswordPolicy  struct {
 		MinimumCharacters int `json:"minimum_characters"`
 		MaximumBytes      int `json:"maximum_bytes"`
 	} `json:"password_policy"`
@@ -125,7 +128,24 @@ func (h authHandler) setupStatus(
 		state = "required"
 	}
 	response.Header().Set("Cache-Control", "no-store")
-	result := setupStatusResponse{State: state}
+	languageDefault := "auto"
+	if h.languageDefault != nil {
+		languageDefault, err = h.languageDefault(request.Context())
+		if err != nil {
+			writeAPIError(
+				response,
+				request,
+				http.StatusInternalServerError,
+				"INTERNAL_ERROR",
+				"UI preferences could not be read.",
+			)
+			return
+		}
+	}
+	result := setupStatusResponse{
+		State:           state,
+		LanguageDefault: languageDefault,
+	}
 	result.PasswordPolicy.MinimumCharacters = auth.MinimumPasswordCharacters
 	result.PasswordPolicy.MaximumBytes = auth.MaximumPasswordBytes
 	writeJSON(response, http.StatusOK, result)
@@ -166,9 +186,20 @@ func (h authHandler) completeSetup(
 		)
 		return
 	}
+	setupTokens := request.Header.Values(setupTokenHeaderName)
+	if len(setupTokens) != 1 || strings.TrimSpace(setupTokens[0]) == "" {
+		writeAPIError(
+			response,
+			request,
+			http.StatusForbidden,
+			"SETUP_AUTHORIZATION_FAILED",
+			"The setup capability is invalid or expired.",
+		)
+		return
+	}
 	credentials, err := h.service.CompleteSetup(
 		request.Context(),
-		request.Header.Get(setupTokenHeaderName),
+		setupTokens[0],
 		input.Username,
 		input.Password,
 		remoteIP(request.RemoteAddr),
@@ -254,27 +285,31 @@ func setupTransportAllowed(request *http.Request) bool {
 		request.Header.Get("X-Forwarded-Proto") != "" {
 		return false
 	}
-	host := request.Host
-	if host == "" {
-		return false
-	}
-	hostname := host
-	if parsedHost, _, err := net.SplitHostPort(host); err == nil {
-		hostname = parsedHost
-	} else if strings.Contains(host, ":") {
-		return false
-	}
-	if strings.ToLower(hostname) != "localhost" {
-		ip := net.ParseIP(hostname)
-		if ip == nil || !ip.IsLoopback() {
-			return false
-		}
-	}
 	scheme := "http"
 	if request.TLS != nil {
 		scheme = "https"
 	}
-	if request.Header.Get("Origin") != scheme+"://"+host {
+	hostName, hostPort, ok := setupHost(request.Host, scheme)
+	if !ok {
+		return false
+	}
+	if !isLoopbackSetupHost(hostName) {
+		return false
+	}
+	origins := request.Header.Values("Origin")
+	if len(origins) != 1 || origins[0] == "" {
+		return false
+	}
+	origin, err := url.Parse(origins[0])
+	if err != nil || origin.Scheme == "" || origin.Host == "" ||
+		!strings.EqualFold(origin.Scheme, scheme) || origin.User != nil ||
+		origin.Opaque != "" || origin.Path != "" || origin.RawQuery != "" ||
+		origin.Fragment != "" {
+		return false
+	}
+	originHost, originPort, ok := setupHost(origin.Host, scheme)
+	if !ok || !isLoopbackSetupHost(originHost) ||
+		!strings.EqualFold(originHost, hostName) || originPort != hostPort {
 		return false
 	}
 	if fetchSite := request.Header.Get("Sec-Fetch-Site"); fetchSite != "" &&
@@ -282,6 +317,58 @@ func setupTransportAllowed(request *http.Request) bool {
 		return false
 	}
 	return true
+}
+
+func setupHost(value string, scheme string) (string, string, bool) {
+	if value == "" || strings.TrimSpace(value) != value ||
+		strings.ContainsAny(value, "\r\n,/") {
+		return "", "", false
+	}
+	hostname := value
+	port := ""
+	if strings.HasPrefix(value, "[") {
+		closing := strings.IndexByte(value, ']')
+		if closing <= 1 {
+			return "", "", false
+		}
+		hostname = value[1:closing]
+		remainder := value[closing+1:]
+		if remainder != "" {
+			if !strings.HasPrefix(remainder, ":") {
+				return "", "", false
+			}
+			port = remainder[1:]
+		}
+	} else if strings.Count(value, ":") > 0 {
+		parsedHost, parsedPort, err := net.SplitHostPort(value)
+		if err != nil {
+			return "", "", false
+		}
+		hostname, port = parsedHost, parsedPort
+	}
+	if hostname == "" || strings.TrimSpace(hostname) != hostname {
+		return "", "", false
+	}
+	if port == "" {
+		if scheme == "https" {
+			port = "443"
+		} else {
+			port = "80"
+		}
+	}
+	portNumber, err := strconv.Atoi(port)
+	if err != nil || portNumber < 1 || portNumber > 65535 {
+		return "", "", false
+	}
+	return hostname, strconv.Itoa(portNumber), true
+}
+
+func isLoopbackSetupHost(hostname string) bool {
+	if strings.EqualFold(hostname, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(hostname)
+	return ip != nil && ip.IsLoopback()
 }
 
 func isJSONContentType(value string) bool {

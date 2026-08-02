@@ -7,6 +7,7 @@ import {
   resolveLanguage,
   type LanguageMode,
 } from '@/utils/preferences'
+import { writeStoredValue } from '@/utils/storage'
 
 export const usePreferencesStore = defineStore('preferences', {
   state: () => ({
@@ -31,7 +32,7 @@ export const usePreferencesStore = defineStore('preferences', {
     },
     setLanguageMode(mode: LanguageMode) {
       this.languageMode = mode
-      localStorage.setItem(languageStorageKey, mode)
+      writeStoredValue(languageStorageKey, mode)
       this.applyLanguage()
     },
     setServerLanguageDefault(mode: LanguageMode) {

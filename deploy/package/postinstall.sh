@@ -183,6 +183,22 @@ database_was_present=0
 if [ -f /var/lib/m-ui/m-ui.db ]; then
     database_was_present=1
 fi
+if [ -L /var/lib/m-ui/m-ui.db ] || [ -L "$master_key" ]; then
+    echo "refusing symbolic-link database or master key" >&2
+    exit 1
+fi
+if [ -e /var/lib/m-ui/m-ui.db ] && [ ! -f /var/lib/m-ui/m-ui.db ]; then
+    echo "database path is not a regular file" >&2
+    exit 1
+fi
+if [ -e "$master_key" ] && [ ! -f "$master_key" ]; then
+    echo "master key path is not a regular file" >&2
+    exit 1
+fi
+if [ "$database_was_present" -eq 1 ] && [ ! -f "$master_key" ]; then
+    echo "database exists but master key is missing; refusing to generate a replacement" >&2
+    exit 1
+fi
 if [ ! -f "$master_key" ]; then
     dd if=/dev/urandom of="$master_key" bs=32 count=1 status=none
     chmod 0600 "$master_key"

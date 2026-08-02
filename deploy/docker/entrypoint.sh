@@ -12,7 +12,23 @@ if [ "${M_UI_INIT_DATA:-0}" = "1" ]; then
         /var/lib/m-ui/core/backups \
         /var/lib/m-ui/revisions
     install -d -m 0750 /var/lib/mihomo
-    chown -R 10001:10001 /etc/m-ui /etc/mihomo /var/lib/m-ui /var/lib/mihomo
+    safe_tree() {
+        tree="$1"
+        [ -d "$tree" ] && [ ! -L "$tree" ] || {
+            echo "refusing unsafe persistence path: $tree" >&2
+            exit 1
+        }
+        if find "$tree" \( -type l -o -type b -o -type c -o -type p -o -type s \) \
+            -print -quit | grep -q .; then
+            echo "refusing symlink or special file below: $tree" >&2
+            exit 1
+        fi
+        find "$tree" -type d -exec chown 10001:10001 {} +
+        find "$tree" -type f -exec chown 10001:10001 {} +
+    }
+    for tree in /etc/m-ui /etc/mihomo /var/lib/m-ui /var/lib/mihomo; do
+        safe_tree "$tree"
+    done
     chmod 0750 /etc/m-ui /etc/mihomo /var/lib/mihomo
     chmod 0700 /var/lib/m-ui /var/lib/m-ui/core /var/lib/m-ui/revisions
     exit 0
@@ -20,6 +36,7 @@ fi
 
 config_path="/etc/m-ui/config.toml"
 master_key="/var/lib/m-ui/master.key"
+database_path="/var/lib/m-ui/m-ui.db"
 current_core="/var/lib/m-ui/core/current/mihomo"
 
 install -d -m 0750 /etc/m-ui /etc/mihomo
@@ -28,6 +45,22 @@ install -d -m 0700 /var/lib/m-ui /var/lib/m-ui/core \
     /var/lib/m-ui/core/backups
 install -d -m 0750 /var/lib/mihomo
 
+if [ -L "$master_key" ] || [ -L "$database_path" ]; then
+    echo "refusing symbolic-link database or master key" >&2
+    exit 1
+fi
+if [ -e "$database_path" ] && [ ! -f "$database_path" ]; then
+    echo "database path is not a regular file" >&2
+    exit 1
+fi
+if [ -e "$master_key" ] && [ ! -f "$master_key" ]; then
+    echo "master key path is not a regular file" >&2
+    exit 1
+fi
+if [ -e "$database_path" ] && [ ! -f "$master_key" ]; then
+    echo "database exists but master key is missing; refusing to generate a replacement" >&2
+    exit 1
+fi
 if [ ! -f "$master_key" ]; then
     dd if=/dev/urandom of="$master_key" bs=32 count=1 status=none
     chmod 0600 "$master_key"

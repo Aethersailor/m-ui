@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -16,11 +17,12 @@ import (
 )
 
 type Options struct {
-	Logger       *slog.Logger
-	Build        version.Info
-	Auth         *auth.Service
-	Management   *service.Manager
-	CookieSecure bool
+	Logger          *slog.Logger
+	Build           version.Info
+	Auth            *auth.Service
+	Management      *service.Manager
+	LanguageDefault func(context.Context) (string, error)
+	CookieSecure    bool
 }
 
 type healthResponse struct {
@@ -53,8 +55,9 @@ func New(options Options) http.Handler {
 		api.Get("/health", health)
 		if options.Auth != nil {
 			authentication := authHandler{
-				service:      options.Auth,
-				cookieSecure: options.CookieSecure,
+				service:         options.Auth,
+				cookieSecure:    options.CookieSecure,
+				languageDefault: options.LanguageDefault,
 			}
 			mountAuthRoutes(api, authentication)
 			mountSetupRoutes(api, authentication)

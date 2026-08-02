@@ -108,3 +108,44 @@ func TestEnsureBootstrapMarksExistingAdministratorComplete(t *testing.T) {
 		t.Fatalf("existing administrator left bootstrap required: %#v", state)
 	}
 }
+
+func TestConsumedBootstrapWithoutAdministratorFailsClosed(t *testing.T) {
+	t.Parallel()
+
+	database := openTestStore(t)
+	now := time.Date(2026, 8, 3, 0, 0, 0, 0, time.UTC)
+	if err := database.EnsureBootstrap(
+		context.Background(),
+		BootstrapSeed{
+			TokenHash:       "synthetic-token-hash",
+			TokenCiphertext: "synthetic-token-ciphertext",
+			CreatedAt:       now,
+		},
+		now,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.DB().Exec(
+		"UPDATE bootstrap_state SET token_hash = '', token_ciphertext = '', consumed_at = ?",
+		formatTime(now),
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.BootstrapState(context.Background()); !errors.Is(
+		err,
+		ErrBootstrapUnavailable,
+	) {
+		t.Fatalf("consumed bootstrap state error = %v, want ErrBootstrapUnavailable", err)
+	}
+	if err := database.EnsureBootstrap(
+		context.Background(),
+		BootstrapSeed{
+			TokenHash:       "synthetic-new-token-hash",
+			TokenCiphertext: "synthetic-new-token-ciphertext",
+			CreatedAt:       now,
+		},
+		now,
+	); !errors.Is(err, ErrBootstrapUnavailable) {
+		t.Fatalf("bootstrap re-open error = %v, want ErrBootstrapUnavailable", err)
+	}
+}

@@ -97,6 +97,31 @@ func (s *Store) ResetAdminPassword(
 	passwordHash string,
 	now time.Time,
 ) (Admin, bool, error) {
+	return s.resetAdminPassword(ctx, id, username, passwordHash, now, nil)
+}
+
+// ResetAdminPasswordWithAudit updates the existing administrator, revokes all
+// sessions, and records the recovery audit in one SQLite transaction. The
+// first administrator is never created by this recovery primitive.
+func (s *Store) ResetAdminPasswordWithAudit(
+	ctx context.Context,
+	id string,
+	username string,
+	passwordHash string,
+	now time.Time,
+	audit AuditEntry,
+) (Admin, bool, error) {
+	return s.resetAdminPassword(ctx, id, username, passwordHash, now, &audit)
+}
+
+func (s *Store) resetAdminPassword(
+	ctx context.Context,
+	id string,
+	username string,
+	passwordHash string,
+	now time.Time,
+	audit *AuditEntry,
+) (Admin, bool, error) {
 	transaction, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return Admin{}, false, fmt.Errorf("begin administrator reset: %w", err)
@@ -138,6 +163,29 @@ func (s *Store) ResetAdminPassword(
 		id,
 	); err != nil {
 		return Admin{}, false, fmt.Errorf("revoke administrator sessions: %w", err)
+	}
+	if audit != nil {
+		audit.ActorAdminID = existingID
+		if audit.ResourceID == "" {
+			audit.ResourceID = existingID
+		}
+		if _, err := transaction.ExecContext(
+			ctx,
+			`INSERT INTO audit_logs(
+				id, actor_admin_id, action, resource_type, resource_id,
+				result, summary_redacted, created_at
+			) VALUES (?, NULLIF(?, ''), ?, ?, NULLIF(?, ''), ?, ?, ?)`,
+			audit.ID,
+			audit.ActorAdminID,
+			audit.Action,
+			audit.ResourceType,
+			audit.ResourceID,
+			audit.Result,
+			audit.SummaryRedacted,
+			formatTime(audit.CreatedAt),
+		); err != nil {
+			return Admin{}, false, fmt.Errorf("record administrator reset audit: %w", err)
+		}
 	}
 	if err := transaction.Commit(); err != nil {
 		return Admin{}, false, fmt.Errorf("commit administrator reset: %w", err)

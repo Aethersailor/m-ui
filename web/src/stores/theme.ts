@@ -2,6 +2,8 @@ import { defineStore } from 'pinia'
 
 export type ThemeMode = 'auto' | 'light' | 'dark'
 
+import { readStoredValue, writeStoredValue } from '@/utils/storage'
+
 const storageKey = 'm-ui-theme'
 const preferredStorageKey = 'm-ui-theme-mode'
 
@@ -21,8 +23,8 @@ export const useThemeStore = defineStore('theme', {
         return
       }
       const saved =
-        localStorage.getItem(preferredStorageKey) ??
-        localStorage.getItem(storageKey)
+        readStoredValue(preferredStorageKey) ??
+        readStoredValue(storageKey)
       if (saved === 'auto' || saved === 'light' || saved === 'dark') {
         this.mode = saved
       }
@@ -37,7 +39,7 @@ export const useThemeStore = defineStore('theme', {
     },
     setMode(mode: ThemeMode) {
       this.mode = mode
-      localStorage.setItem(preferredStorageKey, mode)
+      writeStoredValue(preferredStorageKey, mode)
       this.applyDocumentTheme()
     },
     cycle() {

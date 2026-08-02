@@ -7,15 +7,37 @@ services:
     network_mode: none
     security_opt:
       - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
     environment:
       M_UI_INIT_DATA: "1"
     healthcheck:
       disable: true
     volumes:
-      - ${M_UI_DATA_DIR:-/opt/m-ui}/etc/m-ui:/etc/m-ui
-      - ${M_UI_DATA_DIR:-/opt/m-ui}/etc/mihomo:/etc/mihomo
-      - ${M_UI_DATA_DIR:-/opt/m-ui}/var/lib/m-ui:/var/lib/m-ui
-      - ${M_UI_DATA_DIR:-/opt/m-ui}/var/lib/mihomo:/var/lib/mihomo
+      - type: bind
+        source: "${M_UI_DATA_DIR:-/opt/m-ui}/etc/m-ui"
+        target: /etc/m-ui
+        bind:
+          create_host_path: false
+      - type: bind
+        source: "${M_UI_DATA_DIR:-/opt/m-ui}/etc/mihomo"
+        target: /etc/mihomo
+        bind:
+          create_host_path: false
+      - type: bind
+        source: "${M_UI_DATA_DIR:-/opt/m-ui}/var/lib/m-ui"
+        target: /var/lib/m-ui
+        bind:
+          create_host_path: false
+      - type: bind
+        source: "${M_UI_DATA_DIR:-/opt/m-ui}/var/lib/mihomo"
+        target: /var/lib/mihomo
+        bind:
+          create_host_path: false
 
   m-ui:
     image: ghcr.io/aethersailor/m-ui:${M_UI_IMAGE_TAG:-edge}
@@ -37,9 +59,25 @@ services:
       M_UI_MIHOMO_AUTO_UPDATE: "off"
       M_UI_MIHOMO_CHECK_INTERVAL: 24h
     volumes:
-      - ${M_UI_DATA_DIR:-/opt/m-ui}/etc/m-ui:/etc/m-ui
-      - ${M_UI_DATA_DIR:-/opt/m-ui}/etc/mihomo:/etc/mihomo
-      - ${M_UI_DATA_DIR:-/opt/m-ui}/var/lib/m-ui:/var/lib/m-ui
-      - ${M_UI_DATA_DIR:-/opt/m-ui}/var/lib/mihomo:/var/lib/mihomo
+      - type: bind
+        source: "${M_UI_DATA_DIR:-/opt/m-ui}/etc/m-ui"
+        target: /etc/m-ui
+        bind:
+          create_host_path: false
+      - type: bind
+        source: "${M_UI_DATA_DIR:-/opt/m-ui}/etc/mihomo"
+        target: /etc/mihomo
+        bind:
+          create_host_path: false
+      - type: bind
+        source: "${M_UI_DATA_DIR:-/opt/m-ui}/var/lib/m-ui"
+        target: /var/lib/m-ui
+        bind:
+          create_host_path: false
+      - type: bind
+        source: "${M_UI_DATA_DIR:-/opt/m-ui}/var/lib/mihomo"
+        target: /var/lib/mihomo
+        bind:
+          create_host_path: false
     tmpfs:
       - /tmp:mode=1777

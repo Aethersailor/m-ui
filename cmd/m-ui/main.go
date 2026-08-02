@@ -22,7 +22,7 @@ const usage = `m-ui manages one dedicated Mihomo service.
 Usage:
   m-ui server [--config /etc/m-ui/config.toml]
   m-ui version
-  m-ui doctor [panel] [--config /etc/m-ui/config.toml]
+  m-ui doctor [panel|database] [--config /etc/m-ui/config.toml]
   m-ui admin setup-link [--config /etc/m-ui/config.toml]
   m-ui admin rotate-setup-token [--config /etc/m-ui/config.toml]
   m-ui admin reset-password --password-file <path> [--username admin]
@@ -246,7 +246,8 @@ func runCore(args []string) error {
 
 func runDoctor(args []string) error {
 	panelOnly := len(args) > 0 && args[0] == "panel"
-	if panelOnly {
+	databaseOnly := len(args) > 0 && args[0] == "database"
+	if panelOnly || databaseOnly {
 		args = args[1:]
 	}
 	flags := flag.NewFlagSet("doctor", flag.ContinueOnError)
@@ -269,6 +270,13 @@ func runDoctor(args []string) error {
 			return err
 		}
 		fmt.Println("m-ui panel health is OK.")
+		return nil
+	}
+	if databaseOnly {
+		if err := app.DatabaseHealth(ctx, cfg); err != nil {
+			return err
+		}
+		fmt.Println("m-ui database health is OK.")
 		return nil
 	}
 	return app.Doctor(ctx, cfg, os.Stdout)

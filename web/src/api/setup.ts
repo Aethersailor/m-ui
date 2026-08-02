@@ -2,6 +2,7 @@ import { apiRequest } from './client'
 
 export interface SetupStatus {
   state: 'required' | 'complete'
+  language_default: 'auto' | 'zh-CN' | 'en-US'
   password_policy: {
     minimum_characters: number
     maximum_bytes: number

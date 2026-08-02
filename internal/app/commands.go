@@ -725,6 +725,41 @@ func PanelHealth(ctx context.Context, cfg config.Config) error {
 	return checkPanelHealth(ctx, settings)
 }
 
+// DatabaseHealth validates a staged panel database without starting the
+// service. Opening the store also makes SQLite account for any committed WAL
+// frames; the integrity check and managed-settings decrypt then prove that the
+// database and master key belong together.
+func DatabaseHealth(ctx context.Context, cfg config.Config) error {
+	masterKey, err := muicrypto.LoadMasterKey(cfg.Storage.MasterKeyPath)
+	if err != nil {
+		return fmt.Errorf("load master key: %w", err)
+	}
+	sealer, err := muicrypto.NewSealer(masterKey)
+	if err != nil {
+		return fmt.Errorf("initialize field encryption: %w", err)
+	}
+	database, err := store.Open(ctx, cfg.Storage.DatabasePath)
+	if err != nil {
+		return fmt.Errorf("open store: %w", err)
+	}
+	defer func() { _ = database.Close() }()
+	var integrity string
+	if err := database.DB().QueryRowContext(ctx, "PRAGMA integrity_check").Scan(&integrity); err != nil {
+		return fmt.Errorf("run SQLite integrity check: %w", err)
+	}
+	if integrity != "ok" {
+		return fmt.Errorf("SQLite integrity check failed: %s", integrity)
+	}
+	managed, err := store.NewManagedStore(database, sealer)
+	if err != nil {
+		return fmt.Errorf("initialize managed store: %w", err)
+	}
+	if _, err := managed.Settings(ctx); err != nil {
+		return fmt.Errorf("decrypt managed settings: %w", err)
+	}
+	return nil
+}
+
 func Doctor(
 	ctx context.Context,
 	cfg config.Config,
