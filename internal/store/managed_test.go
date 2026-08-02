@@ -279,6 +279,187 @@ func TestInitialSettingsEncryptStableControllerBootstrapSecret(t *testing.T) {
 	}
 }
 
+func TestEndpointSettingsTrackPendingAndLastAppliedSnapshot(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	database, err := Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = database.Close() }()
+	sealer, err := muicrypto.NewSealer(muicrypto.MasterKey{7, 8, 9})
+	if err != nil {
+		t.Fatal(err)
+	}
+	managed, err := NewManagedStore(database, sealer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := managed.EnsureInitialSettings(ctx, InitialSettings{
+		PanelTitle:         "m-ui",
+		UILanguage:         "en-US",
+		PublicHost:         "node.example.com",
+		PanelListenAddress: "127.0.0.1",
+		PanelListenPort:    2095,
+		MihomoBinaryPath:   "/usr/local/bin/mihomo",
+		MihomoConfigDir:    "/etc/mihomo",
+		MihomoConfigPath:   "/etc/mihomo/config.yaml",
+		ControllerAddress:  "127.0.0.1:9090",
+		BootstrapSecret:    "synthetic-controller-bootstrap-secret",
+		MihomoServiceName:  "mihomo.service",
+		HistoryLimit:       20,
+	}, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	state := managedTestState()
+	transaction, err := managed.BeginImmediate(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := transaction.ReplaceDesiredState(ctx, state); err != nil {
+		t.Fatal(err)
+	}
+	if err := transaction.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	initial, err := managed.EndpointSettings(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if initial.Pending != nil || initial.Active.Generation != 1 {
+		t.Fatalf("initial endpoint state = %#v", initial)
+	}
+
+	state.AsOf = state.AsOf.Add(time.Minute)
+	state.PanelUIBind = domain.Endpoint{Host: "0.0.0.0", Port: 2095}
+	state.MihomoExternalControllerBind = domain.Endpoint{Host: "::", Port: 9090}
+	state.MihomoControllerConnect = domain.Endpoint{Host: "::1", Port: 9090}
+	state.ExternalControllerCORSOrigins = []string{"https://dashboard.example.com"}
+	transaction, err = managed.BeginImmediate(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := transaction.ReplaceDesiredState(ctx, state); err != nil {
+		t.Fatal(err)
+	}
+	if err := transaction.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	changed, err := managed.EndpointSettings(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed.Pending == nil || !changed.Pending.RequiresMUIRestart ||
+		!changed.Pending.RequiresMihomoRestart ||
+		changed.Active.MihomoExternalControllerBind.Host != "::" {
+		t.Fatalf("changed endpoint state = %#v", changed)
+	}
+	if err := managed.ClearEndpointRestartRequirements(
+		ctx,
+		true,
+		false,
+		changed.Pending.Generation-1,
+		changed.Pending.EndpointSettings,
+	); !errors.Is(err, ErrEndpointStateChanged) {
+		t.Fatalf("stale endpoint restart clear error = %v, want ErrEndpointStateChanged", err)
+	}
+	unchanged, err := managed.EndpointSettings(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unchanged.Pending == nil || !unchanged.Pending.RequiresMUIRestart {
+		t.Fatalf("stale clear changed endpoint restart state = %#v", unchanged)
+	}
+
+	// Returning to the last applied snapshot resolves the pending change even
+	// though the active desired state had already moved to the new candidate.
+	state.AsOf = state.AsOf.Add(time.Minute)
+	state.PanelUIBind = domain.Endpoint{Host: "127.0.0.1", Port: 2095}
+	state.MihomoExternalControllerBind = domain.Endpoint{Host: "127.0.0.1", Port: 9090}
+	state.MihomoControllerConnect = domain.Endpoint{Host: "127.0.0.1", Port: 9090}
+	state.ExternalControllerCORSOrigins = nil
+	transaction, err = managed.BeginImmediate(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := transaction.ReplaceDesiredState(ctx, state); err != nil {
+		t.Fatal(err)
+	}
+	if err := transaction.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := managed.EndpointSettings(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.Pending != nil {
+		t.Fatalf("resolved endpoint state still pending = %#v", resolved.Pending)
+	}
+}
+
+func TestEnsureInitialSettingsMigratesLegacyWildcardControllerAddress(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name       string
+		legacy     string
+		wantBind   string
+		wantClient string
+	}{
+		{name: "ipv4", legacy: "0.0.0.0:9090", wantBind: "0.0.0.0", wantClient: "127.0.0.1"},
+		{name: "ipv6", legacy: "[::]:9090", wantBind: "::", wantClient: "::1"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := context.Background()
+			database, err := Open(ctx, ":memory:")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = database.Close() }()
+			now := time.Now().UTC()
+			if _, err := database.DB().Exec(
+				"INSERT INTO settings(key, value, updated_at) VALUES (?, ?, ?)",
+				settingControllerAddress,
+				test.legacy,
+				formatTime(now),
+			); err != nil {
+				t.Fatal(err)
+			}
+			sealer, err := muicrypto.NewSealer(muicrypto.MasterKey{41, 42, 43})
+			if err != nil {
+				t.Fatal(err)
+			}
+			managed, err := NewManagedStore(database, sealer)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := managed.EnsureInitialSettings(ctx, InitialSettings{
+				PanelTitle:                       "m-ui",
+				UILanguage:                       "en-US",
+				PublicHost:                       "node.example.com",
+				PanelListenAddress:               "127.0.0.1",
+				PanelListenPort:                  2095,
+				MihomoBinaryPath:                 "/usr/local/bin/mihomo",
+				MihomoConfigDir:                  "/etc/mihomo",
+				MihomoConfigPath:                 "/etc/mihomo/config.yaml",
+				ControllerAddress:                "127.0.0.1:9090",
+				MihomoServiceName:                "mihomo.service",
+				HistoryLimit:                     20,
+			}, now); err != nil {
+				t.Fatal(err)
+			}
+			state, err := managed.EndpointSettings(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if state.Active.MihomoExternalControllerBind.Host != test.wantBind ||
+				state.Active.MihomoControllerConnect.Host != test.wantClient {
+				t.Fatalf("migrated endpoint state = %#v", state.Active)
+			}
+		})
+	}
+}
+
 func TestManagedStoreSerializesImmediateTransactions(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

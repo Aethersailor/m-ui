@@ -973,6 +973,40 @@ func TestStartupRepairFailureMarksDegraded(t *testing.T) {
 	}
 }
 
+func TestStartupRepairDefersRuntimeWhenMihomoIsInactive(t *testing.T) {
+	t.Parallel()
+	fixture := newActiveSQLiteFixture(t)
+	fixture.process.active = false
+	restartsBefore := fixture.process.restartCount()
+	reloadsBefore := fixture.controller.reloadCount()
+	if err := os.WriteFile(
+		fixture.configPath,
+		[]byte("stale-active-yaml\n"),
+		0o640,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := fixture.publisher.ReconcileStartupBeforeRuntime(context.Background()); err != nil {
+		t.Fatalf("ReconcileStartupBeforeRuntime() error = %v", err)
+	}
+	active, err := os.ReadFile(fixture.configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	revisionYAML, err := os.ReadFile(fixture.revision.FilePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(active) != string(revisionYAML) {
+		t.Fatal("startup reconciliation did not repair the durable YAML")
+	}
+	if fixture.process.restartCount() != restartsBefore ||
+		fixture.controller.reloadCount() != reloadsBefore {
+		t.Fatal("startup reconciliation touched an inactive Mihomo runtime")
+	}
+}
+
 func TestStartupRevisionYAMLIntegrityFailureMarksDegraded(t *testing.T) {
 	t.Parallel()
 	for _, test := range []struct {

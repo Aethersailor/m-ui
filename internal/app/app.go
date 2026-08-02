@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -45,6 +46,15 @@ func Run(ctx context.Context, cfg config.Config, build version.Info) error {
 	if err != nil {
 		return err
 	}
+	startup, err := mihomo.BeginRuntimeStartup()
+	if err != nil {
+		return fmt.Errorf("initialize m-ui startup readiness: %w", err)
+	}
+	defer func() {
+		if closeErr := startup.Close(); closeErr != nil {
+			logger.Error("close m-ui startup readiness", "error", closeErr)
+		}
+	}()
 
 	masterKey, err := muicrypto.LoadMasterKey(cfg.Storage.MasterKeyPath)
 	if err != nil {
@@ -114,7 +124,10 @@ func Run(ctx context.Context, cfg config.Config, build version.Info) error {
 		return fmt.Errorf("initialize runtime operation coordinator: %w", err)
 	}
 	controller, err := mihomo.NewController(
-		runtimeSettings.ControllerAddress,
+		domain.Endpoint{
+			Host: runtimeSettings.MihomoControllerConnectHost,
+			Port: runtimeSettings.MihomoControllerConnectPort,
+		}.Address(),
 		runtimeSettings.ControllerSecret,
 	)
 	if err != nil {
@@ -155,6 +168,7 @@ func Run(ctx context.Context, cfg config.Config, build version.Info) error {
 			Process:        process,
 			Controller:     controller,
 			Coordinator:    coordinator,
+			EndpointGate:   managedStore,
 			ConfigPath:     runtimeSettings.MihomoConfigPath,
 			HealthTimeout:  10 * time.Second,
 			HealthInterval: 250 * time.Millisecond,
@@ -223,6 +237,14 @@ func Run(ctx context.Context, cfg config.Config, build version.Info) error {
 		service.RuntimeMonitorOptions{
 			Interval: 2 * time.Second,
 			Logger:   logger,
+			ShouldCollect: func(ctx context.Context) (bool, error) {
+				endpointState, err := managedStore.EndpointSettings(ctx)
+				if err != nil {
+					return false, err
+				}
+				return endpointState.Pending == nil ||
+					!endpointState.Pending.RequiresMihomoRestart, nil
+			},
 		},
 	)
 	if err != nil {
@@ -237,13 +259,53 @@ func Run(ctx context.Context, cfg config.Config, build version.Info) error {
 		Runtime:     runtimeMonitor,
 		Core:        coreManager,
 		Coordinator: coordinator,
+		ReadyGuard: func(guardContext context.Context) (func() error, error) {
+			guard, guardErr := mihomo.AcquireRuntimeReadyGuard(guardContext)
+			if guardErr != nil {
+				return nil, guardErr
+			}
+			return guard.Close, nil
+		},
 	})
 	if err != nil {
 		return fmt.Errorf("initialize management service: %w", err)
 	}
+	// Reconcile the durable revision/YAML relationship before any managed
+	// Mihomo process can be started. In particular, a crash after atomic YAML
+	// replacement but before the SQLite commit must be repaired from the
+	// durable revision before the next process observes the file. The later
+	// background startup pass remains intentional: it performs runtime health
+	// verification after managed startup and preserves native service ordering.
+	startupReconcileErr := configurationPublisher.ReconcileStartupBeforeRuntime(ctx)
+	if startupReconcileErr != nil &&
+		!errors.Is(startupReconcileErr, publisher.ErrStartupDegraded) {
+		return fmt.Errorf(
+			"reconcile startup publication state before Mihomo start: %w",
+			startupReconcileErr,
+		)
+	}
 	if cfg.Mihomo.ProcessMode == "managed" {
-		if err := process.Start(ctx); err != nil {
-			return fmt.Errorf("start supervised Mihomo process: %w", err)
+		recoveryConfigurer, ok := process.(mihomo.RecoveryConfigurer)
+		if !ok {
+			return errors.New(
+				"managed Mihomo process does not expose the application recovery boundary",
+			)
+		}
+		if err := recoveryConfigurer.SetRecovery(
+			manager.StartManagedProcess,
+		); err != nil {
+			return fmt.Errorf("configure managed Mihomo recovery boundary: %w", err)
+		}
+		if startupReconcileErr == nil {
+			if err := manager.StartManagedProcess(ctx); err != nil {
+				return fmt.Errorf("start supervised Mihomo process: %w", err)
+			}
+		} else {
+			logger.Warn(
+				"managed Mihomo start is held while startup publication remains degraded",
+				"error",
+				redact.Text(startupReconcileErr.Error()),
+			)
 		}
 	}
 	expiryScheduler, err := scheduler.NewExpiry(
@@ -268,20 +330,25 @@ func Run(ctx context.Context, cfg config.Config, build version.Info) error {
 		return fmt.Errorf("initialize core update scheduler: %w", err)
 	}
 	coreManager.SetWake(coreScheduler.Wake)
-	if err := startBackgroundServicesWithSafetyGate(
-		ctx,
-		configurationPublisher,
-		managedStore,
-		runtimeMonitor,
-		expiryScheduler,
-		logger,
-		coreManager,
-		coreScheduler,
-	); err != nil {
-		return err
+	if cfg.Mihomo.ProcessMode == "managed" {
+		if err := startBackgroundServicesWithSafetyGate(
+			ctx,
+			configurationPublisher,
+			managedStore,
+			runtimeMonitor,
+			expiryScheduler,
+			logger,
+			coreManager,
+			coreScheduler,
+		); err != nil {
+			return err
+		}
 	}
 	server := &http.Server{
-		Addr: cfg.Address(),
+		Addr: domain.Endpoint{
+			Host: runtimeSettings.PanelListenAddress,
+			Port: runtimeSettings.PanelListenPort,
+		}.Address(),
 		Handler: httpapi.New(httpapi.Options{
 			Logger:       logger,
 			Build:        build,
@@ -294,6 +361,62 @@ func Run(ctx context.Context, cfg config.Config, build version.Info) error {
 		WriteTimeout:      30 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
+	endpointState, err := managedStore.EndpointSettings(ctx)
+	if err != nil {
+		return fmt.Errorf("read m-ui endpoint restart state: %w", err)
+	}
+	listener, err := net.Listen("tcp", server.Addr)
+	if err != nil {
+		return fmt.Errorf("bind m-ui HTTP listener: %w", err)
+	}
+	if err := managedStore.ClearEndpointRestartRequirements(
+		ctx,
+		true,
+		false,
+		endpointState.Active.Generation,
+		endpointState.Active,
+	); err != nil {
+		_ = listener.Close()
+		return fmt.Errorf("clear applied m-ui endpoint restart state: %w", err)
+	}
+	if err := startup.PublishReady(); err != nil {
+		_ = listener.Close()
+		return fmt.Errorf("publish m-ui startup readiness: %w", err)
+	}
+	if cfg.Mihomo.ProcessMode != "managed" {
+		// Native service managers are allowed to start Mihomo only after this
+		// readiness token. Defer all runtime reconciliation and schedulers until
+		// the service manager has crossed that boundary and authenticated the
+		// Controller; the pre-runtime phase above must remain side-effect free.
+		go func() {
+			if err := waitForRuntimeHealthy(ctx, process, controller); err != nil {
+				if ctx.Err() == nil {
+					logger.Error(
+						"native Mihomo did not become healthy; background services remain stopped",
+						"error",
+						redact.Text(err.Error()),
+					)
+				}
+				return
+			}
+			if err := startBackgroundServicesWithSafetyGate(
+				ctx,
+				configurationPublisher,
+				managedStore,
+				runtimeMonitor,
+				expiryScheduler,
+				logger,
+				coreManager,
+				coreScheduler,
+			); err != nil {
+				logger.Error(
+					"start native post-runtime background services",
+					"error",
+					redact.Text(err.Error()),
+				)
+			}
+		}()
+	}
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -304,7 +427,7 @@ func Run(ctx context.Context, cfg config.Config, build version.Info) error {
 			"version",
 			build.Version,
 		)
-		errCh <- server.ListenAndServe()
+		errCh <- server.Serve(listener)
 	}()
 
 	select {
@@ -323,6 +446,29 @@ func Run(ctx context.Context, cfg config.Config, build version.Info) error {
 		return fmt.Errorf("shut down HTTP server: %w", err)
 	}
 	return nil
+}
+
+func waitForRuntimeHealthy(
+	ctx context.Context,
+	process mihomo.CoreProcess,
+	controller mihomo.CoreController,
+) error {
+	for {
+		healthContext, cancel := context.WithTimeout(ctx, 5*time.Second)
+		active, processErr := process.IsActive(healthContext)
+		_, controllerErr := controller.Version(healthContext)
+		cancel()
+		if processErr == nil && active && controllerErr == nil {
+			return nil
+		}
+		timer := time.NewTimer(250 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
 }
 
 type startupReconciler interface {

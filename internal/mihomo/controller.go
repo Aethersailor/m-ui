@@ -7,13 +7,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/url"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
+
+	"github.com/Aethersailor/m-ui/internal/domain"
 )
 
 const maxControllerResponse = 4 * 1024 * 1024
@@ -24,23 +24,18 @@ type Controller struct {
 	client  *http.Client
 }
 
-func NewController(address, secret string) (*Controller, error) {
-	host, port, err := net.SplitHostPort(address)
-	if err != nil || port == "" {
-		return nil, errors.New("mihomo Controller address must use host:port syntax")
+func NewController(connectAddress, secret string) (*Controller, error) {
+	endpoint, err := domain.ParseEndpoint(connectAddress)
+	if err != nil {
+		return nil, errors.New("mihomo Controller connect address must use host:port syntax")
 	}
-	portNumber, err := strconv.Atoi(port)
-	if err != nil || portNumber < 1 || portNumber > 65535 {
-		return nil, errors.New("mihomo Controller port must be between 1 and 65535")
-	}
-	ip := net.ParseIP(host)
-	if !strings.EqualFold(host, "localhost") && (ip == nil || !ip.IsLoopback()) {
-		return nil, errors.New("mihomo Controller must use a loopback address")
+	if err := domain.ValidateConnectEndpoint(endpoint, "mihomo Controller connect endpoint"); err != nil {
+		return nil, err
 	}
 	if strings.TrimSpace(secret) == "" {
 		return nil, errors.New("mihomo Controller secret is required")
 	}
-	baseURL, err := url.Parse("http://" + address)
+	baseURL, err := url.Parse("http://" + endpoint.Address())
 	if err != nil {
 		return nil, errors.New("mihomo Controller address is invalid")
 	}

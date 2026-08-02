@@ -19,6 +19,7 @@ import (
 var (
 	ErrNotFound   = errors.New("managed resource not found")
 	ErrValidation = errors.New("managed state validation failed")
+	ErrConflict   = errors.New("managed state conflict")
 )
 
 type ListenerSpec struct {
@@ -47,6 +48,16 @@ type EditableSettings struct {
 	PublicHost string
 }
 
+type EndpointSettings = store.EndpointSettings
+type PendingEndpointSettings = store.PendingEndpointSettings
+type EndpointSettingsState = store.EndpointSettingsState
+
+// RuntimeReadyGuard acquires a continuous m-ui startup-readiness guard. The
+// returned release function must stay held until the runtime coordinator has
+// been released, so a new m-ui startup cannot invalidate the observation while
+// a lifecycle action is in progress.
+type RuntimeReadyGuard func(context.Context) (func() error, error)
+
 type RuntimeStatus struct {
 	Active          bool
 	Degraded        bool
@@ -69,6 +80,7 @@ type ManagerOptions struct {
 	Runtime     *RuntimeMonitor
 	Core        *coremanagement.Manager
 	Coordinator *operation.Coordinator
+	ReadyGuard  RuntimeReadyGuard
 	Clock       func() time.Time
 }
 
@@ -78,9 +90,11 @@ type Manager struct {
 	cli         mihomo.CoreCLI
 	controller  mihomo.CoreController
 	process     mihomo.CoreProcess
+	boundary    *RuntimeBoundary
 	runtime     *RuntimeMonitor
 	core        *coremanagement.Manager
 	coordinator *operation.Coordinator
+	readyGuard  RuntimeReadyGuard
 	clock       func() time.Time
 }
 
@@ -98,6 +112,8 @@ func NewManager(options ManagerOptions) (*Manager, error) {
 		return nil, errors.New("mihomo process adapter is required")
 	case options.Runtime == nil:
 		return nil, errors.New("runtime monitor is required")
+	case options.ReadyGuard == nil:
+		return nil, errors.New("runtime readiness guard is required")
 	}
 	if options.Clock == nil {
 		options.Clock = time.Now
@@ -105,15 +121,28 @@ func NewManager(options ManagerOptions) (*Manager, error) {
 	if options.Coordinator == nil {
 		options.Coordinator = operation.NewCoordinator()
 	}
+	boundary, err := NewRuntimeBoundary(RuntimeBoundaryOptions{
+		Store:          options.Store,
+		Controller:     options.Controller,
+		Process:        options.Process,
+		Coordinator:    options.Coordinator,
+		HealthTimeout:  10 * time.Second,
+		HealthInterval: 100 * time.Millisecond,
+	})
+	if err != nil {
+		return nil, err
+	}
 	return &Manager{
 		store:       options.Store,
 		publisher:   options.Publisher,
 		cli:         options.CLI,
 		controller:  options.Controller,
 		process:     options.Process,
+		boundary:    boundary,
 		runtime:     options.Runtime,
 		core:        options.Core,
 		coordinator: options.Coordinator,
+		readyGuard:  options.ReadyGuard,
 		clock:       options.Clock,
 	}, nil
 }
@@ -553,6 +582,117 @@ func (manager *Manager) UpdateSettings(
 	)
 }
 
+func (manager *Manager) EndpointSettings(
+	ctx context.Context,
+) (EndpointSettingsState, error) {
+	return manager.store.EndpointSettings(ctx)
+}
+
+func (manager *Manager) UpdateEndpointSettings(
+	ctx context.Context,
+	actorAdminID string,
+	settings EndpointSettings,
+	expectedGeneration int64,
+) (EndpointSettingsState, error) {
+	if expectedGeneration < 1 {
+		return EndpointSettingsState{}, fmt.Errorf(
+			"%w: endpoint settings generation is required",
+			ErrValidation,
+		)
+	}
+	if err := domain.ValidateBindEndpoint(settings.PanelUIBind, "panel UI bind endpoint"); err != nil {
+		return EndpointSettingsState{}, fmt.Errorf("%w: %v", ErrValidation, err)
+	}
+	if err := domain.ValidateBindEndpoint(
+		settings.MihomoExternalControllerBind,
+		"Mihomo external-controller bind endpoint",
+	); err != nil {
+		return EndpointSettingsState{}, fmt.Errorf("%w: %v", ErrValidation, err)
+	}
+	if err := domain.ValidateConnectEndpoint(
+		settings.MihomoControllerConnect,
+		"m-ui Mihomo controller connect endpoint",
+	); err != nil {
+		return EndpointSettingsState{}, fmt.Errorf("%w: %v", ErrValidation, err)
+	}
+	if err := domain.ValidateControllerEndpointPair(
+		settings.MihomoExternalControllerBind,
+		settings.MihomoControllerConnect,
+	); err != nil {
+		return EndpointSettingsState{}, fmt.Errorf("%w: %v", ErrValidation, err)
+	}
+	if err := domain.ValidateCORSOrigins(settings.ExternalControllerCORSOrigins); err != nil {
+		return EndpointSettingsState{}, fmt.Errorf("%w: %v", ErrValidation, err)
+	}
+	current, err := manager.store.EndpointSettings(ctx)
+	if err != nil {
+		return EndpointSettingsState{}, err
+	}
+	if current.Active.Generation != expectedGeneration {
+		return EndpointSettingsState{}, fmt.Errorf(
+			"%w: endpoint settings changed; reload and try again",
+			ErrConflict,
+		)
+	}
+	if endpointSettingsEqual(current.Active, settings) {
+		return current, nil
+	}
+	effectiveAt := manager.clock().UTC()
+	_, err = manager.publisher.Publish(ctx, publisher.Request{
+		Reason:          "update endpoint settings",
+		ActorAdminID:    actorAdminID,
+		AuditAction:     "settings.endpoints.update",
+		AuditResource:   "settings",
+		AuditResourceID: "endpoints",
+		AuditSummary:    "Updated m-ui and Mihomo endpoint settings; restart requirements were recorded.",
+		EffectiveAt:     &effectiveAt,
+		RestartRequired: true,
+		Mutate: func(ctx context.Context, transaction store.PublicationTransaction) error {
+			state, err := transaction.DesiredState(ctx, effectiveAt)
+			if err != nil {
+				return err
+			}
+			if state.EndpointGeneration != expectedGeneration {
+				return fmt.Errorf(
+					"%w: endpoint settings changed; reload and try again",
+					ErrConflict,
+				)
+			}
+			state.AsOf = effectiveAt
+			state.PanelUIBind = settings.PanelUIBind
+			state.MihomoExternalControllerBind = settings.MihomoExternalControllerBind
+			state.MihomoControllerConnect = settings.MihomoControllerConnect
+			state.ExternalControllerCORSOrigins = append(
+				[]string(nil),
+				settings.ExternalControllerCORSOrigins...,
+			)
+			if err := state.Validate(); err != nil {
+				return fmt.Errorf("%w: %v", ErrValidation, err)
+			}
+			return transaction.ReplaceDesiredState(ctx, state)
+		},
+	})
+	if err != nil {
+		return EndpointSettingsState{}, err
+	}
+	return manager.store.EndpointSettings(ctx)
+}
+
+func endpointSettingsEqual(left, right EndpointSettings) bool {
+	if !left.PanelUIBind.Equal(right.PanelUIBind) ||
+		!left.MihomoExternalControllerBind.Equal(right.MihomoExternalControllerBind) ||
+		!left.MihomoControllerConnect.Equal(right.MihomoControllerConnect) ||
+		len(left.ExternalControllerCORSOrigins) != len(right.ExternalControllerCORSOrigins) {
+		return false
+	}
+	for index := range left.ExternalControllerCORSOrigins {
+		if left.ExternalControllerCORSOrigins[index] != right.ExternalControllerCORSOrigins[index] {
+			return false
+		}
+	}
+	return true
+}
+
 func (manager *Manager) PreviewConfig(
 	ctx context.Context,
 	reveal bool,
@@ -647,24 +787,24 @@ func (manager *Manager) RuntimeAction(
 	ctx context.Context,
 	actorAdminID, action string,
 ) error {
+	if manager.readyGuard == nil {
+		return errors.New("runtime readiness guard is required")
+	}
+	readyRelease, err := manager.readyGuard(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if readyRelease != nil {
+			_ = readyRelease()
+		}
+	}()
 	release, lockErr := manager.coordinator.TryAcquire()
 	if lockErr != nil {
 		return lockErr
 	}
 	defer release()
-	var err error
-	switch action {
-	case "start":
-		err = manager.process.Start(ctx)
-	case "stop":
-		err = manager.process.Stop(ctx)
-	case "restart":
-		err = manager.process.Restart(ctx)
-	case "reload":
-		err = manager.process.Reload(ctx)
-	default:
-		return fmt.Errorf("%w: unsupported runtime action", ErrValidation)
-	}
+	err = manager.runtimeBoundary().runLocked(ctx, action)
 	result := "success"
 	if err != nil {
 		result = "failure"
@@ -683,6 +823,29 @@ func (manager *Manager) RuntimeAction(
 		})
 	}
 	return errors.Join(err, idErr)
+}
+
+// StartManagedProcess applies the managed-mode startup boundary. The process
+// is started by the application before the HTTP listener is bound; if the
+// active YAML contains a pending Mihomo endpoint candidate, startup must
+// health-check it and clear only the Mihomo side with the same CAS used by
+// explicit runtime actions.
+func (manager *Manager) StartManagedProcess(ctx context.Context) error {
+	return manager.runtimeBoundary().Start(ctx)
+}
+
+func (manager *Manager) runtimeBoundary() *RuntimeBoundary {
+	if manager.boundary != nil {
+		return manager.boundary
+	}
+	return &RuntimeBoundary{
+		store:       manager.store,
+		controller:  manager.controller,
+		process:     manager.process,
+		coordinator: manager.coordinator,
+		healthLimit: 10 * time.Second,
+		healthStep:  100 * time.Millisecond,
+	}
 }
 
 func (manager *Manager) CoreStatus(
@@ -731,6 +894,9 @@ func (manager *Manager) UpdateCore(
 	if manager.core == nil {
 		return coremanagement.Manifest{}, false, errors.New("core management is unavailable")
 	}
+	if err := manager.rejectPendingMihomoRestart(ctx); err != nil {
+		return coremanagement.Manifest{}, false, err
+	}
 	return manager.core.Update(ctx, actorAdminID)
 }
 
@@ -741,7 +907,21 @@ func (manager *Manager) RollbackCore(
 	if manager.core == nil {
 		return coremanagement.Manifest{}, errors.New("core management is unavailable")
 	}
+	if err := manager.rejectPendingMihomoRestart(ctx); err != nil {
+		return coremanagement.Manifest{}, err
+	}
 	return manager.core.Rollback(ctx, actorAdminID)
+}
+
+func (manager *Manager) rejectPendingMihomoRestart(ctx context.Context) error {
+	required, err := manager.store.MihomoRestartRequired(ctx)
+	if err != nil {
+		return err
+	}
+	if required {
+		return publisher.ErrMihomoRestartRequired
+	}
+	return nil
 }
 
 func (manager *Manager) TestCore(

@@ -3,9 +3,11 @@
 ## Trust boundary
 
 m-ui v0.1 is an administrator-only control plane for one local Mihomo
-instance. It is not designed as a public multi-tenant service. The panel and
-Mihomo Controller listen on loopback by default. Expose the panel only through
-an SSH tunnel or a carefully configured HTTPS reverse proxy.
+instance. It is not designed as a public multi-tenant service. The panel UI
+and Mihomo `external-controller` dashboard API listen on loopback by default.
+They are separate listeners: m-ui's `/api/v1` is not the Mihomo dashboard API.
+Expose either one only through an SSH tunnel, VPN, or carefully configured
+HTTPS reverse proxy.
 
 The database is the source of truth. m-ui accepts typed management operations,
 not arbitrary YAML or command lines. Every configuration mutation is compiled,
@@ -70,6 +72,16 @@ Both long-running services run as dedicated non-root users:
 m-ui intentionally does not have a general shell, package-manager access,
 firewall access, or permission to manage arbitrary systemd units.
 
+Package upgrade hooks keep service-state handoff data in a separate
+`root:root` `0700` directory under `/run`, never in the m-ui runtime directory,
+and parse only fixed `0`/`1` fields. Each package transaction records its exact
+root-owned snapshot path in the same protected directory; postinstall never
+guesses a snapshot by timestamp or filename ordering. Package rollback
+snapshots are kept under the root-only `/var/lib/m-ui-package-backups` tree;
+snapshots containing links, sockets, or other special files are rejected before
+privileged restoration, and restored service state must pass the active panel
+HTTP health endpoint before the handoff is consumed.
+
 The managed core tree is owned by `m-ui:mihomo`. Parent directories give
 Mihomo traversal/read/execute access to only the current verified binary while
 database, master key and revision data remain private to m-ui. The updater
@@ -103,8 +115,17 @@ private keys, Controller secrets, or sharing links.
 
 The installer never opens firewall ports or changes SSH, reverse-proxy, or
 Cloudflare configuration. Listener ports are a deliberate administrator
-choice. The panel remains at `127.0.0.1:2095` and the Controller remains at
-`127.0.0.1:9090`.
+choice. The panel UI remains at `127.0.0.1:2095` and the Mihomo
+`external-controller` remains at `127.0.0.1:9090` until the administrator
+changes them in System settings. The m-ui-to-Mihomo connection target remains
+loopback-only and is never allowed to be an arbitrary remote host.
+
+Endpoint changes are stored in SQLite and the generated YAML is validated, but
+they are not treated as live socket changes. The UI reports whether m-ui or
+Mihomo must be restarted. CORS accepts exact `http://`/`https://` origins only;
+`*` is rejected. Public dashboard access should use TLS plus a VPN, allowlist,
+or an independently managed reverse proxy, and must still supply the Mihomo
+Controller secret.
 
 When using a reverse proxy:
 

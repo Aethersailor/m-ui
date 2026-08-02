@@ -19,14 +19,32 @@ const (
 )
 
 type OpenRCProcess struct {
-	executor commandExecutor
+	executor        commandExecutor
+	lifecycleMarker func(func() error) error
+	binaryPath      string
+	configPath      string
+	processActive   func(context.Context, string, string) (bool, error)
 }
 
 func NewOpenRCProcess(serviceName string) (*OpenRCProcess, error) {
+	return newOpenRCProcess(serviceName, "", "")
+}
+
+func newOpenRCProcess(
+	serviceName string,
+	binaryPath string,
+	configPath string,
+) (*OpenRCProcess, error) {
 	if serviceName != managedServiceName && serviceName != openRCServiceName {
 		return nil, errors.New("OpenRC service name must be mihomo")
 	}
-	return &OpenRCProcess{executor: osCommandExecutor{}}, nil
+	return &OpenRCProcess{
+		executor:        osCommandExecutor{},
+		lifecycleMarker: runWithRuntimeLifecycleMarker,
+		binaryPath:      binaryPath,
+		configPath:      configPath,
+		processActive:   openRCProcessActive,
+	}, nil
 }
 
 func (process *OpenRCProcess) IsActive(ctx context.Context) (bool, error) {
@@ -42,7 +60,18 @@ func (process *OpenRCProcess) IsActive(ctx context.Context) (bool, error) {
 		return true, nil
 	}
 	if errors.Is(err, errCommandExit) {
-		return false, nil
+		if process.binaryPath == "" || process.configPath == "" {
+			return false, nil
+		}
+		active, processErr := process.processActive(
+			ctx,
+			process.binaryPath,
+			process.configPath,
+		)
+		if processErr != nil {
+			return false, errors.New("check Mihomo OpenRC process state")
+		}
+		return active, nil
 	}
 	return false, errors.New("check Mihomo OpenRC service state")
 }
@@ -93,6 +122,22 @@ func (process *OpenRCProcess) lifecycle(ctx context.Context, action string) erro
 	default:
 		return fmt.Errorf("unsupported OpenRC action %q", action)
 	}
+	if action == "start" || action == "restart" {
+		marker := process.lifecycleMarker
+		if marker == nil {
+			marker = runWithRuntimeLifecycleMarker
+		}
+		return marker(func() error {
+			return process.lifecycleCommand(ctx, action)
+		})
+	}
+	return process.lifecycleCommand(ctx, action)
+}
+
+func (process *OpenRCProcess) lifecycleCommand(
+	ctx context.Context,
+	action string,
+) error {
 	_, err := process.executor.Run(
 		ctx,
 		20*time.Second,

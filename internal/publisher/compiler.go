@@ -21,6 +21,11 @@ func (YAMLCompiler) Compile(ctx context.Context, state domain.DesiredState) ([]b
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	normalized, err := state.NormalizeLegacy()
+	if err != nil {
+		return nil, fmt.Errorf("normalize desired state endpoints: %w", err)
+	}
+	state = normalized
 	if err := state.Validate(); err != nil {
 		return nil, fmt.Errorf("validate desired state: %w", err)
 	}
@@ -42,10 +47,15 @@ func (YAMLCompiler) Compile(ctx context.Context, state domain.DesiredState) ([]b
 		Mode:               "rule",
 		LogLevel:           "info",
 		IPv6:               true,
-		ExternalController: state.ControllerAddress,
+		ExternalController: state.MihomoExternalControllerBind.Address(),
 		Secret:             state.ControllerSecret,
 		Listeners:          make([]vlessListener, 0, len(listeners)),
 		Rules:              []string{"MATCH,DIRECT"},
+	}
+	if len(state.ExternalControllerCORSOrigins) > 0 {
+		document.ExternalControllerCORS = &externalControllerCORS{
+			AllowOrigins: append([]string(nil), state.ExternalControllerCORSOrigins...),
+		}
 	}
 	for _, listener := range listeners {
 		users := listener.EffectiveUsers(state.AsOf)
@@ -97,13 +107,19 @@ func SHA256(content []byte) string {
 }
 
 type configuration struct {
-	Mode               string          `yaml:"mode"`
-	LogLevel           string          `yaml:"log-level"`
-	IPv6               bool            `yaml:"ipv6"`
-	ExternalController string          `yaml:"external-controller"`
-	Secret             string          `yaml:"secret"`
-	Listeners          []vlessListener `yaml:"listeners"`
-	Rules              []string        `yaml:"rules"`
+	Mode                   string                  `yaml:"mode"`
+	LogLevel               string                  `yaml:"log-level"`
+	IPv6                   bool                    `yaml:"ipv6"`
+	ExternalController     string                  `yaml:"external-controller"`
+	ExternalControllerCORS *externalControllerCORS `yaml:"external-controller-cors,omitempty"`
+	Secret                 string                  `yaml:"secret"`
+	Listeners              []vlessListener         `yaml:"listeners"`
+	Rules                  []string                `yaml:"rules"`
+}
+
+type externalControllerCORS struct {
+	AllowOrigins        []string `yaml:"allow-origins,omitempty"`
+	AllowPrivateNetwork bool     `yaml:"allow-private-network,omitempty"`
 }
 
 type vlessListener struct {

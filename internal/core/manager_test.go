@@ -205,6 +205,26 @@ func TestManagerExternalCoreAndCoordinatorConflict(t *testing.T) {
 	}
 }
 
+func TestManagerRejectsCoreMutationWhileMihomoEndpointRestartIsPending(t *testing.T) {
+	t.Parallel()
+	fixture := newManagerFixture(t)
+	gate := &fakeEndpointRestartGate{required: true}
+	fixture.manager.endpointGate = gate
+
+	if _, _, err := fixture.manager.Update(context.Background(), "admin"); !errors.Is(err, ErrMihomoRestartRequired) {
+		t.Fatalf("Update() error = %v, want endpoint restart requirement", err)
+	}
+	if _, err := fixture.manager.Rollback(context.Background(), "admin"); !errors.Is(err, ErrMihomoRestartRequired) {
+		t.Fatalf("Rollback() error = %v, want endpoint restart requirement", err)
+	}
+	if gate.calls != 2 {
+		t.Fatalf("endpoint gate calls = %d, want 2", gate.calls)
+	}
+	if fixture.process.restarts != 0 {
+		t.Fatalf("core mutation restarted Mihomo %d times", fixture.process.restarts)
+	}
+}
+
 func TestFileStoreRecoversStagingAndRetainsTwoBackups(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
@@ -607,6 +627,16 @@ func (cli fakeCLI) Version(context.Context) (string, error) {
 
 func (fakeCLI) GenerateRealityKeypair(context.Context) (domain.Keypair, error) {
 	return domain.Keypair{}, nil
+}
+
+type fakeEndpointRestartGate struct {
+	required bool
+	calls    int
+}
+
+func (gate *fakeEndpointRestartGate) MihomoRestartRequired(context.Context) (bool, error) {
+	gate.calls++
+	return gate.required, nil
 }
 
 type fakeCoreProcess struct {

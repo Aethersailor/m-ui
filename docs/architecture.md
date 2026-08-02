@@ -30,7 +30,8 @@ m-ui single binary (user m-ui)
   |-- expiry scheduler
   |
   |-- fixed CLI invocation ------------> mihomo binary
-  |-- loopback REST API ---------------> Mihomo controller
+  |-- m-ui REST API and panel UI ------> administrator browser
+  |-- loopback client connection ------> Mihomo controller
   `-- fixed service adapter ----------> systemd/OpenRC/managed Mihomo
 ```
 
@@ -100,6 +101,14 @@ reloads the old configuration. If recovery itself fails, m-ui records degraded
 state and rejects subsequent mutations until an operator repairs the indicated
 revision.
 
+Endpoint settings use the same typed publication transaction, but mark the
+affected runtime boundary as pending instead of assuming a reload changed a
+listening socket. The candidate YAML and active SQLite state are committed
+only after Mihomo validation; the pending snapshot is cleared separately when
+m-ui or Mihomo has successfully restarted. A panel bind change is applied on
+the next m-ui restart, while an `external-controller` bind/CORS change is
+applied on the next Mihomo restart.
+
 Core updates use the same operation coordinator as configuration publication
 and runtime actions. A candidate is selected by exact Linux architecture from a
 fixed official GitHub repository, size- and digest-checked, decompressed into a
@@ -159,9 +168,14 @@ observability, never user billing data.
   and Alpine 3.20+ with OpenRC, on Linux amd64 and arm64.
 - OCI images are non-root Linux amd64/arm64 images with a direct Mihomo
   supervisor and persistent configuration/data volumes.
-- The panel defaults to `127.0.0.1:2095`; remote access uses an SSH tunnel or a
-  separately managed loopback reverse proxy.
-- The Mihomo Controller remains on loopback.
+- The panel UI defaults to `127.0.0.1:2095`. Its bind host/port is a separate
+  managed endpoint and may be changed to an IPv4/IPv6 bind address from the
+  System settings page; the m-ui service must be restarted before it is active.
+- Mihomo's `external-controller` dashboard API is a different endpoint from
+  m-ui's `/api/v1`. It defaults to `127.0.0.1:9090`; its bind host/port and
+  exact CORS origins are managed separately, published into YAML, and require
+  an explicit Mihomo restart. m-ui's own Controller client remains a distinct
+  loopback-only connection target.
 - Data, the master key, database, revisions, and generated configuration use
   least-privilege ownership and modes.
 - Installation does not modify the firewall, SSH configuration, reverse proxy,

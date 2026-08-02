@@ -1,7 +1,8 @@
 import { defineStore } from 'pinia'
 
 import {
-  getRuntimeLogs,
+	getEndpointSettings,
+	getRuntimeLogs,
   getRuntimeStatus,
   getSettings,
   listAuditEntries,
@@ -12,7 +13,8 @@ import {
   type Revision,
   type RuntimeLog,
   type RuntimeStatus,
-  type Settings,
+	type Settings,
+	type EndpointSettingsState,
 } from '@/api/management'
 import { APIError } from '@/api/client'
 
@@ -21,7 +23,8 @@ export const useManagementStore = defineStore('management', {
     listeners: [] as Listener[],
     runtime: null as RuntimeStatus | null,
     revisions: [] as Revision[],
-    settings: null as Settings | null,
+		settings: null as Settings | null,
+		endpointSettings: null as EndpointSettingsState | null,
     logs: [] as RuntimeLog[],
     audit: [] as AuditEntry[],
     loading: false,
@@ -42,7 +45,8 @@ export const useManagementStore = defineStore('management', {
       if (this.settings) {
         return
       }
-      this.settings = await getSettings()
+		this.settings = await getSettings()
+		this.endpointSettings = await getEndpointSettings()
     },
     async loadOverview() {
       this.loading = true
@@ -79,12 +83,14 @@ export const useManagementStore = defineStore('management', {
       this.revisions = await listRevisions()
     },
     async loadSystem() {
-      const [settings, logs, audit] = await Promise.all([
-        getSettings(),
-        getRuntimeLogs(),
+		const [settings, endpoints, logs, audit] = await Promise.all([
+			getSettings(),
+			getEndpointSettings(),
+			getRuntimeLogs(),
         listAuditEntries(),
       ])
-      this.settings = settings
+		this.settings = settings
+		this.endpointSettings = endpoints
       this.logs = logs
       this.audit = audit
     },

@@ -9,6 +9,7 @@ import {
   NForm,
   NFormItem,
   NInput,
+  NInputNumber,
   NSelect,
   NSpace,
   NSwitch,
@@ -27,6 +28,7 @@ import { changePassword } from '@/api/auth'
 import {
   checkCore,
   getCoreStatus,
+  updateEndpointSettings,
   getRuntimeLogs,
   listAuditEntries,
   runRuntimeAction,
@@ -37,6 +39,7 @@ import {
   updateCoreSettings,
   updateSettings,
   type Settings,
+  type EndpointSettings,
   type CoreStatus,
 } from '@/api/management'
 import AppShell from '@/components/AppShell.vue'
@@ -56,6 +59,7 @@ const dialog = useDialog()
 const message = useMessage()
 const loading = ref(true)
 const saving = ref(false)
+const endpointSaving = ref(false)
 const coreBusy = ref(false)
 const coreStatus = ref<CoreStatus | null>(null)
 const activeTab = ref('settings')
@@ -64,6 +68,14 @@ const settingsForm = reactive<Settings>({
   ui_language: 'en-US',
   public_host: 'localhost',
 })
+const endpointForm = reactive<EndpointSettings>({
+  panel_ui_bind: { host: '127.0.0.1', port: 2095 },
+  mihomo_external_controller_bind: { host: '127.0.0.1', port: 9090 },
+  mihomo_controller_connect: { host: '127.0.0.1', port: 9090 },
+  external_controller_cors_origins: [],
+  generation: 1,
+})
+const corsOriginsText = ref('')
 const coreForm = reactive({
   channel: 'release' as 'release' | 'alpha',
   auto_update: false,
@@ -113,6 +125,21 @@ async function load() {
     })
     if (management.settings) {
       Object.assign(settingsForm, management.settings)
+    }
+    if (management.endpointSettings) {
+      Object.assign(endpointForm, {
+        ...management.endpointSettings.active,
+        panel_ui_bind: { ...management.endpointSettings.active.panel_ui_bind },
+        mihomo_external_controller_bind: {
+          ...management.endpointSettings.active.mihomo_external_controller_bind,
+        },
+        mihomo_controller_connect: {
+          ...management.endpointSettings.active.mihomo_controller_connect,
+        },
+      })
+      corsOriginsText.value = endpointForm.external_controller_cors_origins.join(
+        '\n',
+      )
     }
   } catch (error) {
     message.error(t(errorTranslationKey(error)))
@@ -191,6 +218,41 @@ async function saveSettings() {
     message.error(t(errorTranslationKey(error)))
   } finally {
     saving.value = false
+  }
+}
+
+async function saveEndpointSettings() {
+  endpointSaving.value = true
+  try {
+    const saved = await updateEndpointSettings(auth.csrfToken, {
+      panel_ui_bind: { ...endpointForm.panel_ui_bind },
+      mihomo_external_controller_bind: {
+        ...endpointForm.mihomo_external_controller_bind,
+      },
+      mihomo_controller_connect: { ...endpointForm.mihomo_controller_connect },
+      external_controller_cors_origins: corsOriginsText.value
+        .split(/\r?\n/)
+        .map((origin) => origin.trim())
+        .filter(Boolean),
+      generation: endpointForm.generation,
+    })
+    management.endpointSettings = saved
+    Object.assign(endpointForm, {
+      ...saved.active,
+      panel_ui_bind: { ...saved.active.panel_ui_bind },
+      mihomo_external_controller_bind: {
+        ...saved.active.mihomo_external_controller_bind,
+      },
+      mihomo_controller_connect: { ...saved.active.mihomo_controller_connect },
+    })
+    corsOriginsText.value = endpointForm.external_controller_cors_origins.join(
+      '\n',
+    )
+    message.success(t('system.endpointSaved'))
+  } catch (error) {
+    message.error(t(errorTranslationKey(error)))
+  } finally {
+    endpointSaving.value = false
   }
 }
 
@@ -333,6 +395,114 @@ async function submitPassword() {
                 </NButton>
               </NSpace>
             </NForm>
+
+            <NCard
+              :title="t('system.endpointSettings')"
+              size="small"
+              class="section-gap"
+            >
+              <NAlert type="warning" :bordered="false" class="section-gap">
+                {{ t('system.endpointSecurityHint') }}
+              </NAlert>
+              <NForm
+                class="settings-form"
+                @submit.prevent="saveEndpointSettings"
+              >
+                <div class="form-grid">
+                  <NFormItem :label="t('system.panelUIBind')" required>
+                    <NSpace>
+                      <NInput
+                        v-model:value="endpointForm.panel_ui_bind.host"
+                        :placeholder="t('system.ipAddressPlaceholder')"
+                      />
+                      <NInputNumber
+                        v-model:value="endpointForm.panel_ui_bind.port"
+                        :min="1"
+                        :max="65535"
+                        :show-button="false"
+                      />
+                    </NSpace>
+                  </NFormItem>
+                  <NFormItem
+                    :label="t('system.mihomoExternalControllerBind')"
+                    required
+                  >
+                    <NSpace>
+                      <NInput
+                        v-model:value="endpointForm.mihomo_external_controller_bind.host"
+                        :placeholder="t('system.ipAddressPlaceholder')"
+                      />
+                      <NInputNumber
+                        v-model:value="endpointForm.mihomo_external_controller_bind.port"
+                        :min="1"
+                        :max="65535"
+                        :show-button="false"
+                      />
+                    </NSpace>
+                  </NFormItem>
+                  <NFormItem
+                    :label="t('system.mihomoControllerConnect')"
+                    required
+                  >
+                    <NSpace>
+                      <NInput
+                        v-model:value="endpointForm.mihomo_controller_connect.host"
+                        :placeholder="t('system.loopbackPlaceholder')"
+                      />
+                      <NInputNumber
+                        v-model:value="endpointForm.mihomo_controller_connect.port"
+                        :min="1"
+                        :max="65535"
+                        :show-button="false"
+                      />
+                    </NSpace>
+                  </NFormItem>
+                  <NFormItem :label="t('system.controllerCorsOrigins')">
+                    <NInput
+                      v-model:value="corsOriginsText"
+                      type="textarea"
+                      :placeholder="t('system.controllerCorsPlaceholder')"
+                    />
+                  </NFormItem>
+                </div>
+                <NAlert
+                  v-if="management.endpointSettings?.pending"
+                  type="info"
+                  :bordered="false"
+                  class="section-gap"
+                >
+                  {{
+                    t('system.endpointPending', {
+                      mui: management.endpointSettings.pending
+                        .requires_mui_restart
+                        ? t('system.muiRestartRequired')
+                        : '',
+                      mihomo: management.endpointSettings.pending
+                        .requires_mihomo_restart
+                        ? t('system.mihomoRestartRequired')
+                        : '',
+                    })
+                  }}
+                </NAlert>
+                <NAlert type="info" :bordered="false" class="section-gap">
+                  {{ t('system.endpointRestartOrder') }}
+                </NAlert>
+                <NSpace justify="end" class="modal-actions">
+                  <NButton
+                    type="primary"
+                    attr-type="submit"
+                    :loading="endpointSaving"
+                    :disabled="
+                      !endpointForm.panel_ui_bind.host ||
+                      !endpointForm.mihomo_external_controller_bind.host ||
+                      !endpointForm.mihomo_controller_connect.host
+                    "
+                  >
+                    {{ t('common.save') }}
+                  </NButton>
+                </NSpace>
+              </NForm>
+            </NCard>
           </NTabPane>
 
           <NTabPane name="runtime" :tab="t('system.runtime')">

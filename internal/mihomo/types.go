@@ -31,6 +31,26 @@ type CoreProcess interface {
 	RecentLogs(ctx context.Context, limit int) ([]LogEntry, error)
 }
 
+// ProcessAttempt identifies one exact process start owned by the lifecycle
+// boundary. It is intentionally opaque to callers: a recovery cleanup may
+// terminate only the generation returned by the corresponding start call,
+// never whichever command happens to be current later.
+type ProcessAttempt struct {
+	generation uint64
+}
+
+// AttemptProcess is an optional extension implemented by the managed process
+// adapter. Native service adapters retain the CoreProcess contract; managed
+// starts additionally expose an attempt token so a failed health check can
+// clean up the exact child it started while the runtime coordinator is held.
+type AttemptProcess interface {
+	CoreProcess
+	StartAttempt(ctx context.Context) (ProcessAttempt, error)
+	RestartAttempt(ctx context.Context) (ProcessAttempt, error)
+	ReloadAttempt(ctx context.Context) (ProcessAttempt, error)
+	AbortAttempt(attempt ProcessAttempt) error
+}
+
 type Version struct {
 	Meta    bool   `json:"meta"`
 	Version string `json:"version"`

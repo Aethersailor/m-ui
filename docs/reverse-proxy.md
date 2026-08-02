@@ -11,15 +11,18 @@ Open `http://127.0.0.1:2095/` locally.
 
 ## HTTPS prerequisites
 
-Before using a reverse proxy, edit `/etc/m-ui/config.toml`:
+Before using a reverse proxy, set the panel UI bind endpoint to loopback in the
+System settings page (the installation file also defaults to loopback), and
+edit `/etc/m-ui/config.toml` only for bootstrap defaults:
 
 ```toml
 [security]
 cookie_secure = true
 ```
 
-Then restart m-ui. Keep `server.listen_address = "127.0.0.1"`. Do not bind the
-panel directly to a public interface just because a reverse proxy is present.
+Then restart m-ui. Keep the active panel UI endpoint on `127.0.0.1:2095`. Do
+not bind the panel directly to a public interface just because a reverse proxy
+is present.
 
 ## Caddy
 
@@ -68,10 +71,27 @@ sudo nginx -t
 sudo systemctl reload nginx
 ```
 
+## Mihomo dashboard API
+
+The Mihomo dashboard API is not m-ui's `/api/v1` API. The System settings page
+has separate fields for:
+
+- the m-ui panel UI listener;
+- Mihomo's `external-controller` bind listener;
+- m-ui's loopback-only Controller connection target;
+- exact dashboard CORS origins.
+
+To use a dashboard hosted on another origin, set an appropriate external
+controller bind address (for example `0.0.0.0` or `::`), add the dashboard's
+exact `https://...` origin, and restart Mihomo after the save completes. Keep
+the m-ui connection target on `127.0.0.1` or `::1`. Prefer a VPN or a
+TLS-terminating, access-controlled reverse proxy for the Mihomo API; the m-ui
+installer does not configure either one.
+
 ## Additional controls
 
 For an Internet-reachable panel, add an allowlist, VPN boundary, or independent
 proxy authentication. Add login rate limiting at the proxy because m-ui v0.1
 intentionally ignores forwarded client-address headers and sees the proxy as
-the socket peer. Do not cache API responses. Never proxy the Mihomo Controller
-port `9090`; it is an internal authenticated loopback API.
+the socket peer. Do not cache API responses. If the Mihomo dashboard API is
+proxied, protect it independently and preserve its bearer-secret requirement.

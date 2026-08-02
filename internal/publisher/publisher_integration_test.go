@@ -75,6 +75,34 @@ func TestPublisherRejectsPublicationWhenCoreSafetyGateIsBlocked(t *testing.T) {
 	}
 }
 
+func TestPublisherBlocksOrdinaryPublicationWhileMihomoRestartIsPending(t *testing.T) {
+	t.Parallel()
+	fixture := newPublisherFixture(t)
+	fixture.repository.mutex.Lock()
+	fixture.repository.endpoints.Pending = &store.PendingEndpointSettings{
+		EndpointSettings: store.EndpointSettings{
+			PanelUIBind:                  fixture.repository.endpoints.Active.PanelUIBind,
+			MihomoExternalControllerBind: domain.Endpoint{Host: "0.0.0.0", Port: 9090},
+			MihomoControllerConnect:      domain.Endpoint{Host: "127.0.0.1", Port: 9090},
+			Generation:                   fixture.repository.endpoints.Active.Generation + 1,
+		},
+		RequiresMihomoRestart: true,
+	}
+	fixture.repository.mutex.Unlock()
+
+	_, err := fixture.publisher.Publish(
+		context.Background(),
+		fixture.request(fixture.nextState),
+	)
+	if !errors.Is(err, ErrMihomoRestartRequired) {
+		t.Fatalf("Publish() error = %v, want ErrMihomoRestartRequired", err)
+	}
+	if fixture.cli.calls.Load() != 0 || fixture.controller.reloadCount() != 0 {
+		t.Fatal("ordinary publication touched Mihomo while restart was pending")
+	}
+	fixture.assertOldStateAndConfig(t)
+}
+
 func TestPublisherCommitsManagedStateAndRevisionInRealSQLite(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -809,6 +837,7 @@ func publisherState(name string, port uint16) domain.DesiredState {
 type fakePublicationRepository struct {
 	mutex       sync.Mutex
 	state       domain.DesiredState
+	endpoints   store.EndpointSettingsState
 	systemState domain.SystemState
 	revisions   map[string]domain.Revision
 	audits      []store.AuditEntry
@@ -821,10 +850,33 @@ type fakePublicationRepository struct {
 }
 
 func newFakePublicationRepository(state domain.DesiredState) *fakePublicationRepository {
+	normalized, err := state.NormalizeLegacy()
+	if err != nil {
+		panic(err)
+	}
+	active := store.EndpointSettings{
+		PanelUIBind:                   normalized.PanelUIBind,
+		MihomoExternalControllerBind:  normalized.MihomoExternalControllerBind,
+		MihomoControllerConnect:       normalized.MihomoControllerConnect,
+		ExternalControllerCORSOrigins: append([]string(nil), normalized.ExternalControllerCORSOrigins...),
+		Generation:                    normalized.EndpointGeneration,
+	}
 	return &fakePublicationRepository{
-		state:     cloneState(state),
+		state: cloneState(state),
+		endpoints: store.EndpointSettingsState{
+			Active:      active,
+			LastApplied: active,
+		},
 		revisions: make(map[string]domain.Revision),
 	}
+}
+
+func (repository *fakePublicationRepository) EndpointSettings(
+	context.Context,
+) (store.EndpointSettingsState, error) {
+	repository.mutex.Lock()
+	defer repository.mutex.Unlock()
+	return repository.endpoints, nil
 }
 
 func (repository *fakePublicationRepository) BeginImmediate(

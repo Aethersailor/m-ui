@@ -112,6 +112,130 @@ func TestGenerateShortIDUsesEightRandomBytes(t *testing.T) {
 	}
 }
 
+func TestEndpointValidationSupportsWildcardIPv4AndIPv6ButKeepsConnectLoopbackOnly(t *testing.T) {
+	t.Parallel()
+	if err := ValidateBindEndpoint(
+		Endpoint{Host: "0.0.0.0", Port: 2095},
+		"panel",
+	); err != nil {
+		t.Fatalf("IPv4 wildcard bind rejected: %v", err)
+	}
+	if err := ValidateBindEndpoint(
+		Endpoint{Host: "::", Port: 9090},
+		"controller",
+	); err != nil {
+		t.Fatalf("IPv6 wildcard bind rejected: %v", err)
+	}
+	if err := ValidateConnectEndpoint(
+		Endpoint{Host: "::1", Port: 9090},
+		"controller",
+	); err != nil {
+		t.Fatalf("IPv6 loopback connect rejected: %v", err)
+	}
+	if err := ValidateConnectEndpoint(
+		Endpoint{Host: "0.0.0.0", Port: 9090},
+		"controller",
+	); err == nil {
+		t.Fatal("wildcard controller connect accepted")
+	}
+}
+
+func TestSplitLegacyControllerEndpointPreservesAddressFamily(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name       string
+		input      Endpoint
+		wantBind   Endpoint
+		wantClient Endpoint
+	}{
+		{
+			name:       "ipv4 loopback",
+			input:      Endpoint{Host: "127.0.0.1", Port: 9090},
+			wantBind:   Endpoint{Host: "127.0.0.1", Port: 9090},
+			wantClient: Endpoint{Host: "127.0.0.1", Port: 9090},
+		},
+		{
+			name:       "ipv4 wildcard",
+			input:      Endpoint{Host: "0.0.0.0", Port: 9090},
+			wantBind:   Endpoint{Host: "0.0.0.0", Port: 9090},
+			wantClient: Endpoint{Host: "127.0.0.1", Port: 9090},
+		},
+		{
+			name:       "ipv6 loopback",
+			input:      Endpoint{Host: "::1", Port: 9090},
+			wantBind:   Endpoint{Host: "::1", Port: 9090},
+			wantClient: Endpoint{Host: "::1", Port: 9090},
+		},
+		{
+			name:       "ipv6 wildcard",
+			input:      Endpoint{Host: "::", Port: 9090},
+			wantBind:   Endpoint{Host: "::", Port: 9090},
+			wantClient: Endpoint{Host: "::1", Port: 9090},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			bind, client, err := SplitLegacyControllerEndpoint(test.input)
+			if err != nil {
+				t.Fatalf("SplitLegacyControllerEndpoint() error = %v", err)
+			}
+			if !bind.Equal(test.wantBind) || !client.Equal(test.wantClient) {
+				t.Fatalf("split = %#v, %#v; want %#v, %#v", bind, client, test.wantBind, test.wantClient)
+			}
+		})
+	}
+	if _, _, err := SplitLegacyControllerEndpoint(Endpoint{Host: "192.0.2.1", Port: 9090}); err == nil {
+		t.Fatal("specific non-loopback legacy endpoint was silently migrated")
+	}
+}
+
+func TestValidateControllerEndpointPairRequiresMatchingFamilyAndPort(t *testing.T) {
+	t.Parallel()
+	valid := []struct {
+		bind    Endpoint
+		connect Endpoint
+	}{
+		{Endpoint{Host: "127.0.0.1", Port: 9090}, Endpoint{Host: "127.0.0.1", Port: 9090}},
+		{Endpoint{Host: "0.0.0.0", Port: 9090}, Endpoint{Host: "127.0.0.1", Port: 9090}},
+		{Endpoint{Host: "::1", Port: 9090}, Endpoint{Host: "::1", Port: 9090}},
+		{Endpoint{Host: "::", Port: 9090}, Endpoint{Host: "::1", Port: 9090}},
+	}
+	for _, test := range valid {
+		if err := ValidateControllerEndpointPair(test.bind, test.connect); err != nil {
+			t.Fatalf("valid pair %#v/%#v rejected: %v", test.bind, test.connect, err)
+		}
+	}
+	for _, test := range []struct {
+		bind    Endpoint
+		connect Endpoint
+	}{
+		{Endpoint{Host: "0.0.0.0", Port: 9090}, Endpoint{Host: "::1", Port: 9090}},
+		{Endpoint{Host: "::", Port: 9090}, Endpoint{Host: "127.0.0.1", Port: 9090}},
+		{Endpoint{Host: "127.0.0.1", Port: 9090}, Endpoint{Host: "127.0.0.1", Port: 9091}},
+	} {
+		if err := ValidateControllerEndpointPair(test.bind, test.connect); err == nil {
+			t.Fatalf("invalid pair %#v/%#v accepted", test.bind, test.connect)
+		}
+	}
+}
+
+func TestValidateCORSOriginsRejectsWildcardAndPaths(t *testing.T) {
+	t.Parallel()
+	if err := ValidateCORSOrigins([]string{"https://dashboard.example.com"}); err != nil {
+		t.Fatalf("exact CORS origin rejected: %v", err)
+	}
+	for _, origin := range []string{
+		"*",
+		"https://dashboard.example.com/path",
+		"https://dashboard.example.com:",
+		"https://dashboard.example.com:65536",
+	} {
+		if err := ValidateCORSOrigins([]string{origin}); err == nil {
+			t.Fatalf("CORS origin %q accepted", origin)
+		}
+	}
+}
+
 func validState() DesiredState {
 	return DesiredState{
 		AsOf:              time.Date(2026, time.July, 28, 12, 0, 0, 0, time.UTC),

@@ -1,8 +1,9 @@
 [Unit]
 Description=m-ui Mihomo management interface
 Documentation=https://github.com/Aethersailor/m-ui
-After=network-online.target mihomo.service
-Wants=network-online.target mihomo.service
+After=network-online.target
+Wants=network-online.target
+Before=mihomo.service
 
 [Service]
 Type=simple
@@ -11,6 +12,9 @@ Group=m-ui
 SupplementaryGroups=systemd-journal mihomo
 WorkingDirectory=/var/lib/m-ui
 Environment=HOME=/var/lib/m-ui
+RuntimeDirectory=m-ui
+RuntimeDirectoryMode=0750
+RuntimeDirectoryPreserve=yes
 ExecStart=/usr/bin/m-ui server --config /etc/m-ui/config.toml
 Restart=on-failure
 RestartSec=3s

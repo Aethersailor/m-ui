@@ -45,6 +45,7 @@ RUN apk add --no-cache ca-certificates libcap tini tzdata \
        /var/lib/m-ui /var/lib/m-ui/core \
        /var/lib/m-ui/core/staging /var/lib/m-ui/core/backups \
     && install -d -o m-ui -g m-ui -m 0750 /var/lib/mihomo \
+    && install -d -o m-ui -g m-ui -m 0750 /run/m-ui \
     && install -d -o root -g root -m 0755 /usr/lib/m-ui/bootstrap
 
 COPY --from=go-builder /out/m-ui /usr/bin/m-ui

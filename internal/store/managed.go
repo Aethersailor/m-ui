@@ -18,19 +18,25 @@ import (
 )
 
 const (
-	settingPublicHost        = "public_host"
-	settingPanelTitle        = "panel_title"
-	settingUILanguage        = "ui_language"
-	settingPanelAddress      = "panel_listen_address"
-	settingPanelPort         = "panel_listen_port"
-	settingTrustedProxies    = "trusted_proxy_cidrs"
-	settingMihomoBinary      = "mihomo_binary_path"
-	settingMihomoConfigDir   = "mihomo_config_dir"
-	settingMihomoConfigPath  = "mihomo_config_path"
-	settingControllerAddress = "mihomo_controller_address"
-	settingControllerSecret  = "mihomo_controller_secret_ciphertext"
-	settingMihomoService     = "mihomo_service_name"
-	settingHistoryLimit      = "config_history_limit"
+	settingPublicHost         = "public_host"
+	settingPanelTitle         = "panel_title"
+	settingUILanguage         = "ui_language"
+	settingPanelAddress       = "panel_listen_address"
+	settingPanelPort          = "panel_listen_port"
+	settingExternalBindHost   = "mihomo_external_controller_bind_host"
+	settingExternalBindPort   = "mihomo_external_controller_bind_port"
+	settingConnectHost        = "mihomo_controller_connect_host"
+	settingConnectPort        = "mihomo_controller_connect_port"
+	settingCORSOrigins        = "mihomo_external_controller_cors_origins"
+	settingEndpointGeneration = "endpoint_settings_generation"
+	settingTrustedProxies     = "trusted_proxy_cidrs"
+	settingMihomoBinary       = "mihomo_binary_path"
+	settingMihomoConfigDir    = "mihomo_config_dir"
+	settingMihomoConfigPath   = "mihomo_config_path"
+	settingControllerAddress  = "mihomo_controller_address"
+	settingControllerSecret   = "mihomo_controller_secret_ciphertext"
+	settingMihomoService      = "mihomo_service_name"
+	settingHistoryLimit       = "config_history_limit"
 
 	controllerSecretPurpose = "settings:mihomo_controller_secret"
 )
@@ -47,25 +53,53 @@ type ManagedTx struct {
 }
 
 type InitialSettings struct {
-	PanelTitle         string
-	UILanguage         string
-	PublicHost         string
-	PanelListenAddress string
-	PanelListenPort    uint16
-	TrustedProxyCIDRs  []string
-	MihomoBinaryPath   string
-	MihomoConfigDir    string
-	MihomoConfigPath   string
-	ControllerAddress  string
-	BootstrapSecret    string
-	MihomoServiceName  string
-	HistoryLimit       int
+	PanelTitle                       string
+	UILanguage                       string
+	PublicHost                       string
+	PanelListenAddress               string
+	PanelListenPort                  uint16
+	MihomoExternalControllerBindHost string
+	MihomoExternalControllerBindPort uint16
+	MihomoControllerConnectHost      string
+	MihomoControllerConnectPort      uint16
+	ExternalControllerCORSOrigins    []string
+	TrustedProxyCIDRs                []string
+	MihomoBinaryPath                 string
+	MihomoConfigDir                  string
+	MihomoConfigPath                 string
+	ControllerAddress                string // Deprecated legacy bootstrap address.
+	BootstrapSecret                  string
+	MihomoServiceName                string
+	HistoryLimit                     int
 }
 
 type RuntimeSettings struct {
 	InitialSettings
 	ControllerSecret string
 }
+
+type EndpointSettings struct {
+	PanelUIBind                   domain.Endpoint
+	MihomoExternalControllerBind  domain.Endpoint
+	MihomoControllerConnect       domain.Endpoint
+	ExternalControllerCORSOrigins []string
+	Generation                    int64
+}
+
+type PendingEndpointSettings struct {
+	EndpointSettings
+	RequiresMUIRestart    bool
+	RequiresMihomoRestart bool
+	UpdatedAt             time.Time
+}
+
+type EndpointSettingsState struct {
+	Active      EndpointSettings
+	LastApplied EndpointSettings
+	Pending     *PendingEndpointSettings
+}
+
+var ErrEndpointStateChanged = errors.New("endpoint restart state changed while applying")
 
 type PublicationSnapshot struct {
 	State          domain.DesiredState
@@ -109,11 +143,93 @@ func NewManagedStore(store *Store, sealer *muicrypto.Sealer) (*ManagedStore, err
 	return &ManagedStore{store: store, sealer: sealer}, nil
 }
 
+func initialEndpointSettings(settings InitialSettings) (EndpointSettings, error) {
+	endpoints := EndpointSettings{
+		PanelUIBind: domain.Endpoint{
+			Host: settings.PanelListenAddress,
+			Port: settings.PanelListenPort,
+		},
+		MihomoExternalControllerBind: domain.Endpoint{
+			Host: settings.MihomoExternalControllerBindHost,
+			Port: settings.MihomoExternalControllerBindPort,
+		},
+		MihomoControllerConnect: domain.Endpoint{
+			Host: settings.MihomoControllerConnectHost,
+			Port: settings.MihomoControllerConnectPort,
+		},
+		ExternalControllerCORSOrigins: append([]string(nil), settings.ExternalControllerCORSOrigins...),
+		Generation:                    1,
+	}
+	var err error
+	if settings.ControllerAddress != "" &&
+		(endpoints.MihomoExternalControllerBind.Host == "" ||
+			endpoints.MihomoExternalControllerBind.Port == 0 ||
+			endpoints.MihomoControllerConnect.Host == "" ||
+			endpoints.MihomoControllerConnect.Port == 0) {
+		legacy, parseErr := domain.ParseEndpoint(settings.ControllerAddress)
+		if parseErr != nil {
+			return EndpointSettings{}, fmt.Errorf("parse legacy Mihomo controller endpoint: %w", parseErr)
+		}
+		legacyBind, legacyConnect, err := domain.SplitLegacyControllerEndpoint(legacy)
+		if err != nil {
+			return EndpointSettings{}, err
+		}
+		if endpoints.MihomoExternalControllerBind.Host == "" &&
+			endpoints.MihomoExternalControllerBind.Port == 0 {
+			endpoints.MihomoExternalControllerBind = legacyBind
+		}
+		if endpoints.MihomoControllerConnect.Host == "" &&
+			endpoints.MihomoControllerConnect.Port == 0 {
+			endpoints.MihomoControllerConnect = legacyConnect
+		}
+	}
+	if endpoints.MihomoControllerConnect.Host == "" &&
+		endpoints.MihomoControllerConnect.Port == 0 &&
+		(endpoints.MihomoExternalControllerBind.Host != "" ||
+			endpoints.MihomoExternalControllerBind.Port != 0) {
+		_, endpoints.MihomoControllerConnect, err = domain.SplitLegacyControllerEndpoint(
+			endpoints.MihomoExternalControllerBind,
+		)
+		if err != nil {
+			return EndpointSettings{}, err
+		}
+	}
+	if err := domain.ValidateBindEndpoint(endpoints.PanelUIBind, "panel UI bind endpoint"); err != nil {
+		return EndpointSettings{}, err
+	}
+	if err := domain.ValidateBindEndpoint(
+		endpoints.MihomoExternalControllerBind,
+		"Mihomo external-controller bind endpoint",
+	); err != nil {
+		return EndpointSettings{}, err
+	}
+	if err := domain.ValidateConnectEndpoint(
+		endpoints.MihomoControllerConnect,
+		"m-ui Mihomo controller connect endpoint",
+	); err != nil {
+		return EndpointSettings{}, err
+	}
+	if err := domain.ValidateControllerEndpointPair(
+		endpoints.MihomoExternalControllerBind,
+		endpoints.MihomoControllerConnect,
+	); err != nil {
+		return EndpointSettings{}, err
+	}
+	if err := domain.ValidateCORSOrigins(endpoints.ExternalControllerCORSOrigins); err != nil {
+		return EndpointSettings{}, err
+	}
+	return endpoints, nil
+}
+
 func (managed *ManagedStore) EnsureInitialSettings(
 	ctx context.Context,
 	settings InitialSettings,
 	now time.Time,
 ) error {
+	endpoints, err := initialEndpointSettings(settings)
+	if err != nil {
+		return err
+	}
 	trustedProxies, err := json.Marshal(settings.TrustedProxyCIDRs)
 	if err != nil {
 		return errors.New("encode trusted proxy settings")
@@ -146,16 +262,66 @@ func (managed *ManagedStore) EnsureInitialSettings(
 			return fmt.Errorf("seed managed setting %q: %w", item.key, err)
 		}
 	}
+	legacyAddress := ""
+	_ = transaction.QueryRowContext(
+		ctx,
+		"SELECT value FROM settings WHERE key = ?",
+		settingControllerAddress,
+	).Scan(&legacyAddress)
+	if legacyAddress != "" {
+		var existingExternalHost string
+		externalExists := transaction.QueryRowContext(
+			ctx,
+			"SELECT value FROM settings WHERE key = ?",
+			settingExternalBindHost,
+		).Scan(&existingExternalHost) == nil
+		var existingConnectHost string
+		connectExists := transaction.QueryRowContext(
+			ctx,
+			"SELECT value FROM settings WHERE key = ?",
+			settingConnectHost,
+		).Scan(&existingConnectHost) == nil
+		if !externalExists || !connectExists {
+			legacyEndpoint, parseErr := domain.ParseEndpoint(legacyAddress)
+			if parseErr != nil {
+				return fmt.Errorf("parse stored legacy Mihomo controller endpoint: %w", parseErr)
+			}
+			legacyBind, legacyConnect, splitErr := domain.SplitLegacyControllerEndpoint(legacyEndpoint)
+			if splitErr != nil {
+				return fmt.Errorf("migrate stored legacy Mihomo controller endpoint: %w", splitErr)
+			}
+			if !externalExists {
+				endpoints.MihomoExternalControllerBind = legacyBind
+			}
+			if !connectExists {
+				endpoints.MihomoControllerConnect = legacyConnect
+			}
+		}
+	}
+	corsOrigins := settings.ExternalControllerCORSOrigins
+	if corsOrigins == nil {
+		corsOrigins = []string{}
+	}
+	corsJSON, err := json.Marshal(corsOrigins)
+	if err != nil {
+		return errors.New("encode Mihomo external-controller CORS settings")
+	}
 	advanced := []struct {
 		key   string
 		value string
 	}{
-		{settingPanelAddress, settings.PanelListenAddress},
-		{settingPanelPort, strconv.Itoa(int(settings.PanelListenPort))},
+		{settingPanelAddress, endpoints.PanelUIBind.Host},
+		{settingPanelPort, strconv.Itoa(int(endpoints.PanelUIBind.Port))},
+		{settingExternalBindHost, endpoints.MihomoExternalControllerBind.Host},
+		{settingExternalBindPort, strconv.Itoa(int(endpoints.MihomoExternalControllerBind.Port))},
+		{settingConnectHost, endpoints.MihomoControllerConnect.Host},
+		{settingConnectPort, strconv.Itoa(int(endpoints.MihomoControllerConnect.Port))},
+		{settingCORSOrigins, string(corsJSON)},
+		{settingEndpointGeneration, "1"},
 		{settingTrustedProxies, string(trustedProxies)},
 		{settingMihomoConfigDir, settings.MihomoConfigDir},
 		{settingMihomoConfigPath, settings.MihomoConfigPath},
-		{settingControllerAddress, settings.ControllerAddress},
+		{settingControllerAddress, endpoints.MihomoControllerConnect.Address()},
 		{settingMihomoService, settings.MihomoServiceName},
 		{settingHistoryLimit, strconv.Itoa(settings.HistoryLimit)},
 	}
@@ -171,18 +337,72 @@ func (managed *ManagedStore) EnsureInitialSettings(
 		return fmt.Errorf("seed managed setting %q: %w", settingMihomoBinary, err)
 	}
 	for _, item := range advanced {
+		conflictClause := "ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at"
+		switch item.key {
+		case settingPanelAddress,
+			settingPanelPort,
+			settingExternalBindHost,
+			settingExternalBindPort,
+			settingConnectHost,
+			settingConnectPort,
+			settingCORSOrigins,
+			settingEndpointGeneration,
+			settingControllerAddress:
+			conflictClause = "ON CONFLICT(key) DO NOTHING"
+		}
 		if _, err := transaction.ExecContext(
 			ctx,
-			`INSERT INTO settings(key, value, updated_at)
-			 VALUES (?, ?, ?)
-			 ON CONFLICT(key) DO UPDATE SET value = excluded.value,
-			                                updated_at = excluded.updated_at`,
+			`INSERT INTO settings(key, value, updated_at) VALUES (?, ?, ?) `+conflictClause,
 			item.key,
 			item.value,
 			formatTime(now),
 		); err != nil {
 			return fmt.Errorf("store local setting %q: %w", item.key, err)
 		}
+	}
+	activeValues := make(map[string]string)
+	activeRows, err := transaction.QueryContext(ctx, "SELECT key, value FROM settings")
+	if err != nil {
+		return fmt.Errorf("read seeded endpoint settings: %w", err)
+	}
+	for activeRows.Next() {
+		var key, value string
+		if err := activeRows.Scan(&key, &value); err != nil {
+			_ = activeRows.Close()
+			return fmt.Errorf("scan seeded endpoint setting: %w", err)
+		}
+		activeValues[key] = value
+	}
+	if err := activeRows.Err(); err != nil {
+		_ = activeRows.Close()
+		return fmt.Errorf("iterate seeded endpoint settings: %w", err)
+	}
+	_ = activeRows.Close()
+	activeEndpoints, err := endpointSettingsFromValues(activeValues)
+	if err != nil {
+		return fmt.Errorf("validate seeded endpoint settings: %w", err)
+	}
+	if _, err := transaction.ExecContext(
+		ctx,
+		`INSERT INTO endpoint_settings_last_applied(
+			id, panel_ui_bind_host, panel_ui_bind_port,
+			mihomo_external_controller_bind_host,
+			mihomo_external_controller_bind_port,
+			mihomo_controller_connect_host, mihomo_controller_connect_port,
+			external_controller_cors_origins_json, generation, updated_at
+		) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 ON CONFLICT(id) DO NOTHING`,
+		activeEndpoints.PanelUIBind.Host,
+		activeEndpoints.PanelUIBind.Port,
+		activeEndpoints.MihomoExternalControllerBind.Host,
+		activeEndpoints.MihomoExternalControllerBind.Port,
+		activeEndpoints.MihomoControllerConnect.Host,
+		activeEndpoints.MihomoControllerConnect.Port,
+		encodeOrigins(activeEndpoints.ExternalControllerCORSOrigins),
+		activeEndpoints.Generation,
+		formatTime(now),
+	); err != nil {
+		return fmt.Errorf("seed applied endpoint settings: %w", err)
 	}
 	var secretCount int
 	if err := transaction.QueryRowContext(
@@ -243,9 +463,9 @@ func (managed *ManagedStore) Settings(ctx context.Context) (RuntimeSettings, err
 	if err := rows.Err(); err != nil {
 		return RuntimeSettings{}, fmt.Errorf("iterate settings: %w", err)
 	}
-	panelPort, err := strconv.ParseUint(values[settingPanelPort], 10, 16)
-	if err != nil || panelPort == 0 {
-		return RuntimeSettings{}, errors.New("stored panel port is invalid")
+	endpoints, err := endpointSettingsFromValues(values)
+	if err != nil {
+		return RuntimeSettings{}, err
 	}
 	historyLimit, err := strconv.Atoi(values[settingHistoryLimit])
 	if err != nil || historyLimit < 1 {
@@ -264,22 +484,441 @@ func (managed *ManagedStore) Settings(ctx context.Context) (RuntimeSettings, err
 	}
 	return RuntimeSettings{
 		InitialSettings: InitialSettings{
-			PanelTitle:         values[settingPanelTitle],
-			UILanguage:         values[settingUILanguage],
-			PublicHost:         values[settingPublicHost],
-			PanelListenAddress: values[settingPanelAddress],
-			PanelListenPort:    uint16(panelPort),
-			TrustedProxyCIDRs:  trustedProxies,
-			MihomoBinaryPath:   values[settingMihomoBinary],
-			MihomoConfigDir:    values[settingMihomoConfigDir],
-			MihomoConfigPath:   values[settingMihomoConfigPath],
-			ControllerAddress:  values[settingControllerAddress],
-			BootstrapSecret:    "",
-			MihomoServiceName:  values[settingMihomoService],
-			HistoryLimit:       historyLimit,
+			PanelTitle:                       values[settingPanelTitle],
+			UILanguage:                       values[settingUILanguage],
+			PublicHost:                       values[settingPublicHost],
+			PanelListenAddress:               endpoints.PanelUIBind.Host,
+			PanelListenPort:                  endpoints.PanelUIBind.Port,
+			MihomoExternalControllerBindHost: endpoints.MihomoExternalControllerBind.Host,
+			MihomoExternalControllerBindPort: endpoints.MihomoExternalControllerBind.Port,
+			MihomoControllerConnectHost:      endpoints.MihomoControllerConnect.Host,
+			MihomoControllerConnectPort:      endpoints.MihomoControllerConnect.Port,
+			ExternalControllerCORSOrigins:    append([]string(nil), endpoints.ExternalControllerCORSOrigins...),
+			TrustedProxyCIDRs:                trustedProxies,
+			MihomoBinaryPath:                 values[settingMihomoBinary],
+			MihomoConfigDir:                  values[settingMihomoConfigDir],
+			MihomoConfigPath:                 values[settingMihomoConfigPath],
+			ControllerAddress:                endpoints.MihomoControllerConnect.Address(),
+			BootstrapSecret:                  "",
+			MihomoServiceName:                values[settingMihomoService],
+			HistoryLimit:                     historyLimit,
 		},
 		ControllerSecret: string(secret),
 	}, nil
+}
+
+func endpointSettingsFromValues(values map[string]string) (EndpointSettings, error) {
+	panelPort, err := strconv.ParseUint(values[settingPanelPort], 10, 16)
+	if err != nil || panelPort == 0 {
+		return EndpointSettings{}, errors.New("stored panel port is invalid")
+	}
+	externalHost := values[settingExternalBindHost]
+	externalPortText := values[settingExternalBindPort]
+	connectHost := values[settingConnectHost]
+	connectPortText := values[settingConnectPort]
+	var legacyBind, legacyConnect domain.Endpoint
+	var hasLegacy bool
+	needsExternal := externalHost == "" || externalPortText == ""
+	needsConnect := connectHost == "" || connectPortText == ""
+	if (needsExternal || needsConnect) && values[settingControllerAddress] != "" {
+		legacy, legacyErr := domain.ParseEndpoint(values[settingControllerAddress])
+		if legacyErr != nil {
+			return EndpointSettings{}, errors.New("stored legacy Mihomo controller endpoint is invalid")
+		}
+		legacyBind, legacyConnect, legacyErr = domain.SplitLegacyControllerEndpoint(legacy)
+		if legacyErr != nil {
+			return EndpointSettings{}, legacyErr
+		}
+		hasLegacy = true
+	}
+	if needsExternal {
+		if !hasLegacy {
+			return EndpointSettings{}, errors.New("stored Mihomo external-controller endpoint is invalid")
+		}
+		externalHost = legacyBind.Host
+		externalPortText = strconv.Itoa(int(legacyBind.Port))
+	}
+	if needsConnect {
+		if hasLegacy {
+			connectHost = legacyConnect.Host
+			connectPortText = strconv.Itoa(int(legacyConnect.Port))
+		} else {
+			externalPort, externalErr := strconv.ParseUint(externalPortText, 10, 16)
+			if externalErr != nil || externalPort == 0 {
+				return EndpointSettings{}, errors.New("stored Mihomo controller connect endpoint is invalid")
+			}
+			_, connect, splitErr := domain.SplitLegacyControllerEndpoint(domain.Endpoint{
+				Host: externalHost,
+				Port: uint16(externalPort),
+			})
+			if splitErr != nil {
+				return EndpointSettings{}, splitErr
+			}
+			connectHost = connect.Host
+			connectPortText = strconv.Itoa(int(connect.Port))
+		}
+	}
+	externalPort, err := strconv.ParseUint(externalPortText, 10, 16)
+	if err != nil || externalPort == 0 {
+		return EndpointSettings{}, errors.New("stored Mihomo external-controller port is invalid")
+	}
+	connectPort, err := strconv.ParseUint(connectPortText, 10, 16)
+	if err != nil || connectPort == 0 {
+		return EndpointSettings{}, errors.New("stored Mihomo controller connect port is invalid")
+	}
+	var origins []string
+	if values[settingCORSOrigins] == "" {
+		origins = []string{}
+	} else if err := json.Unmarshal([]byte(values[settingCORSOrigins]), &origins); err != nil {
+		return EndpointSettings{}, errors.New("stored Mihomo external-controller CORS settings are invalid")
+	}
+	endpointSettings := EndpointSettings{
+		PanelUIBind: domain.Endpoint{
+			Host: values[settingPanelAddress],
+			Port: uint16(panelPort),
+		},
+		MihomoExternalControllerBind: domain.Endpoint{
+			Host: externalHost,
+			Port: uint16(externalPort),
+		},
+		MihomoControllerConnect: domain.Endpoint{
+			Host: connectHost,
+			Port: uint16(connectPort),
+		},
+		ExternalControllerCORSOrigins: origins,
+		Generation:                    1,
+	}
+	if generation, parseErr := strconv.ParseInt(values[settingEndpointGeneration], 10, 64); parseErr == nil && generation > 0 {
+		endpointSettings.Generation = generation
+	}
+	if err := domain.ValidateBindEndpoint(endpointSettings.PanelUIBind, "stored panel UI bind endpoint"); err != nil {
+		return EndpointSettings{}, err
+	}
+	if err := domain.ValidateBindEndpoint(
+		endpointSettings.MihomoExternalControllerBind,
+		"stored Mihomo external-controller bind endpoint",
+	); err != nil {
+		return EndpointSettings{}, err
+	}
+	if err := domain.ValidateConnectEndpoint(
+		endpointSettings.MihomoControllerConnect,
+		"stored Mihomo controller connect endpoint",
+	); err != nil {
+		return EndpointSettings{}, err
+	}
+	if err := domain.ValidateControllerEndpointPair(
+		endpointSettings.MihomoExternalControllerBind,
+		endpointSettings.MihomoControllerConnect,
+	); err != nil {
+		return EndpointSettings{}, err
+	}
+	if err := domain.ValidateCORSOrigins(endpointSettings.ExternalControllerCORSOrigins); err != nil {
+		return EndpointSettings{}, err
+	}
+	return endpointSettings, nil
+}
+
+func (managed *ManagedStore) EndpointSettings(
+	ctx context.Context,
+) (EndpointSettingsState, error) {
+	rows, err := managed.store.db.QueryContext(
+		ctx,
+		`SELECT key, value FROM settings
+		  WHERE key IN (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		settingPanelAddress,
+		settingPanelPort,
+		settingExternalBindHost,
+		settingExternalBindPort,
+		settingConnectHost,
+		settingConnectPort,
+		settingCORSOrigins,
+		settingEndpointGeneration,
+		settingControllerAddress,
+	)
+	if err != nil {
+		return EndpointSettingsState{}, fmt.Errorf("query endpoint settings: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	values := make(map[string]string)
+	for rows.Next() {
+		var key, value string
+		if err := rows.Scan(&key, &value); err != nil {
+			return EndpointSettingsState{}, fmt.Errorf("scan endpoint setting: %w", err)
+		}
+		values[key] = value
+	}
+	if err := rows.Err(); err != nil {
+		return EndpointSettingsState{}, fmt.Errorf("iterate endpoint settings: %w", err)
+	}
+	active, err := endpointSettingsFromValues(values)
+	if err != nil {
+		return EndpointSettingsState{}, err
+	}
+	pending, err := managed.readPendingEndpointSettings(ctx)
+	if err != nil {
+		return EndpointSettingsState{}, err
+	}
+	lastApplied, err := managed.readLastAppliedEndpointSettings(ctx)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			// Test and pre-bootstrap databases may not have a snapshot row yet;
+			// the current endpoint is the only safe baseline in that state.
+			lastApplied = active
+		} else {
+			return EndpointSettingsState{}, err
+		}
+	}
+	return EndpointSettingsState{
+		Active:      active,
+		LastApplied: lastApplied,
+		Pending:     pending,
+	}, nil
+}
+
+// MihomoRestartRequired is the small gate consumed by lifecycle managers
+// which can restart Mihomo without going through Publisher. Keeping the
+// decision in the durable settings store prevents those paths from applying
+// a pending external-controller candidate behind the UI's back.
+func (managed *ManagedStore) MihomoRestartRequired(ctx context.Context) (bool, error) {
+	state, err := managed.EndpointSettings(ctx)
+	if err != nil {
+		return false, err
+	}
+	return state.Pending != nil && state.Pending.RequiresMihomoRestart, nil
+}
+
+func (managed *ManagedStore) readLastAppliedEndpointSettings(
+	ctx context.Context,
+) (EndpointSettings, error) {
+	var applied EndpointSettings
+	var originsJSON string
+	err := managed.store.db.QueryRowContext(
+		ctx,
+		`SELECT panel_ui_bind_host, panel_ui_bind_port,
+		        mihomo_external_controller_bind_host,
+		        mihomo_external_controller_bind_port,
+		        mihomo_controller_connect_host, mihomo_controller_connect_port,
+		        external_controller_cors_origins_json, generation
+		   FROM endpoint_settings_last_applied
+		  WHERE id = 1`,
+	).Scan(
+		&applied.PanelUIBind.Host,
+		&applied.PanelUIBind.Port,
+		&applied.MihomoExternalControllerBind.Host,
+		&applied.MihomoExternalControllerBind.Port,
+		&applied.MihomoControllerConnect.Host,
+		&applied.MihomoControllerConnect.Port,
+		&originsJSON,
+		&applied.Generation,
+	)
+	if err != nil {
+		return EndpointSettings{}, fmt.Errorf("read last-applied endpoint settings: %w", err)
+	}
+	if err := json.Unmarshal([]byte(originsJSON), &applied.ExternalControllerCORSOrigins); err != nil {
+		return EndpointSettings{}, errors.New("decode last-applied endpoint CORS settings")
+	}
+	return applied, nil
+}
+
+func (managed *ManagedStore) readPendingEndpointSettings(
+	ctx context.Context,
+) (*PendingEndpointSettings, error) {
+	var pending PendingEndpointSettings
+	var originsJSON, updatedAt string
+	var requiresMUI, requiresMihomo int
+	err := managed.store.db.QueryRowContext(
+		ctx,
+		`SELECT panel_ui_bind_host, panel_ui_bind_port,
+		        mihomo_external_controller_bind_host,
+		        mihomo_external_controller_bind_port,
+		        mihomo_controller_connect_host, mihomo_controller_connect_port,
+		        external_controller_cors_origins_json, generation,
+		        requires_mui_restart, requires_mihomo_restart, updated_at
+		   FROM endpoint_settings_pending
+		  WHERE id = 1`,
+	).Scan(
+		&pending.PanelUIBind.Host,
+		&pending.PanelUIBind.Port,
+		&pending.MihomoExternalControllerBind.Host,
+		&pending.MihomoExternalControllerBind.Port,
+		&pending.MihomoControllerConnect.Host,
+		&pending.MihomoControllerConnect.Port,
+		&originsJSON,
+		&pending.Generation,
+		&requiresMUI,
+		&requiresMihomo,
+		&updatedAt,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read pending endpoint settings: %w", err)
+	}
+	if err := json.Unmarshal([]byte(originsJSON), &pending.ExternalControllerCORSOrigins); err != nil {
+		return nil, errors.New("decode pending endpoint CORS settings")
+	}
+	pending.RequiresMUIRestart = requiresMUI == 1
+	pending.RequiresMihomoRestart = requiresMihomo == 1
+	pending.UpdatedAt, err = parseTime(updatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return &pending, nil
+}
+
+func (managed *ManagedStore) ClearEndpointRestartRequirements(
+	ctx context.Context,
+	clearMUI, clearMihomo bool,
+	expectedGeneration int64,
+	expected EndpointSettings,
+) error {
+	if !clearMUI && !clearMihomo {
+		return nil
+	}
+	transaction, err := managed.store.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin endpoint restart state update: %w", err)
+	}
+	defer func() { _ = transaction.Rollback() }()
+	var pending PendingEndpointSettings
+	var originsJSON, updatedAt string
+	var requiresMUI, requiresMihomo int
+	if err := transaction.QueryRowContext(
+		ctx,
+		`SELECT panel_ui_bind_host, panel_ui_bind_port,
+		        mihomo_external_controller_bind_host,
+		        mihomo_external_controller_bind_port,
+		        mihomo_controller_connect_host, mihomo_controller_connect_port,
+		        external_controller_cors_origins_json, generation,
+		        requires_mui_restart, requires_mihomo_restart, updated_at
+		   FROM endpoint_settings_pending
+		  WHERE id = 1`,
+	).Scan(
+		&pending.PanelUIBind.Host,
+		&pending.PanelUIBind.Port,
+		&pending.MihomoExternalControllerBind.Host,
+		&pending.MihomoExternalControllerBind.Port,
+		&pending.MihomoControllerConnect.Host,
+		&pending.MihomoControllerConnect.Port,
+		&originsJSON,
+		&pending.Generation,
+		&requiresMUI,
+		&requiresMihomo,
+		&updatedAt,
+	); errors.Is(err, sql.ErrNoRows) {
+		return nil
+	} else if err != nil {
+		return fmt.Errorf("read endpoint restart state: %w", err)
+	}
+	if err := json.Unmarshal([]byte(originsJSON), &pending.ExternalControllerCORSOrigins); err != nil {
+		return errors.New("decode pending endpoint CORS settings")
+	}
+	if expectedGeneration < 1 || pending.Generation != expectedGeneration {
+		return ErrEndpointStateChanged
+	}
+	if clearMUI && (!pending.PanelUIBind.Equal(expected.PanelUIBind) ||
+		!pending.MihomoControllerConnect.Equal(expected.MihomoControllerConnect)) {
+		return ErrEndpointStateChanged
+	}
+	if clearMihomo && (!pending.MihomoExternalControllerBind.Equal(expected.MihomoExternalControllerBind) ||
+		!equalStrings(pending.ExternalControllerCORSOrigins, expected.ExternalControllerCORSOrigins)) {
+		return ErrEndpointStateChanged
+	}
+	var applied EndpointSettings
+	var appliedOrigins string
+	if err := transaction.QueryRowContext(
+		ctx,
+		`SELECT panel_ui_bind_host, panel_ui_bind_port,
+		        mihomo_external_controller_bind_host,
+		        mihomo_external_controller_bind_port,
+		        mihomo_controller_connect_host, mihomo_controller_connect_port,
+		        external_controller_cors_origins_json, generation
+		   FROM endpoint_settings_last_applied
+		  WHERE id = 1`,
+	).Scan(
+		&applied.PanelUIBind.Host,
+		&applied.PanelUIBind.Port,
+		&applied.MihomoExternalControllerBind.Host,
+		&applied.MihomoExternalControllerBind.Port,
+		&applied.MihomoControllerConnect.Host,
+		&applied.MihomoControllerConnect.Port,
+		&appliedOrigins,
+		&applied.Generation,
+	); errors.Is(err, sql.ErrNoRows) {
+		return errors.New("applied endpoint settings snapshot is missing")
+	} else if err != nil {
+		return fmt.Errorf("read applied endpoint settings snapshot: %w", err)
+	}
+	if err := json.Unmarshal([]byte(appliedOrigins), &applied.ExternalControllerCORSOrigins); err != nil {
+		return errors.New("decode applied endpoint CORS settings")
+	}
+	if clearMUI {
+		applied.PanelUIBind = pending.PanelUIBind
+		applied.MihomoControllerConnect = pending.MihomoControllerConnect
+		requiresMUI = 0
+	}
+	if clearMihomo {
+		applied.MihomoExternalControllerBind = pending.MihomoExternalControllerBind
+		applied.ExternalControllerCORSOrigins = append(
+			[]string(nil),
+			pending.ExternalControllerCORSOrigins...,
+		)
+		requiresMihomo = 0
+	}
+	result, err := transaction.ExecContext(
+		ctx,
+		`UPDATE endpoint_settings_last_applied
+		    SET panel_ui_bind_host = ?, panel_ui_bind_port = ?,
+		        mihomo_external_controller_bind_host = ?,
+		        mihomo_external_controller_bind_port = ?,
+		        mihomo_controller_connect_host = ?, mihomo_controller_connect_port = ?,
+		        external_controller_cors_origins_json = ?, generation = ?, updated_at = ?
+		  WHERE id = 1 AND generation = ?`,
+		applied.PanelUIBind.Host,
+		applied.PanelUIBind.Port,
+		applied.MihomoExternalControllerBind.Host,
+		applied.MihomoExternalControllerBind.Port,
+		applied.MihomoControllerConnect.Host,
+		applied.MihomoControllerConnect.Port,
+		encodeOrigins(applied.ExternalControllerCORSOrigins),
+		pending.Generation,
+		formatTime(time.Now().UTC()),
+		applied.Generation,
+	)
+	if err != nil {
+		return fmt.Errorf("update applied endpoint settings snapshot: %w", err)
+	}
+	if rows, err := result.RowsAffected(); err != nil || rows != 1 {
+		return ErrEndpointStateChanged
+	}
+	if requiresMUI == 0 && requiresMihomo == 0 {
+		result, err := transaction.ExecContext(
+			ctx,
+			"DELETE FROM endpoint_settings_pending WHERE id = 1 AND generation = ?",
+			pending.Generation,
+		)
+		if err != nil {
+			return fmt.Errorf("delete endpoint restart state: %w", err)
+		}
+		if rows, err := result.RowsAffected(); err != nil || rows != 1 {
+			return ErrEndpointStateChanged
+		}
+	} else if _, err := transaction.ExecContext(
+		ctx,
+		`UPDATE endpoint_settings_pending
+		    SET requires_mui_restart = ?, requires_mihomo_restart = ?
+		  WHERE id = 1 AND generation = ?`,
+		requiresMUI,
+		requiresMihomo,
+		pending.Generation,
+	); err != nil {
+		return fmt.Errorf("update endpoint restart state: %w", err)
+	}
+	if err := transaction.Commit(); err != nil {
+		return fmt.Errorf("commit endpoint restart state: %w", err)
+	}
+	return nil
 }
 
 func (managed *ManagedStore) SetMihomoBinaryPath(
@@ -385,12 +1024,21 @@ func (transaction *ManagedTx) DesiredState(
 		return domain.DesiredState{}, errors.New("decrypt Mihomo Controller secret")
 	}
 	state := domain.DesiredState{
-		AsOf:              asOf.UTC(),
-		PanelTitle:        settings[settingPanelTitle],
-		UILanguage:        settings[settingUILanguage],
-		ControllerAddress: settings[settingControllerAddress],
-		ControllerSecret:  string(secret),
-		PublicHost:        settings[settingPublicHost],
+		AsOf:                          asOf.UTC(),
+		PanelTitle:                    settings[settingPanelTitle],
+		UILanguage:                    settings[settingUILanguage],
+		PanelUIBind:                   domain.Endpoint{Host: settings[settingPanelAddress], Port: parseStoredPort(settings[settingPanelPort])},
+		MihomoExternalControllerBind:  domain.Endpoint{Host: settings[settingExternalBindHost], Port: parseStoredPort(settings[settingExternalBindPort])},
+		MihomoControllerConnect:       domain.Endpoint{Host: settings[settingConnectHost], Port: parseStoredPort(settings[settingConnectPort])},
+		ExternalControllerCORSOrigins: parseStoredOrigins(settings[settingCORSOrigins]),
+		EndpointGeneration:            parseStoredGeneration(settings[settingEndpointGeneration]),
+		ControllerAddress:             settings[settingControllerAddress],
+		ControllerSecret:              string(secret),
+		PublicHost:                    settings[settingPublicHost],
+	}
+	state, err = state.NormalizeLegacy()
+	if err != nil {
+		return domain.DesiredState{}, fmt.Errorf("normalize desired-state endpoints: %w", err)
 	}
 
 	rows, err := transaction.conn.QueryContext(
@@ -469,8 +1117,37 @@ func (transaction *ManagedTx) ReplaceDesiredState(
 	ctx context.Context,
 	state domain.DesiredState,
 ) error {
+	normalized, err := state.NormalizeLegacy()
+	if err != nil {
+		return fmt.Errorf("normalize replacement desired-state endpoints: %w", err)
+	}
+	state = normalized
 	if err := state.Validate(); err != nil {
 		return fmt.Errorf("validate replacement desired state: %w", err)
+	}
+	previousEndpoints, previousExists, err := transaction.endpointSettings(ctx)
+	if err != nil {
+		return err
+	}
+	lastApplied, lastAppliedExists, err := transaction.lastAppliedEndpointSettings(ctx)
+	if err != nil {
+		return err
+	}
+	baselineEndpoints := previousEndpoints
+	baselineExists := previousExists
+	if lastAppliedExists {
+		baselineEndpoints = lastApplied
+		baselineExists = true
+	}
+	if state.EndpointGeneration < 1 {
+		state.EndpointGeneration = 1
+	}
+	if previousExists {
+		if endpointSettingsChanged(previousEndpoints, state) {
+			state.EndpointGeneration = previousEndpoints.Generation + 1
+		} else {
+			state.EndpointGeneration = previousEndpoints.Generation
+		}
 	}
 	controllerCiphertext, err := transaction.sealer.Encrypt(
 		[]byte(state.ControllerSecret),
@@ -495,7 +1172,15 @@ func (transaction *ManagedTx) ReplaceDesiredState(
 		{settingPanelTitle, panelTitle},
 		{settingUILanguage, uiLanguage},
 		{settingPublicHost, state.PublicHost},
-		{settingControllerAddress, state.ControllerAddress},
+		{settingPanelAddress, state.PanelUIBind.Host},
+		{settingPanelPort, strconv.Itoa(int(state.PanelUIBind.Port))},
+		{settingExternalBindHost, state.MihomoExternalControllerBind.Host},
+		{settingExternalBindPort, strconv.Itoa(int(state.MihomoExternalControllerBind.Port))},
+		{settingConnectHost, state.MihomoControllerConnect.Host},
+		{settingConnectPort, strconv.Itoa(int(state.MihomoControllerConnect.Port))},
+		{settingCORSOrigins, encodeOrigins(state.ExternalControllerCORSOrigins)},
+		{settingEndpointGeneration, strconv.FormatInt(state.EndpointGeneration, 10)},
+		{settingControllerAddress, state.MihomoControllerConnect.Address()},
 		{settingControllerSecret, controllerCiphertext},
 	} {
 		if _, err := transaction.conn.ExecContext(
@@ -508,6 +1193,23 @@ func (transaction *ManagedTx) ReplaceDesiredState(
 			now,
 		); err != nil {
 			return fmt.Errorf("store managed setting %q: %w", item.key, err)
+		}
+	}
+	if baselineExists && endpointSettingsChanged(baselineEndpoints, state) {
+		if err := transaction.upsertPendingEndpointSettings(
+			ctx,
+			state,
+			baselineEndpoints,
+			formatTime(state.AsOf),
+		); err != nil {
+			return err
+		}
+	} else if baselineExists {
+		if _, err := transaction.conn.ExecContext(
+			ctx,
+			"DELETE FROM endpoint_settings_pending WHERE id = 1",
+		); err != nil {
+			return fmt.Errorf("clear resolved endpoint settings: %w", err)
 		}
 	}
 	if _, err := transaction.conn.ExecContext(ctx, "DELETE FROM listeners"); err != nil {
@@ -919,10 +1621,18 @@ func (transaction *ManagedTx) settings(ctx context.Context) (map[string]string, 
 	rows, err := transaction.conn.QueryContext(
 		ctx,
 		`SELECT key, value FROM settings
-		  WHERE key IN (?, ?, ?, ?, ?)`,
+		  WHERE key IN (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		settingPanelTitle,
 		settingUILanguage,
 		settingPublicHost,
+		settingPanelAddress,
+		settingPanelPort,
+		settingExternalBindHost,
+		settingExternalBindPort,
+		settingConnectHost,
+		settingConnectPort,
+		settingCORSOrigins,
+		settingEndpointGeneration,
 		settingControllerAddress,
 		settingControllerSecret,
 	)
@@ -932,7 +1642,7 @@ func (transaction *ManagedTx) settings(ctx context.Context) (map[string]string, 
 	defer func() {
 		_ = rows.Close()
 	}()
-	settings := make(map[string]string, 3)
+	settings := make(map[string]string, 13)
 	for rows.Next() {
 		var key, value string
 		if err := rows.Scan(&key, &value); err != nil {
@@ -944,7 +1654,8 @@ func (transaction *ManagedTx) settings(ctx context.Context) (map[string]string, 
 		settingPanelTitle,
 		settingUILanguage,
 		settingPublicHost,
-		settingControllerAddress,
+		settingPanelAddress,
+		settingPanelPort,
 		settingControllerSecret,
 	} {
 		if settings[required] == "" {
@@ -952,6 +1663,165 @@ func (transaction *ManagedTx) settings(ctx context.Context) (map[string]string, 
 		}
 	}
 	return settings, nil
+}
+
+func (transaction *ManagedTx) endpointSettings(
+	ctx context.Context,
+) (EndpointSettings, bool, error) {
+	settings, err := transaction.settings(ctx)
+	if err != nil {
+		if strings.Contains(err.Error(), "required managed setting") {
+			return EndpointSettings{}, false, nil
+		}
+		return EndpointSettings{}, false, err
+	}
+	endpoints, err := endpointSettingsFromValues(settings)
+	if err != nil {
+		return EndpointSettings{}, false, err
+	}
+	return endpoints, true, nil
+}
+
+func (transaction *ManagedTx) lastAppliedEndpointSettings(
+	ctx context.Context,
+) (EndpointSettings, bool, error) {
+	var endpoints EndpointSettings
+	var originsJSON string
+	err := transaction.conn.QueryRowContext(
+		ctx,
+		`SELECT panel_ui_bind_host, panel_ui_bind_port,
+		        mihomo_external_controller_bind_host,
+		        mihomo_external_controller_bind_port,
+		        mihomo_controller_connect_host, mihomo_controller_connect_port,
+		        external_controller_cors_origins_json, generation
+		   FROM endpoint_settings_last_applied
+		  WHERE id = 1`,
+	).Scan(
+		&endpoints.PanelUIBind.Host,
+		&endpoints.PanelUIBind.Port,
+		&endpoints.MihomoExternalControllerBind.Host,
+		&endpoints.MihomoExternalControllerBind.Port,
+		&endpoints.MihomoControllerConnect.Host,
+		&endpoints.MihomoControllerConnect.Port,
+		&originsJSON,
+		&endpoints.Generation,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return EndpointSettings{}, false, nil
+	}
+	if err != nil {
+		return EndpointSettings{}, false, fmt.Errorf("read applied endpoint settings: %w", err)
+	}
+	if err := json.Unmarshal([]byte(originsJSON), &endpoints.ExternalControllerCORSOrigins); err != nil {
+		return EndpointSettings{}, false, errors.New("decode applied endpoint CORS settings")
+	}
+	return endpoints, true, nil
+}
+
+func endpointSettingsChanged(previous EndpointSettings, state domain.DesiredState) bool {
+	return !previous.PanelUIBind.Equal(state.PanelUIBind) ||
+		!previous.MihomoExternalControllerBind.Equal(state.MihomoExternalControllerBind) ||
+		!previous.MihomoControllerConnect.Equal(state.MihomoControllerConnect) ||
+		!equalStrings(previous.ExternalControllerCORSOrigins, state.ExternalControllerCORSOrigins)
+}
+
+func (transaction *ManagedTx) upsertPendingEndpointSettings(
+	ctx context.Context,
+	state domain.DesiredState,
+	lastApplied EndpointSettings,
+	updatedAt string,
+) error {
+	requiresMUI := !lastApplied.PanelUIBind.Equal(state.PanelUIBind) ||
+		!lastApplied.MihomoControllerConnect.Equal(state.MihomoControllerConnect)
+	requiresMihomo := !lastApplied.MihomoExternalControllerBind.Equal(state.MihomoExternalControllerBind) ||
+		!equalStrings(lastApplied.ExternalControllerCORSOrigins, state.ExternalControllerCORSOrigins)
+	if _, err := transaction.conn.ExecContext(
+		ctx,
+		`INSERT INTO endpoint_settings_pending(
+			id, panel_ui_bind_host, panel_ui_bind_port,
+			mihomo_external_controller_bind_host,
+			mihomo_external_controller_bind_port,
+			mihomo_controller_connect_host, mihomo_controller_connect_port,
+			external_controller_cors_origins_json, generation,
+			requires_mui_restart, requires_mihomo_restart, updated_at
+		) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 ON CONFLICT(id) DO UPDATE SET
+			panel_ui_bind_host = excluded.panel_ui_bind_host,
+			panel_ui_bind_port = excluded.panel_ui_bind_port,
+			mihomo_external_controller_bind_host = excluded.mihomo_external_controller_bind_host,
+			mihomo_external_controller_bind_port = excluded.mihomo_external_controller_bind_port,
+			mihomo_controller_connect_host = excluded.mihomo_controller_connect_host,
+			mihomo_controller_connect_port = excluded.mihomo_controller_connect_port,
+			external_controller_cors_origins_json = excluded.external_controller_cors_origins_json,
+			generation = excluded.generation,
+			requires_mui_restart = excluded.requires_mui_restart,
+			requires_mihomo_restart = excluded.requires_mihomo_restart,
+			updated_at = excluded.updated_at`,
+		state.PanelUIBind.Host,
+		state.PanelUIBind.Port,
+		state.MihomoExternalControllerBind.Host,
+		state.MihomoExternalControllerBind.Port,
+		state.MihomoControllerConnect.Host,
+		state.MihomoControllerConnect.Port,
+		encodeOrigins(state.ExternalControllerCORSOrigins),
+		state.EndpointGeneration,
+		boolInt(requiresMUI),
+		boolInt(requiresMihomo),
+		updatedAt,
+	); err != nil {
+		return fmt.Errorf("store pending endpoint settings: %w", err)
+	}
+	return nil
+}
+
+func parseStoredPort(value string) uint16 {
+	parsed, err := strconv.ParseUint(value, 10, 16)
+	if err != nil {
+		return 0
+	}
+	return uint16(parsed)
+}
+
+func parseStoredGeneration(value string) int64 {
+	parsed, err := strconv.ParseInt(value, 10, 64)
+	if err != nil || parsed < 1 {
+		return 1
+	}
+	return parsed
+}
+
+func parseStoredOrigins(value string) []string {
+	if value == "" {
+		return []string{}
+	}
+	var origins []string
+	if err := json.Unmarshal([]byte(value), &origins); err != nil {
+		return []string{}
+	}
+	return origins
+}
+
+func encodeOrigins(origins []string) string {
+	if origins == nil {
+		origins = []string{}
+	}
+	encoded, err := json.Marshal(origins)
+	if err != nil {
+		return "[]"
+	}
+	return string(encoded)
+}
+
+func equalStrings(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
 }
 
 func (transaction *ManagedTx) loadUsers(

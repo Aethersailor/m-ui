@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -18,11 +20,37 @@ var (
 )
 
 func (state DesiredState) Validate() error {
+	normalized, err := state.NormalizeLegacy()
+	if err != nil {
+		return fmt.Errorf("controller endpoint is invalid: %w", err)
+	}
+	state = normalized
 	var validationErrors []error
 	if state.AsOf.IsZero() {
 		validationErrors = append(validationErrors, errors.New("state as-of time is required"))
 	}
-	if err := validateControllerAddress(state.ControllerAddress); err != nil {
+	if err := ValidateBindEndpoint(state.PanelUIBind, "panel UI bind endpoint"); err != nil {
+		validationErrors = append(validationErrors, err)
+	}
+	if err := ValidateBindEndpoint(
+		state.MihomoExternalControllerBind,
+		"Mihomo external-controller bind endpoint",
+	); err != nil {
+		validationErrors = append(validationErrors, err)
+	}
+	if err := ValidateConnectEndpoint(
+		state.MihomoControllerConnect,
+		"m-ui Mihomo controller connect endpoint",
+	); err != nil {
+		validationErrors = append(validationErrors, err)
+	}
+	if err := ValidateControllerEndpointPair(
+		state.MihomoExternalControllerBind,
+		state.MihomoControllerConnect,
+	); err != nil {
+		validationErrors = append(validationErrors, err)
+	}
+	if err := ValidateCORSOrigins(state.ExternalControllerCORSOrigins); err != nil {
 		validationErrors = append(validationErrors, err)
 	}
 	if strings.TrimSpace(state.ControllerSecret) == "" {
@@ -176,21 +204,93 @@ func validateName(field, value string) error {
 	return nil
 }
 
-func validateControllerAddress(value string) error {
-	host, port, err := net.SplitHostPort(value)
-	if err != nil {
-		return errors.New("controller address must use host:port syntax")
+func ValidateBindEndpoint(endpoint Endpoint, field string) error {
+	if strings.TrimSpace(endpoint.Host) == "" || endpoint.Host != strings.TrimSpace(endpoint.Host) {
+		return fmt.Errorf("%s host is required and must not have surrounding whitespace", field)
 	}
-	parsedPort, err := net.LookupPort("tcp", port)
-	if err != nil || parsedPort == 0 {
-		return errors.New("controller address port must be between 1 and 65535")
+	if net.ParseIP(endpoint.Host) == nil {
+		return fmt.Errorf("%s host must be an IPv4 or IPv6 address", field)
 	}
-	if strings.EqualFold(host, "localhost") {
-		return nil
+	if endpoint.Port == 0 {
+		return fmt.Errorf("%s port must be between 1 and 65535", field)
 	}
-	ip := net.ParseIP(host)
-	if ip == nil || !ip.IsLoopback() {
-		return errors.New("controller address must use a loopback host")
+	return nil
+}
+
+func ValidateConnectEndpoint(endpoint Endpoint, field string) error {
+	if err := ValidateBindEndpoint(endpoint, field); err != nil {
+		return err
+	}
+	ip := net.ParseIP(endpoint.Host)
+	if ip == nil || !ip.IsLoopback() || ip.IsUnspecified() ||
+		(endpoint.Host != "127.0.0.1" && endpoint.Host != "::1") {
+		return fmt.Errorf("%s host must be exactly 127.0.0.1 or ::1", field)
+	}
+	return nil
+}
+
+// ValidateControllerEndpointPair prevents an m-ui loopback client from being
+// configured for a different address family or port than Mihomo's listener.
+// The accepted wildcard mappings are explicit so a saved configuration cannot
+// look valid while making the internal Controller unreachable.
+func ValidateControllerEndpointPair(bind, connect Endpoint) error {
+	if bind.Port != connect.Port {
+		return fmt.Errorf(
+			"mihomo external-controller bind and m-ui Controller connect ports must match",
+		)
+	}
+	if connect.Host != "127.0.0.1" && connect.Host != "::1" {
+		return errors.New(
+			"m-ui Mihomo Controller connect host must be exactly 127.0.0.1 or ::1",
+		)
+	}
+	switch bind.Host {
+	case "127.0.0.1", "0.0.0.0":
+		if connect.Host != "127.0.0.1" {
+			return fmt.Errorf(
+				"mihomo IPv4 bind %s requires m-ui Controller connect host 127.0.0.1",
+				bind.Host,
+			)
+		}
+	case "::1", "::":
+		if connect.Host != "::1" {
+			return fmt.Errorf(
+				"mihomo IPv6 bind %s requires m-ui Controller connect host ::1",
+				bind.Host,
+			)
+		}
+	default:
+		return fmt.Errorf(
+			"mihomo external-controller bind host %s is not one of the supported loopback or wildcard addresses",
+			bind.Host,
+		)
+	}
+	return nil
+}
+
+func ValidateCORSOrigins(origins []string) error {
+	for index, origin := range origins {
+		if origin == "" || origin == "*" || strings.TrimSpace(origin) != origin {
+			return fmt.Errorf("CORS origin %d must be an exact HTTP(S) origin", index+1)
+		}
+		parsed, err := url.Parse(origin)
+		if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") ||
+			parsed.Host == "" || parsed.User != nil || parsed.Path != "" ||
+			parsed.RawQuery != "" || parsed.Fragment != "" {
+			return fmt.Errorf("CORS origin %d must be an exact HTTP(S) origin", index+1)
+		}
+		if strings.HasSuffix(parsed.Host, ":") {
+			return fmt.Errorf("CORS origin %d must be an exact HTTP(S) origin", index+1)
+		}
+		if port := parsed.Port(); port != "" {
+			parsedPort, err := strconv.Atoi(port)
+			if err != nil || parsedPort < 1 || parsedPort > 65535 {
+				return fmt.Errorf("CORS origin %d must be an exact HTTP(S) origin", index+1)
+			}
+		}
+		if err := validateHost("CORS origin host", parsed.Hostname(), true); err != nil {
+			return err
+		}
 	}
 	return nil
 }

@@ -57,6 +57,29 @@ func TestYAMLCompilerSortsAndFiltersManagedState(t *testing.T) {
 	}
 }
 
+func TestYAMLCompilerUsesIPv6ExternalControllerAndExactCORSOrigins(t *testing.T) {
+	t.Parallel()
+	state := compilerState()
+	state.MihomoExternalControllerBind = domain.Endpoint{Host: "::", Port: 9090}
+	state.MihomoControllerConnect = domain.Endpoint{Host: "::1", Port: 9090}
+	state.ExternalControllerCORSOrigins = []string{"https://dashboard.example.com"}
+	output, err := (YAMLCompiler{}).Compile(context.Background(), state)
+	if err != nil {
+		t.Fatalf("Compile() error = %v", err)
+	}
+	text := string(output)
+	for _, expected := range []string{
+		"external-controller: '[::]:9090'",
+		"external-controller-cors:",
+		"allow-origins:",
+		"https://dashboard.example.com",
+	} {
+		if !strings.Contains(text, expected) {
+			t.Fatalf("compiled YAML does not contain %q:\n%s", expected, text)
+		}
+	}
+}
+
 func compilerState() domain.DesiredState {
 	asOf := time.Date(2026, time.July, 28, 12, 0, 0, 0, time.UTC)
 	expired := asOf.Add(-time.Second)

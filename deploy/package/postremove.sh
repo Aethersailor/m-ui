@@ -15,7 +15,9 @@ case "${1:-}" in
             /etc/init.d/mihomo \
             /etc/doas.d/m-ui.conf
         rm -rf /usr/lib/m-ui /usr/share/m-ui
-        rm -f /run/m-ui/package-upgrade-services
+        rm -f \
+            /run/m-ui-package/package-upgrade-services \
+            /run/m-ui-package/package-backup-snapshot
         ;;
 esac
 
