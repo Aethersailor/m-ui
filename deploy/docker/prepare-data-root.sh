@@ -84,6 +84,21 @@ check_component() {
     fi
 }
 
+check_path_components() {
+    path=""
+    remaining="${1#/}"
+    while [ -n "$remaining" ]; do
+        component="${remaining%%/*}"
+        if [ "$remaining" = "$component" ]; then
+            remaining=""
+        else
+            remaining="${remaining#*/}"
+        fi
+        path="$path/$component"
+        check_component "$path"
+    done
+}
+
 walk_path=""
 remaining="${root#/}"
 while [ -n "$remaining" ]; do
@@ -101,13 +116,6 @@ while [ -n "$remaining" ]; do
     fi
 done
 
-if [ "$check_only" -eq 1 ]; then
-    if [ -e "$root" ]; then
-        check_component "$root"
-    fi
-    exit 0
-fi
-
 for relative in \
     etc/m-ui \
     etc/mihomo \
@@ -115,6 +123,10 @@ for relative in \
     var/lib/mihomo
 do
     path="$root/$relative"
+    check_path_components "$path"
+    if [ "$check_only" -eq 1 ]; then
+        continue
+    fi
     parent="${path%/*}"
     if [ ! -d "$parent" ]; then
         mkdir -p "$parent"
@@ -126,5 +138,9 @@ do
     fi
     check_component "$path"
 done
+
+if [ "$check_only" -eq 1 ]; then
+    exit 0
+fi
 
 echo "Prepared m-ui Docker data root: $root"
