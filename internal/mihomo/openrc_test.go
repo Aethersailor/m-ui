@@ -50,3 +50,34 @@ func TestOpenRCProcessRejectsArbitraryServiceName(t *testing.T) {
 		t.Fatal("NewOpenRCProcess() error = nil")
 	}
 }
+
+func TestOpenRCProcessStatusFallsBackToProcessIdentity(t *testing.T) {
+	t.Parallel()
+	process, err := newOpenRCProcess(
+		managedServiceName,
+		"/var/lib/m-ui/core/current/mihomo",
+		"/etc/mihomo/config.yaml",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	executor := &fakeCommandExecutor{err: errCommandExit}
+	process.executor = executor
+	called := false
+	process.processActive = func(
+		context.Context,
+		string,
+		string,
+	) (bool, error) {
+		called = true
+		return true, nil
+	}
+
+	active, err := process.IsActive(context.Background())
+	if err != nil || !active {
+		t.Fatalf("IsActive() = %v, %v", active, err)
+	}
+	if !called {
+		t.Fatal("IsActive() did not inspect the process identity")
+	}
+}

@@ -30,7 +30,7 @@ func NewProcess(
 	case "systemd":
 		return NewSystemdProcess(serviceName)
 	case "openrc":
-		return NewOpenRCProcess(serviceName)
+		return newOpenRCProcess(serviceName, binaryPath, configPath)
 	case "managed":
 		return NewManagedProcess(ctx, binaryPath, configPath, logger)
 	default:

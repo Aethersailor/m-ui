@@ -21,15 +21,29 @@ const (
 type OpenRCProcess struct {
 	executor        commandExecutor
 	lifecycleMarker func(func() error) error
+	binaryPath      string
+	configPath      string
+	processActive   func(context.Context, string, string) (bool, error)
 }
 
 func NewOpenRCProcess(serviceName string) (*OpenRCProcess, error) {
+	return newOpenRCProcess(serviceName, "", "")
+}
+
+func newOpenRCProcess(
+	serviceName string,
+	binaryPath string,
+	configPath string,
+) (*OpenRCProcess, error) {
 	if serviceName != managedServiceName && serviceName != openRCServiceName {
 		return nil, errors.New("OpenRC service name must be mihomo")
 	}
 	return &OpenRCProcess{
 		executor:        osCommandExecutor{},
 		lifecycleMarker: runWithRuntimeLifecycleMarker,
+		binaryPath:      binaryPath,
+		configPath:      configPath,
+		processActive:   managedProcessActive,
 	}, nil
 }
 
@@ -46,7 +60,18 @@ func (process *OpenRCProcess) IsActive(ctx context.Context) (bool, error) {
 		return true, nil
 	}
 	if errors.Is(err, errCommandExit) {
-		return false, nil
+		if process.binaryPath == "" || process.configPath == "" {
+			return false, nil
+		}
+		active, processErr := process.processActive(
+			ctx,
+			process.binaryPath,
+			process.configPath,
+		)
+		if processErr != nil {
+			return false, errors.New("check Mihomo OpenRC process state")
+		}
+		return active, nil
 	}
 	return false, errors.New("check Mihomo OpenRC service state")
 }
