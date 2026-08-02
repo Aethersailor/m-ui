@@ -85,9 +85,13 @@ sudo ./manage.sh install \
 ssh -L 2095:127.0.0.1:2095 user@server
 ```
 
-然后打开 `http://127.0.0.1:2095/`。长期域名访问请使用自行维护的 HTTPS
-反向代理，并将 `/etc/m-ui/config.toml` 中的 `cookie_secure` 设为 `true`。
-不要将 Mihomo Controller 的 `127.0.0.1:9090` 暴露到公网。
+然后打开 `http://127.0.0.1:2095/`。系统设置中可以分别配置 m-ui 面板 UI
+入口和 Mihomo `external-controller` dashboard API 入口；两者不是同一个
+接口。默认仍是回环地址，改为 `0.0.0.0` 或 `::` 后需要按页面提示重启对应
+服务，m-ui 到 Mihomo 的内部连接目标仍限制为回环地址。长期域名访问请使用
+自行维护的 HTTPS 反向代理，并将 `/etc/m-ui/config.toml` 中的
+`cookie_secure` 设为 `true`。m-ui 不会修改防火墙、SSH、反向代理或
+Cloudflare 配置。
 
 反向代理示例见 [docs/reverse-proxy.md](docs/reverse-proxy.md)。
 

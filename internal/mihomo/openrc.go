@@ -19,14 +19,18 @@ const (
 )
 
 type OpenRCProcess struct {
-	executor commandExecutor
+	executor        commandExecutor
+	lifecycleMarker func(func() error) error
 }
 
 func NewOpenRCProcess(serviceName string) (*OpenRCProcess, error) {
 	if serviceName != managedServiceName && serviceName != openRCServiceName {
 		return nil, errors.New("OpenRC service name must be mihomo")
 	}
-	return &OpenRCProcess{executor: osCommandExecutor{}}, nil
+	return &OpenRCProcess{
+		executor:        osCommandExecutor{},
+		lifecycleMarker: runWithRuntimeLifecycleMarker,
+	}, nil
 }
 
 func (process *OpenRCProcess) IsActive(ctx context.Context) (bool, error) {
@@ -93,6 +97,22 @@ func (process *OpenRCProcess) lifecycle(ctx context.Context, action string) erro
 	default:
 		return fmt.Errorf("unsupported OpenRC action %q", action)
 	}
+	if action == "start" || action == "restart" {
+		marker := process.lifecycleMarker
+		if marker == nil {
+			marker = runWithRuntimeLifecycleMarker
+		}
+		return marker(func() error {
+			return process.lifecycleCommand(ctx, action)
+		})
+	}
+	return process.lifecycleCommand(ctx, action)
+}
+
+func (process *OpenRCProcess) lifecycleCommand(
+	ctx context.Context,
+	action string,
+) error {
 	_, err := process.executor.Run(
 		ctx,
 		20*time.Second,

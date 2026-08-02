@@ -97,6 +97,27 @@ export interface Settings {
   public_host: string
 }
 
+export interface EndpointValue {
+  host: string
+  port: number
+}
+
+export interface EndpointSettings {
+  panel_ui_bind: EndpointValue
+  mihomo_external_controller_bind: EndpointValue
+  mihomo_controller_connect: EndpointValue
+  external_controller_cors_origins: string[]
+  generation: number
+  requires_mui_restart?: boolean
+  requires_mihomo_restart?: boolean
+  updated_at?: string
+}
+
+export interface EndpointSettingsState {
+  active: EndpointSettings
+  pending: EndpointSettings | null
+}
+
 export interface AuditEntry {
   id: string
   actor_admin_id: string
@@ -410,6 +431,22 @@ export async function updateSettings(
       input,
     )
   ).settings
+}
+
+export function getEndpointSettings(): Promise<EndpointSettingsState> {
+  return apiRequest<EndpointSettingsState>('/api/v1/settings/endpoints')
+}
+
+export function updateEndpointSettings(
+  csrfToken: string,
+  input: Omit<EndpointSettings, 'requires_mui_restart' | 'requires_mihomo_restart' | 'updated_at'>,
+): Promise<EndpointSettingsState> {
+  return mutation<EndpointSettingsState>(
+    '/api/v1/settings/endpoints',
+    csrfToken,
+    'PUT',
+    input,
+  )
 }
 
 export function testCore(

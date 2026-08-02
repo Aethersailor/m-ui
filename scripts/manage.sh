@@ -355,7 +355,9 @@ managed_core = true
 process_mode = "auto"
 config_directory = "$(target /etc/mihomo)"
 config_path = "$mihomo_config"
-controller_address = "127.0.0.1:9090"
+external_controller_address = "127.0.0.1:9090"
+controller_connect_address = "127.0.0.1:9090"
+external_controller_cors_origins = []
 controller_secret = "$controller_secret"
 service_name = "mihomo.service"
 revision_directory = "$(target /var/lib/m-ui/revisions)"
@@ -586,17 +588,27 @@ clear_bootstrap_controller_secret() {
 
 start_services() {
     [ "$no_start" -eq 0 ] || return 0
-    [ -z "$root" ] || return 0
+    if [ -n "$root" ]; then
+        [ "${M_UI_TEST_SERVICES:-0}" = "1" ] || return 0
+        test_service_log="${M_UI_TEST_SERVICE_LOG:-}"
+        [ -n "$test_service_log" ] || fail "M_UI_TEST_SERVICE_LOG is required"
+        printf '%s\n' "service:m-ui:restart" >>"$test_service_log"
+        run_as_m_ui "$(target /usr/bin/m-ui)" runtime restart-mihomo \
+            --config "$(target /etc/m-ui/config.toml)"
+        return 0
+    fi
     if [ "$init_system" = "systemd" ]; then
         systemctl daemon-reload
-        systemctl enable mihomo.service m-ui.service
-        systemctl restart mihomo.service
+        systemctl enable m-ui.service mihomo.service
         systemctl restart m-ui.service
+        run_as_m_ui /usr/bin/m-ui runtime restart-mihomo \
+            --config /etc/m-ui/config.toml
     else
-        rc-update add mihomo default
         rc-update add m-ui default
-        rc-service mihomo restart
+        rc-update add mihomo default
         rc-service m-ui restart
+        run_as_m_ui /usr/bin/m-ui runtime restart-mihomo \
+            --config /etc/m-ui/config.toml
     fi
     attempt=0
     while [ "$attempt" -lt 60 ]; do
@@ -611,8 +623,8 @@ start_services() {
             services_active=1
         fi
         if [ "$services_active" -eq 1 ] &&
-            curl --fail --silent --show-error \
-                http://127.0.0.1:2095/api/v1/health >/dev/null &&
+            run_as_m_ui /usr/bin/m-ui doctor \
+                --config /etc/m-ui/config.toml >/dev/null 2>&1 &&
             run_as_m_ui /usr/bin/m-ui core status \
                 --json --config /etc/m-ui/config.toml >/dev/null 2>&1 &&
             run_as_mihomo /var/lib/m-ui/core/current/mihomo \

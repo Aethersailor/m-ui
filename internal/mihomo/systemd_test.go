@@ -42,6 +42,7 @@ func TestSystemdProcessUsesFixedNonInteractiveLifecycleCommands(t *testing.T) {
 	}
 	executor := &fakeCommandExecutor{}
 	process.executor = executor
+	process.lifecycleMarker = func(action func() error) error { return action() }
 
 	for _, operation := range []struct {
 		action string

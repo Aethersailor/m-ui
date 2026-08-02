@@ -19,14 +19,18 @@ const (
 )
 
 type SystemdProcess struct {
-	executor commandExecutor
+	executor        commandExecutor
+	lifecycleMarker func(func() error) error
 }
 
 func NewSystemdProcess(serviceName string) (*SystemdProcess, error) {
 	if serviceName != managedServiceName {
 		return nil, fmt.Errorf("service name must be %q", managedServiceName)
 	}
-	return &SystemdProcess{executor: osCommandExecutor{}}, nil
+	return &SystemdProcess{
+		executor:        osCommandExecutor{},
+		lifecycleMarker: runWithRuntimeLifecycleMarker,
+	}, nil
 }
 
 func (process *SystemdProcess) IsActive(ctx context.Context) (bool, error) {
@@ -95,6 +99,22 @@ func (process *SystemdProcess) RecentLogs(ctx context.Context, limit int) ([]Log
 }
 
 func (process *SystemdProcess) lifecycle(ctx context.Context, action string) error {
+	if action == "start" || action == "restart" {
+		marker := process.lifecycleMarker
+		if marker == nil {
+			marker = runWithRuntimeLifecycleMarker
+		}
+		return marker(func() error {
+			return process.lifecycleCommand(ctx, action)
+		})
+	}
+	return process.lifecycleCommand(ctx, action)
+}
+
+func (process *SystemdProcess) lifecycleCommand(
+	ctx context.Context,
+	action string,
+) error {
 	_, err := process.executor.Run(
 		ctx,
 		20*time.Second,

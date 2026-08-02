@@ -51,6 +51,67 @@ func TestManagementCRUDUsesAuthenticationCSRFAndPublisher(t *testing.T) {
 	}
 
 	sessionCookie, csrfToken := managementLogin(t, environment.handler)
+	endpointGet := performJSONRequest(
+		t,
+		environment.handler,
+		http.MethodGet,
+		"/api/v1/settings/endpoints",
+		nil,
+		sessionCookie,
+		"",
+	)
+	if endpointGet.Code != http.StatusOK {
+		t.Fatalf("endpoint settings GET status = %d; body=%s", endpointGet.Code, endpointGet.Body)
+	}
+	var endpointState endpointSettingsStateResponse
+	if err := json.NewDecoder(endpointGet.Body).Decode(&endpointState); err != nil {
+		t.Fatal(err)
+	}
+	blockedEndpointUpdate := performJSONRequest(
+		t,
+		environment.handler,
+		http.MethodPut,
+		"/api/v1/settings/endpoints",
+		endpointSettingsRequest{Generation: endpointState.Active.Generation},
+		sessionCookie,
+		"",
+	)
+	if blockedEndpointUpdate.Code != http.StatusForbidden {
+		t.Fatalf("endpoint settings PUT without CSRF status = %d", blockedEndpointUpdate.Code)
+	}
+	endpointPayload := endpointSettingsRequest{
+		PanelUIBind: endpointResponse{Host: "0.0.0.0", Port: 2095},
+		MihomoExternalControllerBind: endpointResponse{
+			Host: "::",
+			Port: 9090,
+		},
+		MihomoControllerConnect: endpointResponse{
+			Host: "::1",
+			Port: 9090,
+		},
+		ExternalControllerCORSOrigins: []string{"https://dashboard.example.com"},
+		Generation:                    endpointState.Active.Generation,
+	}
+	updatedEndpoints := performJSONRequest(
+		t,
+		environment.handler,
+		http.MethodPut,
+		"/api/v1/settings/endpoints",
+		endpointPayload,
+		sessionCookie,
+		csrfToken,
+	)
+	if updatedEndpoints.Code != http.StatusOK {
+		t.Fatalf("endpoint settings PUT status = %d; body=%s", updatedEndpoints.Code, updatedEndpoints.Body)
+	}
+	if !strings.Contains(updatedEndpoints.Body.String(), `"requires_mui_restart":true`) ||
+		!strings.Contains(updatedEndpoints.Body.String(), `"requires_mihomo_restart":true`) {
+		t.Fatalf("endpoint settings response did not record restart requirements: %s", updatedEndpoints.Body.String())
+	}
+	var updatedEndpointState endpointSettingsStateResponse
+	if err := json.NewDecoder(strings.NewReader(updatedEndpoints.Body.String())).Decode(&updatedEndpointState); err != nil {
+		t.Fatal(err)
+	}
 	blockedCoreUpdate := performJSONRequest(
 		t,
 		environment.handler,
@@ -82,6 +143,37 @@ func TestManagementCRUDUsesAuthenticationCSRFAndPublisher(t *testing.T) {
 	)
 	if blocked.Code != http.StatusForbidden {
 		t.Fatalf("create without CSRF status = %d", blocked.Code)
+	}
+	blockedPublish := performJSONRequest(
+		t,
+		environment.handler,
+		http.MethodPost,
+		"/api/v1/listeners",
+		listenerPayload,
+		sessionCookie,
+		csrfToken,
+	)
+	if blockedPublish.Code != http.StatusConflict ||
+		!strings.Contains(blockedPublish.Body.String(), `"MIHOMO_RESTART_REQUIRED"`) {
+		t.Fatalf("publication during pending Mihomo restart = %d %q", blockedPublish.Code, blockedPublish.Body)
+	}
+	restoreEndpoints := performJSONRequest(
+		t,
+		environment.handler,
+		http.MethodPut,
+		"/api/v1/settings/endpoints",
+		endpointSettingsRequest{
+			PanelUIBind:                   endpointState.Active.PanelUIBind,
+			MihomoExternalControllerBind:  endpointState.Active.MihomoExternalControllerBind,
+			MihomoControllerConnect:       endpointState.Active.MihomoControllerConnect,
+			ExternalControllerCORSOrigins: endpointState.Active.ExternalControllerCORSOrigins,
+			Generation:                    updatedEndpointState.Active.Generation,
+		},
+		sessionCookie,
+		csrfToken,
+	)
+	if restoreEndpoints.Code != http.StatusOK {
+		t.Fatalf("restore endpoint settings status = %d; body=%s", restoreEndpoints.Code, restoreEndpoints.Body)
 	}
 	createdListener := performJSONRequest(
 		t,
@@ -460,6 +552,9 @@ func newManagementTestEnvironment(t *testing.T) managementTestEnvironment {
 		Controller: controller,
 		Process:    process,
 		Runtime:    runtimeMonitor,
+		ReadyGuard: func(context.Context) (func() error, error) {
+			return func() error { return nil }, nil
+		},
 	})
 	if err != nil {
 		t.Fatal(err)

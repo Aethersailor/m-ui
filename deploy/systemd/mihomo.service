@@ -1,8 +1,9 @@
 [Unit]
 Description=Mihomo proxy core managed by m-ui
 Documentation=https://wiki.metacubex.one/en/startup/service/
-After=network-online.target
+After=network-online.target m-ui.service
 Wants=network-online.target
+Requires=m-ui.service
 
 [Service]
 Type=simple
@@ -11,10 +12,14 @@ Group=mihomo
 WorkingDirectory=/var/lib/mihomo
 Environment=HOME=/var/lib/mihomo
 Environment=SAFE_PATHS=/etc/mihomo
+ExecStartPre=/usr/sbin/runuser -u m-ui -- /usr/bin/m-ui runtime wait-ready
 ExecStart=/var/lib/m-ui/core/current/mihomo -d /var/lib/mihomo -f /etc/mihomo/config.yaml
+PermissionsStartOnly=true
+ExecStartPost=/usr/sbin/runuser -u m-ui -- /usr/bin/m-ui runtime finalize-mihomo-start --config /etc/m-ui/config.toml
 ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure
 RestartSec=3s
+TimeoutStartSec=180s
 LimitNOFILE=1000000
 UMask=0027
 

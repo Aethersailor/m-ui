@@ -22,16 +22,22 @@ const usage = `m-ui manages one dedicated Mihomo service.
 Usage:
   m-ui server [--config /etc/m-ui/config.toml]
   m-ui version
-  m-ui doctor [--config /etc/m-ui/config.toml]
+  m-ui doctor [panel] [--config /etc/m-ui/config.toml]
   m-ui admin reset-password --password-file <path> [--username admin]
   m-ui config validate [--config /etc/m-ui/config.toml]
   m-ui config rollback --config /etc/m-ui/config.toml <revision-id>
+  m-ui runtime apply-mihomo-start --config /etc/m-ui/config.toml
+  m-ui runtime restart-mihomo --config /etc/m-ui/config.toml
+  m-ui runtime finalize-mihomo-start --config /etc/m-ui/config.toml
+  m-ui runtime wait-ready
   m-ui core status [--json] [--config /etc/m-ui/config.toml]
   m-ui core check [--json] [--config /etc/m-ui/config.toml]
   m-ui core update [--json] [--config /etc/m-ui/config.toml]
   m-ui core rollback [--json] [--config /etc/m-ui/config.toml]
   m-ui core bootstrap [--binary PATH] [--manifest PATH] [--json]
 `
+
+const runtimeCommandTimeout = 120 * time.Second
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
@@ -58,6 +64,8 @@ func run(args []string) error {
 		return runDoctor(args[1:])
 	case "config":
 		return runConfig(args[1:])
+	case "runtime":
+		return runRuntime(args[1:])
 	case "core":
 		return runCore(args[1:])
 	case "help", "-h", "--help":
@@ -67,6 +75,57 @@ func run(args []string) error {
 		fmt.Fprint(os.Stderr, usage)
 		return fmt.Errorf("unknown command %q", args[0])
 	}
+}
+
+func runRuntime(args []string) error {
+	if len(args) == 0 {
+		fmt.Fprint(os.Stderr, usage)
+		return errors.New(
+			"runtime requires apply-mihomo-start, restart-mihomo, finalize-mihomo-start, or wait-ready",
+		)
+	}
+	command := args[0]
+	flags := flag.NewFlagSet("runtime "+command, flag.ContinueOnError)
+	flags.SetOutput(os.Stderr)
+	configPath := flags.String(
+		"config",
+		"",
+		"path to the m-ui TOML configuration",
+	)
+	if err := flags.Parse(args[1:]); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		return errors.New("runtime commands accept no positional arguments")
+	}
+	if command == "wait-ready" {
+		ctx, cancel := context.WithTimeout(context.Background(), runtimeCommandTimeout)
+		defer cancel()
+		return app.WaitForRuntimeReady(ctx)
+	}
+	action := ""
+	switch command {
+	case "apply-mihomo-start":
+		action = "start"
+	case "restart-mihomo":
+		action = "restart"
+	case "finalize-mihomo-start":
+		action = "finalize"
+	default:
+		return fmt.Errorf("unknown runtime command %q", command)
+	}
+	cfg, err := config.Load(*configPath)
+	if err != nil {
+		return fmt.Errorf("load configuration: %w", err)
+	}
+	// Every restricted runtime command may need to wait for m-ui startup
+	// recovery before it can touch the runtime coordinator. Keep this longer
+	// than Publisher recovery plus the Mihomo health window; the native
+	// finalizer and the manage/package callers must share the same bound.
+	runtimeTimeout := runtimeCommandTimeout
+	ctx, cancel := context.WithTimeout(context.Background(), runtimeTimeout)
+	defer cancel()
+	return app.ApplyMihomoRuntime(ctx, cfg, action)
 }
 
 func runCore(args []string) error {
@@ -184,6 +243,10 @@ func runCore(args []string) error {
 }
 
 func runDoctor(args []string) error {
+	panelOnly := len(args) > 0 && args[0] == "panel"
+	if panelOnly {
+		args = args[1:]
+	}
 	flags := flag.NewFlagSet("doctor", flag.ContinueOnError)
 	flags.SetOutput(os.Stderr)
 	configPath := flags.String("config", "", "path to the m-ui TOML configuration")
@@ -191,7 +254,7 @@ func runDoctor(args []string) error {
 		return err
 	}
 	if flags.NArg() != 0 {
-		return errors.New("doctor accepts no positional arguments")
+		return errors.New("doctor accepts only the optional panel argument")
 	}
 	cfg, err := config.Load(*configPath)
 	if err != nil {
@@ -199,6 +262,13 @@ func runDoctor(args []string) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
+	if panelOnly {
+		if err := app.PanelHealth(ctx, cfg); err != nil {
+			return err
+		}
+		fmt.Println("m-ui panel health is OK.")
+		return nil
+	}
 	return app.Doctor(ctx, cfg, os.Stdout)
 }
 

@@ -17,10 +17,19 @@ import (
 )
 
 var (
-	ErrDegraded = errors.New("core updates are disabled while the system is degraded")
-	ErrExternal = errors.New("external Mihomo core is not managed by m-ui")
-	ErrNoBackup = errors.New("no previous managed Mihomo core backup is available")
+	ErrDegraded              = errors.New("core updates are disabled while the system is degraded")
+	ErrExternal              = errors.New("external Mihomo core is not managed by m-ui")
+	ErrNoBackup              = errors.New("no previous managed Mihomo core backup is available")
+	ErrMihomoRestartRequired = errors.New("Mihomo restart is required before core mutation")
 )
+
+// EndpointRestartGate is implemented by the durable settings store. Core
+// activation restarts Mihomo, so it must not be allowed to apply a different
+// binary while a previously saved endpoint candidate still awaits its
+// explicit restart boundary.
+type EndpointRestartGate interface {
+	MihomoRestartRequired(context.Context) (bool, error)
+}
 
 type ManagerOptions struct {
 	Repository     Repository
@@ -29,6 +38,7 @@ type ManagerOptions struct {
 	Process        mihomo.CoreProcess
 	Controller     mihomo.CoreController
 	Coordinator    *operation.Coordinator
+	EndpointGate   EndpointRestartGate
 	ConfigPath     string
 	Architecture   string
 	Clock          func() time.Time
@@ -46,6 +56,7 @@ type Manager struct {
 	process        mihomo.CoreProcess
 	controller     mihomo.CoreController
 	coordinator    *operation.Coordinator
+	endpointGate   EndpointRestartGate
 	configPath     string
 	architecture   string
 	clock          func() time.Time
@@ -113,6 +124,7 @@ func NewManager(options ManagerOptions) (*Manager, error) {
 		process:        options.Process,
 		controller:     options.Controller,
 		coordinator:    options.Coordinator,
+		endpointGate:   options.EndpointGate,
 		configPath:     options.ConfigPath,
 		architecture:   options.Architecture,
 		clock:          options.Clock,
@@ -168,6 +180,20 @@ func (manager *Manager) systemDegraded(ctx context.Context) (bool, error) {
 		return true, nil
 	}
 	return manager.repository.CoreSystemDegraded(ctx)
+}
+
+func (manager *Manager) rejectPendingMihomoRestart(ctx context.Context) error {
+	if manager.endpointGate == nil {
+		return nil
+	}
+	required, err := manager.endpointGate.MihomoRestartRequired(ctx)
+	if err != nil {
+		return err
+	}
+	if required {
+		return ErrMihomoRestartRequired
+	}
+	return nil
 }
 
 func (manager *Manager) Recover(ctx context.Context) error {
@@ -451,6 +477,9 @@ func (manager *Manager) Update(
 		return Manifest{}, false, err
 	}
 	defer release()
+	if err := manager.rejectPendingMihomoRestart(ctx); err != nil {
+		return Manifest{}, false, err
+	}
 	settings, err := manager.repository.CoreSettings(ctx)
 	if err != nil {
 		return Manifest{}, false, err
@@ -656,6 +685,9 @@ func (manager *Manager) Rollback(
 		return Manifest{}, err
 	}
 	defer release()
+	if err := manager.rejectPendingMihomoRestart(ctx); err != nil {
+		return Manifest{}, err
+	}
 	settings, err := manager.repository.CoreSettings(ctx)
 	if err != nil {
 		return Manifest{}, err

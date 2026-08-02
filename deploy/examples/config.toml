@@ -27,7 +27,9 @@ managed_core = true
 process_mode = "auto"
 config_directory = "/etc/mihomo"
 config_path = "/etc/mihomo/config.yaml"
-controller_address = "127.0.0.1:9090"
+external_controller_address = "127.0.0.1:9090"
+controller_connect_address = "127.0.0.1:9090"
+external_controller_cors_origins = []
 # Optional first-run bootstrap value. The installer writes a random secret,
 # m-ui encrypts it into SQLite, then the installer clears this field after the
 # first healthy start. Protect this file as root:m-ui 0640.

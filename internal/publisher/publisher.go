@@ -23,10 +23,15 @@ import (
 )
 
 var (
-	ErrDegraded            = errors.New("configuration publishing is blocked because the system is degraded")
-	ErrCandidateValidation = errors.New("candidate configuration validation failed")
-	ErrStartupDegraded     = errors.New("startup reconciliation marked the system degraded")
+	ErrDegraded              = errors.New("configuration publishing is blocked because the system is degraded")
+	ErrCandidateValidation   = errors.New("candidate configuration validation failed")
+	ErrStartupDegraded       = errors.New("startup reconciliation marked the system degraded")
+	ErrMihomoRestartRequired = errors.New("Mihomo restart is required before configuration publication")
 )
+
+type endpointSettingsReader interface {
+	EndpointSettings(context.Context) (store.EndpointSettingsState, error)
+}
 
 type Mutation func(ctx context.Context, transaction store.PublicationTransaction) error
 
@@ -39,7 +44,11 @@ type Request struct {
 	AuditSummary     string
 	AuditSummaryFunc func() string
 	EffectiveAt      *time.Time
-	Mutate           Mutation
+	// RestartRequired commits the candidate and leaves the running Mihomo
+	// process untouched. This is used for listener endpoint changes because a
+	// reload must not be treated as proof that a socket binding changed.
+	RestartRequired bool
+	Mutate          Mutation
 }
 
 type Options struct {
@@ -229,11 +238,42 @@ func (publisher *Publisher) ValidateCurrent(
 }
 
 func (publisher *Publisher) ReconcileStartup(ctx context.Context) error {
+	return publisher.reconcileStartup(ctx, true)
+}
+
+// ReconcileStartupBeforeRuntime repairs and validates the durable revision/YAML
+// relationship without touching a Mihomo process or clearing degraded state.
+// It is the mandatory pre-runtime phase for managed startup and native service
+// ordering; the regular reconciliation remains responsible for runtime health.
+func (publisher *Publisher) ReconcileStartupBeforeRuntime(ctx context.Context) error {
+	return publisher.reconcileStartup(ctx, false)
+}
+
+// ReconcileStartupLocked performs the post-runtime reconciliation while the
+// caller already owns the publisher's runtime coordinator. Native service
+// finalizers use it after their authenticated Controller health check so the
+// finalizer cannot clear a degraded state or activate YAML outside the same
+// lifecycle serialization boundary.
+func (publisher *Publisher) ReconcileStartupLocked(ctx context.Context) error {
+	return publisher.reconcileStartupLocked(ctx, true)
+}
+
+func (publisher *Publisher) reconcileStartup(
+	ctx context.Context,
+	allowRuntime bool,
+) error {
 	release, err := publisher.coordinator.Acquire(ctx)
 	if err != nil {
 		return err
 	}
 	defer release()
+	return publisher.reconcileStartupLocked(ctx, allowRuntime)
+}
+
+func (publisher *Publisher) reconcileStartupLocked(
+	ctx context.Context,
+	allowRuntime bool,
+) error {
 	publisher.mutex.Lock()
 	defer publisher.mutex.Unlock()
 
@@ -246,6 +286,18 @@ func (publisher *Publisher) ReconcileStartup(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("read system state before startup reconciliation: %w", err)
 	}
+	endpointState, endpointStateSupported, err := publisher.readEndpointSettings(
+		reconciliationContext,
+	)
+	if err != nil {
+		return publisher.markStartupDegraded(
+			reconciliationContext,
+			"",
+			"endpoint restart state could not be inspected safely",
+		)
+	}
+	mihomoRestartPending := endpointStateSupported && endpointState.Pending != nil &&
+		endpointState.Pending.RequiresMihomoRestart
 
 	initial, err := publisher.repository.ReadPublicationSnapshot(
 		reconciliationContext,
@@ -363,7 +415,19 @@ func (publisher *Publisher) ReconcileStartup(ctx context.Context) error {
 		)
 	}
 	if activeYAML.exists && activeYAML.sha256 == activeRevision.SHA256 {
+		if mihomoRestartPending {
+			if systemState.Degraded {
+				return fmt.Errorf(
+					"%w: Mihomo endpoint restart is still required",
+					ErrStartupDegraded,
+				)
+			}
+			return nil
+		}
 		if !systemState.Degraded {
+			return nil
+		}
+		if !allowRuntime {
 			return nil
 		}
 		if err := publisher.validateReloadAndCheckActive(reconciliationContext); err != nil {
@@ -386,15 +450,43 @@ func (publisher *Publisher) ReconcileStartup(ctx context.Context) error {
 		)
 		return nil
 	}
-	if err := publisher.publishCompiled(
+	if err := publisher.publishCompiledWithRuntime(
 		reconciliationContext,
 		durableYAML,
+		allowRuntime,
 	); err != nil {
 		return publisher.markStartupDegraded(
 			reconciliationContext,
 			activeRevision.ID,
 			"active Mihomo YAML could not be repaired from durable state",
 		)
+	}
+	if !allowRuntime {
+		return nil
+	}
+	active, err := publisher.process.IsActive(reconciliationContext)
+	if err != nil {
+		return publisher.markStartupDegraded(
+			reconciliationContext,
+			activeRevision.ID,
+			"active Mihomo YAML was repaired before the runtime became healthy",
+		)
+	}
+	if !active {
+		return publisher.markStartupDegraded(
+			reconciliationContext,
+			activeRevision.ID,
+			"Mihomo runtime is inactive during startup reconciliation",
+		)
+	}
+	if mihomoRestartPending {
+		if systemState.Degraded {
+			return fmt.Errorf(
+				"%w: Mihomo endpoint restart is still required",
+				ErrStartupDegraded,
+			)
+		}
+		return nil
 	}
 	if err := publisher.clearStartupDegraded(
 		reconciliationContext,
@@ -413,6 +505,13 @@ func (publisher *Publisher) ReconcileStartup(ctx context.Context) error {
 func (publisher *Publisher) validateReloadAndCheckActive(ctx context.Context) error {
 	if err := publisher.cli.Validate(ctx, publisher.options.ConfigPath); err != nil {
 		return fmt.Errorf("%w during startup recovery", ErrCandidateValidation)
+	}
+	active, err := publisher.process.IsActive(ctx)
+	if err != nil {
+		return err
+	}
+	if !active {
+		return errors.New("Mihomo runtime is inactive during startup health recovery")
 	}
 	if err := publisher.reloadWithFallback(ctx); err != nil {
 		return err
@@ -531,6 +630,10 @@ func (publisher *Publisher) Rollback(
 	if err != nil || SHA256(snapshotYAML) != revision.SHA256 {
 		return domain.Revision{}, errors.New("rollback state snapshot does not match its YAML revision")
 	}
+	restartRequired, err := publisher.rollbackRequiresMihomoRestart(ctx, snapshot.State)
+	if err != nil {
+		return domain.Revision{}, err
+	}
 	return publisher.publishLocked(ctx, Request{
 		Reason:          fmt.Sprintf("rollback to revision %d", revision.RevisionNumber),
 		ActorAdminID:    actorAdminID,
@@ -538,6 +641,7 @@ func (publisher *Publisher) Rollback(
 		AuditResource:   "config_revision",
 		AuditResourceID: revision.ID,
 		AuditSummary:    fmt.Sprintf("rolled back to revision %d", revision.RevisionNumber),
+		RestartRequired: restartRequired,
 		Mutate: func(ctx context.Context, transaction store.PublicationTransaction) error {
 			return transaction.ReplaceDesiredState(ctx, snapshot.State)
 		},
@@ -568,6 +672,11 @@ func (publisher *Publisher) publishLocked(
 		}
 		if blocked {
 			return domain.Revision{}, ErrDegraded
+		}
+	}
+	if !request.RestartRequired {
+		if err := publisher.rejectPendingMihomoRestart(ctx); err != nil {
+			return domain.Revision{}, err
 		}
 	}
 
@@ -773,34 +882,39 @@ func (publisher *Publisher) publishLocked(
 			revision,
 			previousConfig,
 			previousExists,
+			request.RestartRequired,
 			"atomic configuration replacement failed",
 			err,
 		)
 	}
 
-	if err := publisher.reloadWithFallback(ctx); err != nil {
-		return domain.Revision{}, publisher.failAfterReplacement(
-			ctx,
-			transaction,
-			&transactionOpen,
-			revision,
-			previousConfig,
-			previousExists,
-			"runtime reload failed",
-			err,
-		)
-	}
-	if err := publisher.waitHealthy(ctx); err != nil {
-		return domain.Revision{}, publisher.failAfterReplacement(
-			ctx,
-			transaction,
-			&transactionOpen,
-			revision,
-			previousConfig,
-			previousExists,
-			"post-publication health check failed",
-			err,
-		)
+	if !request.RestartRequired {
+		if err := publisher.reloadWithFallback(ctx); err != nil {
+			return domain.Revision{}, publisher.failAfterReplacement(
+				ctx,
+				transaction,
+				&transactionOpen,
+				revision,
+				previousConfig,
+				previousExists,
+				request.RestartRequired,
+				"runtime reload failed",
+				err,
+			)
+		}
+		if err := publisher.waitHealthy(ctx); err != nil {
+			return domain.Revision{}, publisher.failAfterReplacement(
+				ctx,
+				transaction,
+				&transactionOpen,
+				revision,
+				previousConfig,
+				previousExists,
+				request.RestartRequired,
+				"post-publication health check failed",
+				err,
+			)
+		}
 	}
 	activatedAt := publisher.now().UTC()
 	if err := transaction.ActivateRevision(ctx, revision.ID, activatedAt); err != nil {
@@ -811,6 +925,7 @@ func (publisher *Publisher) publishLocked(
 			revision,
 			previousConfig,
 			previousExists,
+			request.RestartRequired,
 			"revision activation failed",
 			err,
 		)
@@ -823,6 +938,7 @@ func (publisher *Publisher) publishLocked(
 			revision,
 			previousConfig,
 			previousExists,
+			request.RestartRequired,
 			"audit recording failed",
 			err,
 		)
@@ -835,11 +951,78 @@ func (publisher *Publisher) publishLocked(
 			activatedAt,
 			effectiveAt,
 			baseline,
+			request.RestartRequired,
 			err,
 		)
 	}
 	transactionOpen = false
 	return publisher.finishSuccessfulPublication(ctx, revision, activatedAt), nil
+}
+
+func (publisher *Publisher) readEndpointSettings(
+	ctx context.Context,
+) (store.EndpointSettingsState, bool, error) {
+	reader, ok := publisher.repository.(endpointSettingsReader)
+	if !ok {
+		return store.EndpointSettingsState{}, false, nil
+	}
+	state, err := reader.EndpointSettings(ctx)
+	if err != nil {
+		return store.EndpointSettingsState{}, true, fmt.Errorf(
+			"read durable endpoint restart state: %w",
+			err,
+		)
+	}
+	return state, true, nil
+}
+
+func (publisher *Publisher) rejectPendingMihomoRestart(ctx context.Context) error {
+	state, supported, err := publisher.readEndpointSettings(ctx)
+	if err != nil {
+		return err
+	}
+	if supported && state.Pending != nil && state.Pending.RequiresMihomoRestart {
+		return ErrMihomoRestartRequired
+	}
+	return nil
+}
+
+func (publisher *Publisher) rollbackRequiresMihomoRestart(
+	ctx context.Context,
+	target domain.DesiredState,
+) (bool, error) {
+	state, supported, err := publisher.readEndpointSettings(ctx)
+	if err != nil {
+		return false, err
+	}
+	if !supported {
+		return false, nil
+	}
+	normalized, err := target.NormalizeLegacy()
+	if err != nil {
+		return false, fmt.Errorf("normalize rollback endpoint state: %w", err)
+	}
+	if state.Pending != nil && state.Pending.RequiresMihomoRestart {
+		return true, nil
+	}
+	return !normalized.MihomoExternalControllerBind.Equal(
+		state.LastApplied.MihomoExternalControllerBind,
+	) || !equalStringSlices(
+		normalized.ExternalControllerCORSOrigins,
+		state.LastApplied.ExternalControllerCORSOrigins,
+	), nil
+}
+
+func equalStringSlices(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
 }
 
 func (publisher *Publisher) abortChangedActivePublication(
@@ -879,6 +1062,7 @@ func (publisher *Publisher) failAfterReplacement(
 	revision domain.Revision,
 	previousConfig []byte,
 	previousExists bool,
+	restartRequired bool,
 	stage string,
 	cause error,
 ) error {
@@ -889,6 +1073,7 @@ func (publisher *Publisher) failAfterReplacement(
 		revision.ID,
 		previousConfig,
 		previousExists,
+		restartRequired,
 	)
 	_ = transaction.Rollback(context.Background())
 	*transactionOpen = false
@@ -922,6 +1107,7 @@ func (publisher *Publisher) reconcileCommit(
 	activatedAt time.Time,
 	effectiveAt time.Time,
 	baseline publicationBaseline,
+	restartRequired bool,
 	commitErr error,
 ) (domain.Revision, error) {
 	recoveryContext, cancel := publisher.recoveryContext(ctx)
@@ -1029,6 +1215,7 @@ func (publisher *Publisher) reconcileCommit(
 			revision.ID,
 			baseline.activeYAML.content,
 			baseline.activeYAML.exists,
+			restartRequired,
 		)
 		failureErr := publisher.recordFailure(
 			ctx,
@@ -1299,6 +1486,14 @@ func (publisher *Publisher) publishCompiled(
 	ctx context.Context,
 	compiled []byte,
 ) error {
+	return publisher.publishCompiledWithRuntime(ctx, compiled, true)
+}
+
+func (publisher *Publisher) publishCompiledWithRuntime(
+	ctx context.Context,
+	compiled []byte,
+	allowRuntime bool,
+) error {
 	candidateID, err := uuid.NewRandom()
 	if err != nil {
 		return errors.New("generate reconciliation candidate ID")
@@ -1318,6 +1513,31 @@ func (publisher *Publisher) publishCompiled(
 	}
 	if err := replaceAndSync(candidatePath, publisher.options.ConfigPath); err != nil {
 		return err
+	}
+	if pending, supported, err := publisher.readEndpointSettings(ctx); err != nil {
+		return err
+	} else if supported && pending.Pending != nil && pending.Pending.RequiresMihomoRestart {
+		// The file is repaired for the next explicit Mihomo restart, but a
+		// reload or health check would incorrectly claim that the new socket is
+		// already running.
+		return nil
+	}
+	if !allowRuntime {
+		// This is the pre-runtime startup phase. It may repair the durable
+		// candidate and active YAML, but it must not observe, reload, restart,
+		// health-check, or clear degraded state for a process that has not yet
+		// crossed the runtime boundary.
+		return nil
+	}
+	active, err := publisher.process.IsActive(ctx)
+	if err != nil {
+		return err
+	}
+	if !active {
+		// The durable YAML repair is safe before the process boundary. Defer
+		// reload and health verification until managed startup or the native
+		// service finalizer has actually started Mihomo.
+		return nil
 	}
 	if err := publisher.reloadWithFallback(ctx); err != nil {
 		return err
@@ -1391,6 +1611,7 @@ func (publisher *Publisher) restorePrevious(
 	revisionID string,
 	previousConfig []byte,
 	previousExists bool,
+	restartRequired bool,
 ) error {
 	if !previousExists {
 		if err := removeAndSync(publisher.options.ConfigPath); err != nil {
@@ -1413,6 +1634,9 @@ func (publisher *Publisher) restorePrevious(
 	}
 	if err := replaceAndSync(recoveryPath, publisher.options.ConfigPath); err != nil {
 		return err
+	}
+	if restartRequired {
+		return nil
 	}
 	if err := publisher.reloadWithFallback(ctx); err != nil {
 		return err

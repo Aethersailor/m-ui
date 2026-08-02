@@ -13,6 +13,7 @@ error_log="/var/log/mihomo.log"
 
 depend() {
     need net
+    need m-ui
 }
 
 start_pre() {
@@ -24,6 +25,31 @@ start_pre() {
         return 1
     fi
     "$setcap_bin" cap_net_bind_service=+ep /var/lib/m-ui/core/current/mihomo
+    if ! run_as_m_ui /usr/bin/m-ui runtime wait-ready; then
+        eerror "m-ui has not completed its startup readiness boundary"
+        return 1
+    fi
+}
+
+run_as_m_ui() {
+    if command -v runuser >/dev/null 2>&1; then
+        runuser -u m-ui -- "$@"
+    elif command -v su-exec >/dev/null 2>&1; then
+        su-exec m-ui "$@"
+    else
+        eerror "runuser or su-exec is required for the m-ui runtime finalizer"
+        return 1
+    fi
+}
+
+start_post() {
+    if ! run_as_m_ui /usr/bin/m-ui runtime finalize-mihomo-start \
+        --config /etc/m-ui/config.toml
+    then
+        eerror "Mihomo did not pass the m-ui startup boundary"
+        stop
+        return 1
+    fi
 }
 
 reload() {

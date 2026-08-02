@@ -4,12 +4,15 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/url"
 	"os"
 	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/Aethersailor/m-ui/internal/domain"
 	"github.com/pelletier/go-toml/v2"
 )
 
@@ -53,16 +56,19 @@ type Panel struct {
 }
 
 type Mihomo struct {
-	BinaryPath        string `toml:"binary_path"`
-	ManagedCore       bool   `toml:"managed_core"`
-	ProcessMode       string `toml:"process_mode"`
-	ConfigDirectory   string `toml:"config_directory"`
-	ConfigPath        string `toml:"config_path"`
-	ControllerAddress string `toml:"controller_address"`
-	ControllerSecret  string `toml:"controller_secret"`
-	ServiceName       string `toml:"service_name"`
-	RevisionDirectory string `toml:"revision_directory"`
-	HistoryLimit      int    `toml:"history_limit"`
+	BinaryPath                    string   `toml:"binary_path"`
+	ManagedCore                   bool     `toml:"managed_core"`
+	ProcessMode                   string   `toml:"process_mode"`
+	ConfigDirectory               string   `toml:"config_directory"`
+	ConfigPath                    string   `toml:"config_path"`
+	ExternalControllerAddress     string   `toml:"external_controller_address"`
+	ControllerConnectAddress      string   `toml:"controller_connect_address"`
+	ExternalControllerCORSOrigins []string `toml:"external_controller_cors_origins"`
+	ControllerAddress             string   `toml:"controller_address"` // Deprecated.
+	ControllerSecret              string   `toml:"controller_secret"`
+	ServiceName                   string   `toml:"service_name"`
+	RevisionDirectory             string   `toml:"revision_directory"`
+	HistoryLimit                  int      `toml:"history_limit"`
 }
 
 func Default() Config {
@@ -90,15 +96,18 @@ func Default() Config {
 			PublicHost: "localhost",
 		},
 		Mihomo: Mihomo{
-			BinaryPath:        "/var/lib/m-ui/core/current/mihomo",
-			ManagedCore:       true,
-			ProcessMode:       "auto",
-			ConfigDirectory:   "/etc/mihomo",
-			ConfigPath:        "/etc/mihomo/config.yaml",
-			ControllerAddress: "127.0.0.1:9090",
-			ServiceName:       "mihomo.service",
-			RevisionDirectory: "/var/lib/m-ui/revisions",
-			HistoryLimit:      20,
+			BinaryPath:                    "/var/lib/m-ui/core/current/mihomo",
+			ManagedCore:                   true,
+			ProcessMode:                   "auto",
+			ConfigDirectory:               "/etc/mihomo",
+			ConfigPath:                    "/etc/mihomo/config.yaml",
+			ExternalControllerAddress:     "127.0.0.1:9090",
+			ControllerConnectAddress:      "127.0.0.1:9090",
+			ControllerAddress:             "127.0.0.1:9090",
+			ExternalControllerCORSOrigins: []string{},
+			ServiceName:                   "mihomo.service",
+			RevisionDirectory:             "/var/lib/m-ui/revisions",
+			HistoryLimit:                  20,
 		},
 	}
 }
@@ -123,6 +132,53 @@ func Load(path string) (Config, error) {
 	if err := toml.Unmarshal(content, &cfg); err != nil {
 		return Config{}, fmt.Errorf("decode %s: %w", path, err)
 	}
+	var fileEndpoints struct {
+		Mihomo struct {
+			ExternalControllerAddress *string `toml:"external_controller_address"`
+			ControllerConnectAddress  *string `toml:"controller_connect_address"`
+			ControllerAddress         *string `toml:"controller_address"`
+		} `toml:"mihomo"`
+	}
+	if err := toml.Unmarshal(content, &fileEndpoints); err != nil {
+		return Config{}, fmt.Errorf("decode endpoint compatibility fields in %s: %w", path, err)
+	}
+	if fileEndpoints.Mihomo.ControllerAddress != nil {
+		legacyBind, legacyConnect, splitErr := splitLegacyControllerAddress(
+			*fileEndpoints.Mihomo.ControllerAddress,
+		)
+		if splitErr != nil && (fileEndpoints.Mihomo.ExternalControllerAddress == nil ||
+			fileEndpoints.Mihomo.ControllerConnectAddress == nil) {
+			return Config{}, fmt.Errorf("migrate mihomo.controller_address: %w", splitErr)
+		}
+		if fileEndpoints.Mihomo.ExternalControllerAddress == nil {
+			cfg.Mihomo.ExternalControllerAddress = legacyBind
+		}
+		if fileEndpoints.Mihomo.ControllerConnectAddress == nil {
+			cfg.Mihomo.ControllerConnectAddress = legacyConnect
+		}
+	}
+	if fileEndpoints.Mihomo.ExternalControllerAddress != nil &&
+		fileEndpoints.Mihomo.ControllerConnectAddress == nil {
+		bind, connect, splitErr := splitLegacyControllerAddress(
+			*fileEndpoints.Mihomo.ExternalControllerAddress,
+		)
+		if splitErr != nil {
+			return Config{}, fmt.Errorf("derive Mihomo controller connect endpoint: %w", splitErr)
+		}
+		cfg.Mihomo.ExternalControllerAddress = bind
+		cfg.Mihomo.ControllerConnectAddress = connect
+	}
+	if fileEndpoints.Mihomo.ControllerConnectAddress != nil &&
+		fileEndpoints.Mihomo.ExternalControllerAddress == nil {
+		bind, connect, splitErr := splitLegacyControllerAddress(
+			*fileEndpoints.Mihomo.ControllerConnectAddress,
+		)
+		if splitErr != nil {
+			return Config{}, fmt.Errorf("derive Mihomo external-controller endpoint: %w", splitErr)
+		}
+		cfg.Mihomo.ExternalControllerAddress = bind
+		cfg.Mihomo.ControllerConnectAddress = connect
+	}
 	if err := cfg.Validate(); err != nil {
 		return Config{}, fmt.Errorf("validate %s: %w", path, err)
 	}
@@ -130,6 +186,30 @@ func Load(path string) (Config, error) {
 }
 
 func (c Config) Validate() error {
+	if c.Mihomo.ExternalControllerAddress == "" ||
+		c.Mihomo.ControllerConnectAddress == "" {
+		legacyAddress := c.Mihomo.ControllerAddress
+		if legacyAddress == "" {
+			switch {
+			case c.Mihomo.ExternalControllerAddress != "":
+				legacyAddress = c.Mihomo.ExternalControllerAddress
+			case c.Mihomo.ControllerConnectAddress != "":
+				legacyAddress = c.Mihomo.ControllerConnectAddress
+			}
+		}
+		if legacyAddress != "" {
+			legacyBind, legacyConnect, err := splitLegacyControllerAddress(legacyAddress)
+			if err != nil {
+				return fmt.Errorf("migrate Mihomo controller endpoint: %w", err)
+			}
+			if c.Mihomo.ExternalControllerAddress == "" {
+				c.Mihomo.ExternalControllerAddress = legacyBind
+			}
+			if c.Mihomo.ControllerConnectAddress == "" {
+				c.Mihomo.ControllerConnectAddress = legacyConnect
+			}
+		}
+	}
 	if ip := net.ParseIP(c.Server.ListenAddress); ip == nil {
 		return fmt.Errorf("server.listen_address must be an IP address")
 	}
@@ -189,17 +269,33 @@ func (c Config) Validate() error {
 	if !configuredPathWithin(c.Mihomo.ConfigDirectory, c.Mihomo.ConfigPath) {
 		return fmt.Errorf("mihomo.config_path must be inside mihomo.config_directory")
 	}
-	host, port, err := net.SplitHostPort(c.Mihomo.ControllerAddress)
+	if err := validateEndpoint(
+		"mihomo.external_controller_address",
+		c.Mihomo.ExternalControllerAddress,
+		false,
+	); err != nil {
+		return err
+	}
+	if err := validateEndpoint(
+		"mihomo.controller_connect_address",
+		c.Mihomo.ControllerConnectAddress,
+		true,
+	); err != nil {
+		return err
+	}
+	bind, err := domain.ParseEndpoint(c.Mihomo.ExternalControllerAddress)
 	if err != nil {
-		return fmt.Errorf("mihomo.controller_address must use host:port syntax")
+		return fmt.Errorf("mihomo.external_controller_address: %w", err)
 	}
-	controllerIP := net.ParseIP(host)
-	if !strings.EqualFold(host, "localhost") &&
-		(controllerIP == nil || !controllerIP.IsLoopback()) {
-		return fmt.Errorf("mihomo.controller_address must use a loopback host")
+	connect, err := domain.ParseEndpoint(c.Mihomo.ControllerConnectAddress)
+	if err != nil {
+		return fmt.Errorf("mihomo.controller_connect_address: %w", err)
 	}
-	if parsedPort, err := net.LookupPort("tcp", port); err != nil || parsedPort == 0 {
-		return fmt.Errorf("mihomo.controller_address port is invalid")
+	if err := domain.ValidateControllerEndpointPair(bind, connect); err != nil {
+		return err
+	}
+	if err := validateCORSOrigins(c.Mihomo.ExternalControllerCORSOrigins); err != nil {
+		return err
 	}
 	if c.Mihomo.ControllerSecret != "" {
 		if strings.TrimSpace(c.Mihomo.ControllerSecret) != c.Mihomo.ControllerSecret ||
@@ -232,6 +328,18 @@ func (c Config) Validate() error {
 		return fmt.Errorf("mihomo.history_limit must be between 1 and 100")
 	}
 	return nil
+}
+
+func splitLegacyControllerAddress(address string) (string, string, error) {
+	endpoint, err := domain.ParseEndpoint(address)
+	if err != nil {
+		return "", "", err
+	}
+	bind, connect, err := domain.SplitLegacyControllerEndpoint(endpoint)
+	if err != nil {
+		return "", "", err
+	}
+	return bind.Address(), connect.Address(), nil
 }
 
 func (c Config) Address() string {
@@ -293,6 +401,65 @@ func validateHost(value string) error {
 		}
 	}
 	return nil
+}
+
+func validateEndpoint(field, address string, loopbackOnly bool) error {
+	host, port, err := net.SplitHostPort(address)
+	if err != nil || host == "" {
+		return fmt.Errorf("%s must use host:port syntax", field)
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return fmt.Errorf("%s host must be an IPv4 or IPv6 address", field)
+	}
+	if loopbackOnly && !ip.IsLoopback() {
+		return fmt.Errorf("%s host must use a loopback address", field)
+	}
+	parsedPort, err := strconv.Atoi(port)
+	if err != nil || parsedPort < 1 || parsedPort > 65535 {
+		return fmt.Errorf("%s port must be between 1 and 65535", field)
+	}
+	return nil
+}
+
+func validateCORSOrigins(origins []string) error {
+	for index, origin := range origins {
+		parsed, err := url.Parse(origin)
+		if origin == "" || origin == "*" || strings.TrimSpace(origin) != origin ||
+			err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") ||
+			parsed.Host == "" || parsed.User != nil || parsed.Path != "" ||
+			parsed.RawQuery != "" || parsed.Fragment != "" ||
+			strings.HasSuffix(parsed.Host, ":") ||
+			net.ParseIP(parsed.Hostname()) == nil && !validDNSHost(parsed.Hostname()) {
+			return fmt.Errorf("mihomo.external_controller_cors_origins[%d] must be an exact HTTP(S) origin", index)
+		}
+		if port := parsed.Port(); port != "" {
+			parsedPort, err := strconv.Atoi(port)
+			if err != nil || parsedPort < 1 || parsedPort > 65535 {
+				return fmt.Errorf("mihomo.external_controller_cors_origins[%d] must be an exact HTTP(S) origin", index)
+			}
+		}
+	}
+	return nil
+}
+
+func validDNSHost(value string) bool {
+	if value == "" || len(value) > 253 {
+		return false
+	}
+	for _, label := range strings.Split(strings.TrimSuffix(value, "."), ".") {
+		if label == "" || len(label) > 63 || strings.HasPrefix(label, "-") || strings.HasSuffix(label, "-") {
+			return false
+		}
+		for _, character := range label {
+			if (character < 'a' || character > 'z') &&
+				(character < 'A' || character > 'Z') &&
+				(character < '0' || character > '9') && character != '-' {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func isConfiguredPathAbsolute(value string) bool {

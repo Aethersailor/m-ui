@@ -16,6 +16,11 @@ type RuntimeMonitorOptions struct {
 	ErrorLogInterval time.Duration
 	Clock            func() time.Time
 	Logger           *slog.Logger
+	// ShouldCollect lets the application suspend Controller health collection
+	// while a durable endpoint change is waiting for an explicit Mihomo
+	// restart. The monitor resumes on its next tick after the pending marker is
+	// cleared.
+	ShouldCollect func(context.Context) (bool, error)
 }
 
 type RuntimeMonitor struct {
@@ -25,6 +30,7 @@ type RuntimeMonitor struct {
 	errorLogInterval time.Duration
 	clock            func() time.Time
 	logger           *slog.Logger
+	shouldCollect    func(context.Context) (bool, error)
 	statusMutex      sync.RWMutex
 	status           RuntimeStatus
 	logMutex         sync.Mutex
@@ -61,6 +67,7 @@ func NewRuntimeMonitor(
 		errorLogInterval: options.ErrorLogInterval,
 		clock:            options.Clock,
 		logger:           options.Logger,
+		shouldCollect:    options.ShouldCollect,
 	}, nil
 }
 
@@ -92,6 +99,18 @@ func (monitor *RuntimeMonitor) CollectOnce(ctx context.Context) RuntimeStatus {
 	}
 	if !active {
 		return monitor.store(RuntimeStatus{ObservedAt: observedAt})
+	}
+	if monitor.shouldCollect != nil {
+		collect, err := monitor.shouldCollect(ctx)
+		if err != nil {
+			return monitor.recordOffline(
+				observedAt,
+				fmt.Errorf("check endpoint restart readiness: %w", err),
+			)
+		}
+		if !collect {
+			return monitor.store(RuntimeStatus{ObservedAt: observedAt})
+		}
 	}
 
 	version, err := monitor.controller.Version(ctx)

@@ -155,6 +155,35 @@ type settingsMutationResponse struct {
 	Revision revisionResponse `json:"revision"`
 }
 
+type endpointResponse struct {
+	Host string `json:"host"`
+	Port uint16 `json:"port"`
+}
+
+type endpointSettingsResponse struct {
+	PanelUIBind                   endpointResponse `json:"panel_ui_bind"`
+	MihomoExternalControllerBind  endpointResponse `json:"mihomo_external_controller_bind"`
+	MihomoControllerConnect       endpointResponse `json:"mihomo_controller_connect"`
+	ExternalControllerCORSOrigins []string         `json:"external_controller_cors_origins"`
+	Generation                    int64            `json:"generation"`
+	RequiresMUIRestart            bool             `json:"requires_mui_restart"`
+	RequiresMihomoRestart         bool             `json:"requires_mihomo_restart"`
+	UpdatedAt                     *time.Time       `json:"updated_at,omitempty"`
+}
+
+type endpointSettingsStateResponse struct {
+	Active  endpointSettingsResponse  `json:"active"`
+	Pending *endpointSettingsResponse `json:"pending"`
+}
+
+type endpointSettingsRequest struct {
+	PanelUIBind                   endpointResponse `json:"panel_ui_bind"`
+	MihomoExternalControllerBind  endpointResponse `json:"mihomo_external_controller_bind"`
+	MihomoControllerConnect       endpointResponse `json:"mihomo_controller_connect"`
+	ExternalControllerCORSOrigins []string         `json:"external_controller_cors_origins"`
+	Generation                    int64            `json:"generation"`
+}
+
 type coreTestResponse struct {
 	Version string `json:"version"`
 }
@@ -232,6 +261,7 @@ func mountManagementRoutes(
 		protected.Get("/config/revisions", handler.listRevisions)
 		protected.Get("/config/revisions/{revisionID}", handler.getRevision)
 		protected.Get("/settings", handler.getSettings)
+		protected.Get("/settings/endpoints", handler.getEndpointSettings)
 		protected.Get("/system/core", handler.getCore)
 		protected.Get("/audit-logs", handler.listAuditEntries)
 
@@ -291,6 +321,7 @@ func mountManagementRoutes(
 			)
 
 			mutations.Put("/settings", handler.updateSettings)
+			mutations.Put("/settings/endpoints", handler.updateEndpointSettings)
 			mutations.Post("/settings/test-core", handler.testCore)
 			mutations.Post(
 				"/settings/test-controller",
@@ -968,6 +999,101 @@ func (handler managementHandler) updateSettings(
 	})
 }
 
+func (handler managementHandler) getEndpointSettings(
+	response http.ResponseWriter,
+	request *http.Request,
+) {
+	state, err := handler.manager.EndpointSettings(request.Context())
+	if err != nil {
+		handler.writeError(response, request, err)
+		return
+	}
+	writePrivateJSON(response, http.StatusOK, endpointSettingsStateResponse{
+		Active: endpointSettingsResponseFromService(state.Active),
+		Pending: func() *endpointSettingsResponse {
+			if state.Pending == nil {
+				return nil
+			}
+			value := endpointSettingsResponseFromService(state.Pending.EndpointSettings)
+			value.RequiresMUIRestart = state.Pending.RequiresMUIRestart
+			value.RequiresMihomoRestart = state.Pending.RequiresMihomoRestart
+			updated := state.Pending.UpdatedAt
+			value.UpdatedAt = &updated
+			return &value
+		}(),
+	})
+}
+
+func (handler managementHandler) updateEndpointSettings(
+	response http.ResponseWriter,
+	request *http.Request,
+) {
+	var input endpointSettingsRequest
+	if decodeJSON(response, request, &input) != nil {
+		writeInvalidRequest(response, request)
+		return
+	}
+	state, err := handler.manager.UpdateEndpointSettings(
+		request.Context(),
+		currentAuthSession(request.Context()).Admin.ID,
+		service.EndpointSettings{
+			PanelUIBind: domain.Endpoint{
+				Host: input.PanelUIBind.Host,
+				Port: input.PanelUIBind.Port,
+			},
+			MihomoExternalControllerBind: domain.Endpoint{
+				Host: input.MihomoExternalControllerBind.Host,
+				Port: input.MihomoExternalControllerBind.Port,
+			},
+			MihomoControllerConnect: domain.Endpoint{
+				Host: input.MihomoControllerConnect.Host,
+				Port: input.MihomoControllerConnect.Port,
+			},
+			ExternalControllerCORSOrigins: input.ExternalControllerCORSOrigins,
+		},
+		input.Generation,
+	)
+	if err != nil {
+		handler.writeError(response, request, err)
+		return
+	}
+	writePrivateJSON(response, http.StatusOK, endpointSettingsStateResponse{
+		Active: endpointSettingsResponseFromService(state.Active),
+		Pending: func() *endpointSettingsResponse {
+			if state.Pending == nil {
+				return nil
+			}
+			value := endpointSettingsResponseFromService(state.Pending.EndpointSettings)
+			value.RequiresMUIRestart = state.Pending.RequiresMUIRestart
+			value.RequiresMihomoRestart = state.Pending.RequiresMihomoRestart
+			updated := state.Pending.UpdatedAt
+			value.UpdatedAt = &updated
+			return &value
+		}(),
+	})
+}
+
+func endpointSettingsResponseFromService(
+	settings service.EndpointSettings,
+) endpointSettingsResponse {
+	return endpointSettingsResponse{
+		PanelUIBind: endpointResponse{
+			Host: settings.PanelUIBind.Host,
+			Port: settings.PanelUIBind.Port,
+		},
+		MihomoExternalControllerBind: endpointResponse{
+			Host: settings.MihomoExternalControllerBind.Host,
+			Port: settings.MihomoExternalControllerBind.Port,
+		},
+		MihomoControllerConnect: endpointResponse{
+			Host: settings.MihomoControllerConnect.Host,
+			Port: settings.MihomoControllerConnect.Port,
+		},
+		ExternalControllerCORSOrigins: append([]string(nil), settings.ExternalControllerCORSOrigins...),
+		Generation:                    settings.Generation,
+	}
+}
+
 func (handler managementHandler) testCore(
 	response http.ResponseWriter,
 	request *http.Request,
@@ -1034,6 +1160,30 @@ func (handler managementHandler) writeError(
 			http.StatusNotFound,
 			"RESOURCE_NOT_FOUND",
 			"The requested managed resource was not found.",
+		)
+	case errors.Is(err, publisher.ErrMihomoRestartRequired):
+		writeAPIError(
+			response,
+			request,
+			http.StatusConflict,
+			"MIHOMO_RESTART_REQUIRED",
+			"Restart Mihomo before publishing another configuration change.",
+		)
+	case errors.Is(err, coremanagement.ErrMihomoRestartRequired):
+		writeAPIError(
+			response,
+			request,
+			http.StatusConflict,
+			"MIHOMO_RESTART_REQUIRED",
+			"Restart Mihomo before changing the managed core.",
+		)
+	case errors.Is(err, service.ErrConflict):
+		writeAPIError(
+			response,
+			request,
+			http.StatusConflict,
+			"ENDPOINT_SETTINGS_CONFLICT",
+			"Endpoint settings changed; reload the current settings and try again.",
 		)
 	case errors.Is(err, service.ErrValidation),
 		errors.Is(err, publisher.ErrCandidateValidation):

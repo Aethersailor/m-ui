@@ -9,6 +9,8 @@ export function errorTranslationKey(error: unknown): string {
     'REQUEST_FAILED',
     'INTERNAL_ERROR',
     'CORE_OPERATION_IN_PROGRESS',
+    'MIHOMO_RESTART_REQUIRED',
+    'ENDPOINT_SETTINGS_CONFLICT',
     'CORE_NOT_MANAGED',
     'CORE_BACKUP_UNAVAILABLE',
   ])

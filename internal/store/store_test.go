@@ -35,8 +35,8 @@ func TestOpenMigratesAndConfiguresSQLite(t *testing.T) {
 	).Scan(&migrationCount); err != nil {
 		t.Fatal(err)
 	}
-	if migrationCount != 2 {
-		t.Fatalf("migration count = %d, want 2", migrationCount)
+	if migrationCount != 4 {
+		t.Fatalf("migration count = %d, want 4", migrationCount)
 	}
 
 	var foreignKeys int

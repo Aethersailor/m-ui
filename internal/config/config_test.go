@@ -99,3 +99,98 @@ func TestConfiguredPathWithinSupportsLinuxConfigurationOnAnyHost(t *testing.T) {
 		t.Fatal("Linux sibling path was accepted")
 	}
 }
+
+func TestLoadMapsLegacyControllerAddressToSplitEndpoints(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte(`
+[mihomo]
+controller_address = "[::1]:9090"
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Mihomo.ExternalControllerAddress != "[::1]:9090" ||
+		cfg.Mihomo.ControllerConnectAddress != "[::1]:9090" {
+		t.Fatalf("split endpoint compatibility = %#v", cfg.Mihomo)
+	}
+}
+
+func TestLoadMapsLegacyWildcardControllerAddressToLoopbackClient(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name       string
+		address    string
+		wantBind   string
+		wantClient string
+	}{
+		{
+			name:       "ipv4 wildcard",
+			address:    "0.0.0.0:9090",
+			wantBind:   "0.0.0.0:9090",
+			wantClient: "127.0.0.1:9090",
+		},
+		{
+			name:       "ipv6 wildcard",
+			address:    "[::]:9090",
+			wantBind:   "[::]:9090",
+			wantClient: "[::1]:9090",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.toml")
+			content := []byte("[mihomo]\ncontroller_address = \"" + test.address + "\"\n")
+			if err := os.WriteFile(path, content, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			cfg, err := Load(path)
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+			if cfg.Mihomo.ExternalControllerAddress != test.wantBind ||
+				cfg.Mihomo.ControllerConnectAddress != test.wantClient {
+				t.Fatalf("split endpoint compatibility = %#v", cfg.Mihomo)
+			}
+		})
+	}
+}
+
+func TestLoadAcceptsWildcardIPv4IPv6BindAndExactCORS(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte(`
+[server]
+listen_address = "::"
+
+[mihomo]
+external_controller_address = "[::]:9090"
+controller_connect_address = "[::1]:9090"
+external_controller_cors_origins = ["https://dashboard.example.com"]
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if got, want := cfg.Address(), "[::]:2095"; got != want {
+		t.Fatalf("panel IPv6 Address() = %q, want %q", got, want)
+	}
+}
+
+func TestLoadRejectsNonLoopbackControllerConnectAddress(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte(`
+[mihomo]
+controller_connect_address = "192.0.2.1:9090"
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path); err == nil {
+		t.Fatal("Load() error = nil, want remote controller connect rejection")
+	}
+}
