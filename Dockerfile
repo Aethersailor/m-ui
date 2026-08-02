@@ -63,7 +63,6 @@ RUN chmod 0755 /usr/bin/m-ui /usr/lib/m-ui/bootstrap/mihomo \
 USER 10001:10001
 WORKDIR /var/lib/m-ui
 EXPOSE 2095
-VOLUME ["/etc/m-ui", "/etc/mihomo", "/var/lib/m-ui", "/var/lib/mihomo"]
 ENTRYPOINT ["/sbin/tini", "--", "/usr/lib/m-ui/entrypoint.sh"]
 HEALTHCHECK --interval=15s --timeout=5s --start-period=20s --retries=4 \
   CMD wget -q -T 3 -O /dev/null http://127.0.0.1:2095/api/v1/health \

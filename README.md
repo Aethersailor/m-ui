@@ -116,43 +116,16 @@ sudo ./manage.sh install \
 - 启动 m-ui 与 Mihomo；
 - 执行服务、Controller 和配置健康检查。
 
-全新安装完成后，终端会显示一次性的管理员凭据：
-
-```text
-Initial administrator: admin
-One-time initial password: ...
-```
-
-请立即保存该密码，并在首次登录后修改。
-
-<details>
-<summary><strong>使用自定义初始密码</strong></summary>
-
-先创建仅当前用户可读的密码文件：
+全新安装不会生成、打印或要求任何管理员密码。管理员账号和密码在
+Web 页面中首次设置；CLI 只负责显示一次性 setup link：
 
 ```sh
-umask 077
-printf '%s\n' '请在此填写足够强的密码' > admin-password.txt
+sudo m-ui admin setup-link --config /etc/m-ui/config.toml
 ```
 
-安装时指定该文件：
-
-```sh
-sudo ./manage.sh install \
-  --version latest \
-  --package auto \
-  --admin-password-file ./admin-password.txt
-```
-
-安装完成后删除临时文件：
-
-```sh
-rm -f admin-password.txt
-```
-
-密码内容不会由安装器回显。
-
-</details>
+该链接的能力位于 URL fragment 中，不会进入 HTTP 请求、访问日志或
+Referer。首次设置推荐使用 SSH 隧道；`m-ui admin reset-password` 仅用于
+已有管理员的本机恢复，不能创建首个管理员。
 
 #### 3. 访问面板
 
@@ -167,6 +140,9 @@ ssh -L 2095:127.0.0.1:2095 user@server
 ```text
 http://127.0.0.1:2095/
 ```
+
+请先打开 `m-ui admin setup-link` 输出的 `/setup#token=...` 链接，在页面中
+创建管理员。首次设置完成后，页面会自动进入面板。
 
 使用安装时生成的 `admin` 账号登录。
 
@@ -270,33 +246,11 @@ M_UI_IMAGE_TAG=vX.Y.Z
 
 `edge` 对应当前 `master` 分支的开发快照，不建议用于正式环境。
 
-#### 3. 创建管理员密码
+#### 3. 选择持久化目录
 
-使用 OpenSSL 生成随机密码：
-
-```sh
-sudo sh -c 'umask 077 && openssl rand -base64 32 > admin-password.txt'
-```
-
-查看并保存密码：
-
-```sh
-sudo cat admin-password.txt
-```
-
-该密码文件会作为 Docker Secret 提供给容器，仅在首次创建数据库时用于初始化 `admin` 账号。
-
-需要默认使用中文界面时，可将 `compose.yml` 中的：
-
-```yaml
-M_UI_LANGUAGE: en-US
-```
-
-修改为：
-
-```yaml
-M_UI_LANGUAGE: zh-CN
-```
+Compose 默认只需要一个持久化根目录 `/opt/m-ui`，也可以通过 `.env` 中的
+`M_UI_DATA_DIR` 指定其他绝对路径。目录内部会自动创建四个与程序内部
+路径对应的子目录；不需要创建密码文件或 Docker Secret。
 
 #### 4. 启动服务
 
@@ -333,13 +287,11 @@ Docker Compose 使用 host network，但 m-ui 仍默认只监听宿主机回环�
 ssh -L 2095:127.0.0.1:2095 user@server
 ```
 
-然后打开：
+然后运行 setup link 命令并打开它：
 
 ```text
-http://127.0.0.1:2095/
+http://127.0.0.1:2095/setup#token=...
 ```
-
-管理员账号为 `admin`，密码为 `admin-password.txt` 中保存的内容。
 
 > [!WARNING]
 > Compose 使用 `network_mode: host`，以便面板动态创建的 Mihomo Listener 直接绑定宿主机端口。
@@ -357,6 +309,10 @@ sudo docker compose ps
 ```
 
 容器重建不会覆盖已有数据库、主密钥、配置、Revision 或托管核心。
+
+旧版本使用四个 named volumes 的用户，请先停止旧项目，按照
+`deploy/docker/README.md` 使用 `deploy/docker/migrate-volumes.sh` 显式迁移。
+迁移拒绝非空目标目录，不删除源 volume，也不会自动覆盖已有数据。
 
 #### 7. 持久化数据
 

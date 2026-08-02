@@ -7,6 +7,12 @@
   text-rendering: optimizeLegibility;
 }
 
+html[data-theme="dark"],
+html[data-theme="dark"] body {
+  color-scheme: dark;
+  background: #111318;
+}
+
 * {
   box-sizing: border-box;
 }
@@ -582,6 +588,10 @@ code,
   width: 120px;
 }
 
+.theme-select {
+  width: 112px;
+}
+
 .login-shell {
   position: relative;
   z-index: 2;
@@ -632,6 +642,25 @@ code,
   margin: 0 0 22px;
   font-size: 20px;
   font-weight: 720;
+}
+
+.setup-description,
+.setup-hint {
+  display: block;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.setup-description {
+  margin: -10px 0 20px;
+}
+
+.setup-hint {
+  margin: -4px 0 16px;
+}
+
+.setup-token-hint {
+  margin: 20px 0 0;
 }
 
 .login-alert {

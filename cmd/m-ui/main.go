@@ -23,6 +23,8 @@ Usage:
   m-ui server [--config /etc/m-ui/config.toml]
   m-ui version
   m-ui doctor [panel] [--config /etc/m-ui/config.toml]
+  m-ui admin setup-link [--config /etc/m-ui/config.toml]
+  m-ui admin rotate-setup-token [--config /etc/m-ui/config.toml]
   m-ui admin reset-password --password-file <path> [--username admin]
   m-ui config validate [--config /etc/m-ui/config.toml]
   m-ui config rollback --config /etc/m-ui/config.toml <revision-id>
@@ -324,11 +326,12 @@ func runConfig(args []string) error {
 }
 
 func runAdmin(args []string) error {
-	if len(args) == 0 || args[0] != "reset-password" {
+	if len(args) == 0 {
 		fmt.Fprint(os.Stderr, usage)
-		return errors.New("admin requires the reset-password command")
+		return errors.New("admin requires setup-link, rotate-setup-token, or reset-password")
 	}
-	flags := flag.NewFlagSet("admin reset-password", flag.ContinueOnError)
+	command := args[0]
+	flags := flag.NewFlagSet("admin "+command, flag.ContinueOnError)
 	flags.SetOutput(os.Stderr)
 	configPath := flags.String("config", "", "path to the m-ui TOML configuration")
 	username := flags.String("username", "admin", "administrator username")
@@ -341,10 +344,7 @@ func runAdmin(args []string) error {
 		return err
 	}
 	if flags.NArg() != 0 {
-		return errors.New("admin reset-password accepts no positional arguments")
-	}
-	if *passwordFile == "" {
-		return errors.New("--password-file is required")
+		return errors.New("admin commands accept no positional arguments")
 	}
 	cfg, err := config.Load(*configPath)
 	if err != nil {
@@ -352,6 +352,35 @@ func runAdmin(args []string) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
+	switch command {
+	case "setup-link":
+		if *passwordFile != "" || *username != "admin" {
+			return errors.New("setup-link accepts only --config")
+		}
+		link, err := app.SetupLink(ctx, cfg)
+		if err != nil {
+			return err
+		}
+		fmt.Println(link)
+		return nil
+	case "rotate-setup-token":
+		if *passwordFile != "" || *username != "admin" {
+			return errors.New("rotate-setup-token accepts only --config")
+		}
+		link, err := app.RotateSetupLink(ctx, cfg)
+		if err != nil {
+			return err
+		}
+		fmt.Println(link)
+		return nil
+	case "reset-password":
+		if *passwordFile == "" {
+			return errors.New("--password-file is required")
+		}
+	default:
+		fmt.Fprint(os.Stderr, usage)
+		return fmt.Errorf("unknown admin command %q", command)
+	}
 	created, err := app.ResetAdminPassword(
 		ctx,
 		cfg,

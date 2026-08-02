@@ -24,6 +24,23 @@ the single transaction coordinator.
   before serving the panel through HTTPS.
 - Password changes and administrative resets revoke existing sessions.
 
+First-run administrator creation is a separate bootstrap capability, not a
+password delivery mechanism. A fresh database receives a cryptographically
+random one-time capability whose hash and master-key-sealed ciphertext are
+stored in SQLite. `m-ui admin setup-link` decrypts it only for a local operator
+and places it in a URL fragment. The setup page consumes the fragment in
+memory and removes it from the address bar before submitting the JSON request.
+
+The setup transaction rechecks the empty-administrator state and capability
+under `BEGIN IMMEDIATE`, then creates the administrator, first session, success
+audit, and consumed state atomically. A second concurrent request cannot
+replace the first password. `admin reset-password` is recovery only and
+rejects an empty administrator table.
+
+Plaintext remote setup is rejected. The supported first-run path is an SSH
+tunnel to the loopback panel; a reverse proxy must not be treated as local
+operator authentication merely because its backend connection is loopback.
+
 The application has one administrator in v0.1. RBAC and delegated accounts are
 deliberately out of scope.
 
@@ -45,6 +62,7 @@ monitoring labels:
 
 - passwords and session/CSRF tokens;
 - `master.key`;
+- unused setup links and bootstrap capabilities;
 - Controller secrets;
 - REALITY private keys;
 - full UUIDs and full sharing links.
@@ -135,6 +153,14 @@ When using a reverse proxy:
 - do not cache `/api/`;
 - apply independent authentication or IP restrictions if appropriate;
 - preserve request size and timeout limits.
+
+The Docker deployment uses one operator-selected host root (by default
+`/opt/m-ui`) with four deterministic subdirectories mapped to the existing
+`/etc/m-ui`, `/etc/mihomo`, `/var/lib/m-ui`, and `/var/lib/mihomo` paths. A
+root-only, networkless initialization container fixes ownership and exits;
+the long-running container remains UID/GID `10001:10001`. The old named-volume
+layout is migrated only through the explicit non-destructive migration script;
+source volumes are never removed automatically.
 
 See [reverse-proxy.md](reverse-proxy.md) for minimal examples.
 

@@ -33,6 +33,6 @@ describe('theme store', () => {
     store.setMode('light')
 
     expect(store.dark).toBe(false)
-    expect(localStorage.getItem('m-ui-theme')).toBe('light')
+    expect(localStorage.getItem('m-ui-theme-mode')).toBe('light')
   })
 })

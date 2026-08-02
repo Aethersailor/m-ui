@@ -2,7 +2,9 @@ import { createRouter, createWebHistory } from 'vue-router'
 
 import { pinia } from '@/stores'
 import { useAuthStore } from '@/stores/auth'
+import { useSetupStore } from '@/stores/setup'
 import LoginView from '@/views/LoginView.vue'
+import SetupView from '@/views/SetupView.vue'
 
 export const router = createRouter({
   history: createWebHistory(),
@@ -47,12 +49,31 @@ export const router = createRouter({
       component: LoginView,
       meta: { public: true },
     },
+    {
+      path: '/setup',
+      name: 'setup',
+      component: SetupView,
+      meta: { public: true },
+    },
   ],
 })
 
 router.beforeEach(async (to) => {
   const auth = useAuthStore(pinia)
+  const setup = useSetupStore(pinia)
+  let setupAvailable = true
+  try {
+    await setup.initialize()
+  } catch {
+    setupAvailable = false
+  }
   await auth.initialize()
+  if (setupAvailable && setup.required && to.name !== 'setup') {
+    return { name: 'setup' }
+  }
+  if (setupAvailable && setup.complete && to.name === 'setup') {
+    return auth.authenticated ? { name: 'dashboard' } : { name: 'login' }
+  }
   if (!to.meta.public && !auth.authenticated) {
     return { name: 'login', query: { redirect: to.fullPath } }
   }

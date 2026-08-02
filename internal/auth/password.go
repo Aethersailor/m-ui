@@ -14,7 +14,11 @@ import (
 	"golang.org/x/crypto/argon2"
 )
 
-const argon2Version = 19
+const (
+	argon2Version             = 19
+	MinimumPasswordCharacters = 12
+	MaximumPasswordBytes      = 1024
+)
 
 type PasswordParams struct {
 	Memory      uint32
@@ -56,10 +60,10 @@ func ValidatePassword(password string) error {
 	if !utf8.ValidString(password) {
 		return errors.New("password must be valid UTF-8")
 	}
-	if utf8.RuneCountInString(password) < 12 {
+	if utf8.RuneCountInString(password) < MinimumPasswordCharacters {
 		return errors.New("password must contain at least 12 characters")
 	}
-	if len(password) > 1024 {
+	if len(password) > MaximumPasswordBytes {
 		return errors.New("password must not exceed 1024 bytes")
 	}
 	if strings.ContainsRune(password, '\x00') {

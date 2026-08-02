@@ -14,20 +14,32 @@ import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 
 import { useAuthStore } from '@/stores/auth'
+import { usePreferencesStore } from '@/stores/preferences'
 import { useThemeStore } from '@/stores/theme'
+import type { LanguageMode } from '@/utils/preferences'
 
-const { locale, t } = useI18n()
+const { t } = useI18n()
 const route = useRoute()
 const router = useRouter()
 const auth = useAuthStore()
+const preferences = usePreferencesStore()
 const theme = useThemeStore()
 const username = ref('')
 const password = ref('')
 const attempted = ref(false)
-const languageOptions = [
-  { label: '简体中文', value: 'zh-CN' },
-  { label: 'English', value: 'en-US' },
-]
+const languageOptions = computed(() => [
+  { label: t('language.auto'), value: 'auto' as LanguageMode },
+  { label: t('language.chinese'), value: 'zh-CN' as LanguageMode },
+  { label: t('language.english'), value: 'en-US' as LanguageMode },
+])
+const themeOptions = computed(() => [
+  { label: t('theme.auto'), value: 'auto' as const },
+  { label: t('theme.light'), value: 'light' as const },
+  { label: t('theme.dark'), value: 'dark' as const },
+])
+
+preferences.initialize()
+theme.initialize()
 
 const errorMessage = computed(() => {
   if (!attempted.value || !auth.errorCode) {
@@ -61,20 +73,21 @@ async function submit() {
     <div class="login-orb login-orb-two" />
     <div class="login-toolbar">
       <NSelect
-        :value="locale"
+        :value="preferences.languageMode"
         :options="languageOptions"
         size="small"
         class="language-select"
-        @update:value="locale = $event"
+        :aria-label="t('language.label')"
+        @update:value="preferences.setLanguageMode"
       />
-      <NButton
-        quaternary
-        circle
-        :aria-label="t('theme.toggle')"
-        @click="theme.cycle"
-      >
-        {{ theme.dark ? '☀' : '◐' }}
-      </NButton>
+      <NSelect
+        :value="theme.mode"
+        :options="themeOptions"
+        size="small"
+        class="theme-select"
+        :aria-label="t('theme.label')"
+        @update:value="theme.setMode"
+      />
     </div>
 
     <section class="login-shell">

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/Aethersailor/m-ui/internal/auth"
+	muicrypto "github.com/Aethersailor/m-ui/internal/crypto"
 	"github.com/Aethersailor/m-ui/internal/store"
 )
 
@@ -50,19 +51,52 @@ func newAuthTestEnvironment(t *testing.T) authTestEnvironment {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := service.ResetPassword(
-		context.Background(),
-		"admin",
-		"initial-test-password",
-	); err != nil {
-		t.Fatal(err)
-	}
+	seedAdministrator(t, database, service)
 	return authTestEnvironment{
 		handler: New(Options{
 			Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 			Auth:   service,
 		}),
 		store: database,
+	}
+}
+
+func seedAdministrator(t *testing.T, database *store.Store, service *auth.Service) {
+	t.Helper()
+	var key muicrypto.MasterKey
+	for index := range key {
+		key[index] = 0x42
+	}
+	sealer, err := muicrypto.NewSealer(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := auth.EnsureBootstrap(
+		context.Background(),
+		database,
+		sealer,
+		bytes.NewReader(bytes.Repeat([]byte{0x19}, 64)),
+		time.Now,
+	); err != nil {
+		t.Fatal(err)
+	}
+	state, err := database.BootstrapState(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	token, err := auth.ReadBootstrapToken(state, sealer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.CompleteSetup(
+		context.Background(),
+		token,
+		"admin",
+		"initial-test-password",
+		"127.0.0.1",
+		"test",
+	); err != nil {
+		t.Fatal(err)
 	}
 }
 

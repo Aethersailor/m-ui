@@ -4,18 +4,13 @@ set -euo pipefail
 
 image="${1:?usage: docker-smoke.sh IMAGE}"
 name="m-ui-smoke-${RANDOM}-${RANDOM}"
-volumes=()
-secret_directory="$(mktemp -d)"
-chmod 0755 "$secret_directory"
-(umask 077; printf '%s\n' 'Synthetic-Smoke-Password-2026!' >"$secret_directory/admin_password")
-sudo chown 10001:10001 "$secret_directory" "$secret_directory/admin_password"
+data_directory="$(mktemp -d)"
+mkdir -p "$data_directory/etc/m-ui" "$data_directory/etc/mihomo" \
+  "$data_directory/var/lib/m-ui" "$data_directory/var/lib/mihomo"
 
 cleanup() {
   docker rm -f "$name" >/dev/null 2>&1 || true
-  for volume in "${volumes[@]}"; do
-    docker volume rm "$volume" >/dev/null 2>&1 || true
-  done
-  sudo rm -rf "$secret_directory"
+  rm -rf "$data_directory"
 }
 trap cleanup EXIT
 
@@ -30,24 +25,24 @@ do
   [[ -n "$value" && "$value" != "<no value>" ]]
 done
 
-for suffix in etc mihomo-etc data mihomo-data; do
-  volume="${name}-${suffix}"
-  docker volume create "$volume" >/dev/null
-  volumes+=("$volume")
-done
+docker run --rm --user 0:0 --network none \
+  -e M_UI_INIT_DATA=1 \
+  -v "$data_directory/etc/m-ui:/etc/m-ui" \
+  -v "$data_directory/etc/mihomo:/etc/mihomo" \
+  -v "$data_directory/var/lib/m-ui:/var/lib/m-ui" \
+  -v "$data_directory/var/lib/mihomo:/var/lib/mihomo" \
+  "$image" >/dev/null
 docker run -d --name "$name" \
   --cap-drop ALL --cap-add NET_BIND_SERVICE \
   --security-opt no-new-privileges \
   --network host \
-  -e M_UI_ADMIN_PASSWORD_FILE=/run/secrets/admin_password \
   -e M_UI_MIHOMO_CHANNEL=release \
   -e M_UI_MIHOMO_AUTO_UPDATE=off \
   -e M_UI_MIHOMO_CHECK_INTERVAL=24h \
-  -v "$secret_directory:/run/secrets:ro" \
-  -v "${volumes[0]}:/etc/m-ui" \
-  -v "${volumes[1]}:/etc/mihomo" \
-  -v "${volumes[2]}:/var/lib/m-ui" \
-  -v "${volumes[3]}:/var/lib/mihomo" \
+  -v "$data_directory/etc/m-ui:/etc/m-ui" \
+  -v "$data_directory/etc/mihomo:/etc/mihomo" \
+  -v "$data_directory/var/lib/m-ui:/var/lib/m-ui" \
+  -v "$data_directory/var/lib/mihomo:/var/lib/mihomo" \
   "$image" >/dev/null
 
 for _ in $(seq 1 60); do
@@ -73,6 +68,22 @@ docker exec "$name" /var/lib/m-ui/core/current/mihomo \
   -t -f /etc/mihomo/config.yaml >/dev/null
 docker exec "$name" grep -q \
   '^external-controller: 127.0.0.1:9090$' /etc/mihomo/config.yaml
+
+setup_link="$(docker exec "$name" m-ui admin setup-link \
+  --config /etc/m-ui/config.toml)"
+setup_token="${setup_link##*#token=}"
+[[ "$setup_link" == *"#token="* && -n "$setup_token" ]]
+curl --fail --silent --show-error \
+  -H 'Origin: http://127.0.0.1:2095' \
+  -H 'Content-Type: application/json' \
+  -H "X-M-UI-Setup-Token: $setup_token" \
+  -c "$data_directory/cookies.txt" \
+  -d '{"username":"admin","password":"Synthetic-Smoke-Password-2026!"}' \
+  http://127.0.0.1:2095/api/v1/setup/complete >/dev/null
+curl --fail --silent --show-error \
+  -b "$data_directory/cookies.txt" \
+  http://127.0.0.1:2095/api/v1/setup/status |
+  grep -q '"state":"complete"'
 
 old_pid="$(docker exec "$name" pidof mihomo)"
 docker exec "$name" sh -c "kill ${old_pid}"

@@ -93,7 +93,7 @@ export interface RuntimeLog {
 
 export interface Settings {
   panel_title: string
-  ui_language: 'en-US' | 'zh-CN'
+  ui_language: 'auto' | 'en-US' | 'zh-CN'
   public_host: string
 }
 

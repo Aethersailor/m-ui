@@ -3,6 +3,7 @@ import { defineStore } from 'pinia'
 export type ThemeMode = 'auto' | 'light' | 'dark'
 
 const storageKey = 'm-ui-theme'
+const preferredStorageKey = 'm-ui-theme-mode'
 
 export const useThemeStore = defineStore('theme', {
   state: () => ({
@@ -19,7 +20,9 @@ export const useThemeStore = defineStore('theme', {
       if (this.initialized) {
         return
       }
-      const saved = localStorage.getItem(storageKey)
+      const saved =
+        localStorage.getItem(preferredStorageKey) ??
+        localStorage.getItem(storageKey)
       if (saved === 'auto' || saved === 'light' || saved === 'dark') {
         this.mode = saved
       }
@@ -27,15 +30,23 @@ export const useThemeStore = defineStore('theme', {
       this.systemDark = media.matches
       media.addEventListener('change', (event) => {
         this.systemDark = event.matches
+        this.applyDocumentTheme()
       })
       this.initialized = true
+      this.applyDocumentTheme()
     },
     setMode(mode: ThemeMode) {
       this.mode = mode
-      localStorage.setItem(storageKey, mode)
+      localStorage.setItem(preferredStorageKey, mode)
+      this.applyDocumentTheme()
     },
     cycle() {
-      this.setMode(this.dark ? 'light' : 'dark')
+      const modes: ThemeMode[] = ['auto', 'light', 'dark']
+      const index = modes.indexOf(this.mode)
+      this.setMode(modes[(index + 1) % modes.length] ?? 'auto')
+    },
+    applyDocumentTheme() {
+      document.documentElement.dataset.theme = this.dark ? 'dark' : 'light'
     },
   },
 })

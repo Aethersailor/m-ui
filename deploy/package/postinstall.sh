@@ -212,7 +212,7 @@ cookie_secure = false
 
 [panel]
 title = "m-ui"
-ui_language = "en-US"
+ui_language = "auto"
 public_host = "localhost"
 
 [mihomo]
@@ -279,31 +279,6 @@ if [ "$needs_bootstrap" -eq 1 ]; then
             --binary /usr/lib/m-ui/bootstrap/mihomo \
             --manifest /usr/share/m-ui/bootstrap/manifest.json
     fi
-fi
-
-if [ "$database_was_present" -eq 0 ] &&
-    [ "${M_UI_SKIP_ADMIN_INIT:-0}" != "1" ]
-then
-    password_file="/var/lib/m-ui/.initial-admin-password"
-    initial_password="$(od -An -N24 -tx1 /dev/urandom | tr -d ' \n')"
-    printf '%s\n' "$initial_password" >"$password_file"
-    chown m-ui:m-ui "$password_file"
-    chmod 0600 "$password_file"
-    if command -v runuser >/dev/null 2>&1; then
-        runuser -u m-ui -- /usr/bin/m-ui admin reset-password \
-            --config "$config_path" \
-            --username admin \
-            --password-file "$password_file"
-    else
-        su-exec m-ui /usr/bin/m-ui admin reset-password \
-            --config "$config_path" \
-            --username admin \
-            --password-file "$password_file"
-    fi
-    rm -f "$password_file"
-    printf '%s\n' \
-        "Initial administrator: admin" \
-        "One-time initial password: $initial_password"
 fi
 
 temporary_config="${config_path}.tmp"
@@ -483,4 +458,5 @@ printf '%s\n' \
     "m-ui installed with a verified Mihomo bootstrap." \
     "Services are not enabled automatically." \
     "Run: systemctl enable --now mihomo.service m-ui.service" \
-    "or: rc-update add mihomo default && rc-update add m-ui default"
+    "or: rc-update add mihomo default && rc-update add m-ui default" \
+    "After starting m-ui, run: m-ui admin setup-link"

@@ -25,6 +25,29 @@ func openTestStore(t *testing.T) *Store {
 	return store
 }
 
+func insertTestAdmin(t *testing.T, store *Store, id, username, passwordHash string, now time.Time) Admin {
+	t.Helper()
+	if _, err := store.DB().Exec(
+		`INSERT INTO admin_users(
+			id, username, password_hash, password_changed_at,
+			created_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?)`,
+		id,
+		username,
+		passwordHash,
+		formatTime(now),
+		formatTime(now),
+		formatTime(now),
+	); err != nil {
+		t.Fatal(err)
+	}
+	admin, err := store.AdminByID(context.Background(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return admin
+}
+
 func TestOpenMigratesAndConfiguresSQLite(t *testing.T) {
 	t.Parallel()
 
@@ -35,8 +58,8 @@ func TestOpenMigratesAndConfiguresSQLite(t *testing.T) {
 	).Scan(&migrationCount); err != nil {
 		t.Fatal(err)
 	}
-	if migrationCount != 4 {
-		t.Fatalf("migration count = %d, want 4", migrationCount)
+	if migrationCount != 5 {
+		t.Fatalf("migration count = %d, want 5", migrationCount)
 	}
 
 	var foreignKeys int
@@ -80,19 +103,7 @@ func TestResetPasswordRevokesSessions(t *testing.T) {
 	store := openTestStore(t)
 	ctx := context.Background()
 	now := time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC)
-	admin, created, err := store.ResetAdminPassword(
-		ctx,
-		"admin-id",
-		"admin",
-		"first-hash",
-		now,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !created || admin.ID != "admin-id" {
-		t.Fatalf("unexpected administrator: %#v, created=%t", admin, created)
-	}
+	admin := insertTestAdmin(t, store, "admin-id", "admin", "first-hash", now)
 	if err := store.CreateSession(ctx, Session{
 		ID:               "session-id",
 		AdminUserID:      admin.ID,
@@ -134,16 +145,7 @@ func TestSessionExpiryComparisonUsesChronologicalUTCOrder(t *testing.T) {
 	store := openTestStore(t)
 	ctx := context.Background()
 	now := time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC)
-	admin, _, err := store.ResetAdminPassword(
-		ctx,
-		"admin-id",
-		"admin",
-		"synthetic-hash",
-		now,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
+	admin := insertTestAdmin(t, store, "admin-id", "admin", "synthetic-hash", now)
 	if err := store.CreateSession(ctx, Session{
 		ID:               "session-id",
 		AdminUserID:      admin.ID,

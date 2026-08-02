@@ -88,8 +88,8 @@ func scanAdmin(row *sql.Row) (Admin, error) {
 	return admin, nil
 }
 
-// ResetAdminPassword creates the first administrator or updates the matching
-// existing administrator. v0.1 rejects creation of a second administrator.
+// ResetAdminPassword updates the existing administrator. First-administrator
+// creation is intentionally handled only by CompleteBootstrap.
 func (s *Store) ResetAdminPassword(
 	ctx context.Context,
 	id string,
@@ -105,60 +105,32 @@ func (s *Store) ResetAdminPassword(
 		_ = transaction.Rollback()
 	}()
 
-	var existingID, createdAt string
+	var existingID string
 	err = transaction.QueryRowContext(
 		ctx,
-		"SELECT id, created_at FROM admin_users WHERE username = ?",
+		"SELECT id FROM admin_users WHERE username = ?",
 		username,
-	).Scan(&existingID, &createdAt)
-
-	created := false
+	).Scan(&existingID)
 	nowText := formatTime(now)
-	switch {
-	case err == nil:
-		if _, err := transaction.ExecContext(
-			ctx,
-			`UPDATE admin_users
-			    SET password_hash = ?, password_changed_at = ?, updated_at = ?
-			  WHERE id = ?`,
-			passwordHash,
-			nowText,
-			nowText,
-			existingID,
-		); err != nil {
-			return Admin{}, false, fmt.Errorf("update administrator password: %w", err)
-		}
-		id = existingID
-	case errors.Is(err, sql.ErrNoRows):
-		var count int
-		if err := transaction.QueryRowContext(
-			ctx,
-			"SELECT COUNT(*) FROM admin_users",
-		).Scan(&count); err != nil {
-			return Admin{}, false, fmt.Errorf("count administrators: %w", err)
-		}
-		if count != 0 {
-			return Admin{}, false, ErrSingleAdminConflict
-		}
-		if _, err := transaction.ExecContext(
-			ctx,
-			`INSERT INTO admin_users(
-				id, username, password_hash, password_changed_at,
-				created_at, updated_at
-			) VALUES (?, ?, ?, ?, ?, ?)`,
-			id,
-			username,
-			passwordHash,
-			nowText,
-			nowText,
-			nowText,
-		); err != nil {
-			return Admin{}, false, fmt.Errorf("create administrator: %w", err)
-		}
-		created = true
-	default:
+	if errors.Is(err, sql.ErrNoRows) {
+		return Admin{}, false, ErrNotFound
+	}
+	if err != nil {
 		return Admin{}, false, fmt.Errorf("find administrator: %w", err)
 	}
+	if _, err := transaction.ExecContext(
+		ctx,
+		`UPDATE admin_users
+		    SET password_hash = ?, password_changed_at = ?, updated_at = ?
+		  WHERE id = ?`,
+		passwordHash,
+		nowText,
+		nowText,
+		existingID,
+	); err != nil {
+		return Admin{}, false, fmt.Errorf("update administrator password: %w", err)
+	}
+	id = existingID
 
 	if _, err := transaction.ExecContext(
 		ctx,
@@ -171,7 +143,7 @@ func (s *Store) ResetAdminPassword(
 		return Admin{}, false, fmt.Errorf("commit administrator reset: %w", err)
 	}
 	admin, err := s.AdminByID(ctx, id)
-	return admin, created, err
+	return admin, false, err
 }
 
 func (s *Store) UpdateAdminPassword(

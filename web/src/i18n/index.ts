@@ -1,5 +1,7 @@
 import { createI18n } from 'vue-i18n'
 
+import { readLanguageMode, resolveLanguage } from '@/utils/preferences'
+
 const zhCN = {
   product: {
     name: 'm-ui',
@@ -51,6 +53,24 @@ const zhCN = {
     changePassword: '修改密码',
     passwordMismatch: '两次输入的新密码不一致。',
     passwordChanged: '密码已修改，请重新登录。',
+  },
+  setup: {
+    title: '首次设置管理员',
+    description: '请在网页中创建唯一的管理员账号和密码。',
+    usernameHint: '用户名可包含 3–64 个 ASCII 字母、数字、点、短横线或下划线。',
+    passwordHint: '密码至少 12 个字符，最多 1024 个 UTF-8 字节。',
+    confirmPassword: '确认密码',
+    tokenMissing: '没有找到有效的 setup link。请在服务器上运行 m-ui admin setup-link，再通过 SSH 隧道打开链接。',
+    tokenHint: 'setup link 只在本次浏览器地址中短暂携带能力，不会保存到浏览器存储。',
+    unavailable: '暂时无法读取初始化状态，请确认 m-ui 服务正常运行后重试。',
+    submit: '创建管理员并进入面板',
+    completed: '管理员已创建。',
+  },
+  language: {
+    label: '语言',
+    auto: '自动（跟随浏览器）',
+    chinese: '简体中文',
+    english: 'English',
   },
   theme: {
     label: '主题',
@@ -180,7 +200,7 @@ const zhCN = {
     security: '安全',
     audit: '审计',
     panelTitle: '面板标题',
-    language: '界面语言',
+    language: '新浏览器的默认语言',
     publicHost: '默认公网地址',
     publicHostHint: '用于生成分享链接；不修改 DNS、防火墙或反向代理。',
     endpointSettings: '端点设置（保存后按顺序重启）',
@@ -306,6 +326,24 @@ const enUS: typeof zhCN = {
     changePassword: 'Change password',
     passwordMismatch: 'The new passwords do not match.',
     passwordChanged: 'Password changed. Sign in again.',
+  },
+  setup: {
+    title: 'Set up administrator',
+    description: 'Create the single administrator account and password in the Web UI.',
+    usernameHint: 'Use 3–64 ASCII letters, digits, dots, dashes, or underscores.',
+    passwordHint: 'Use at least 12 characters and no more than 1024 UTF-8 bytes.',
+    confirmPassword: 'Confirm password',
+    tokenMissing: 'No valid setup link was found. Run m-ui admin setup-link on the server and open it through an SSH tunnel.',
+    tokenHint: 'The setup link carries a capability only in this address fragment and is never saved in browser storage.',
+    unavailable: 'The setup state is temporarily unavailable. Check that m-ui is running and try again.',
+    submit: 'Create administrator and enter panel',
+    completed: 'Administrator created.',
+  },
+  language: {
+    label: 'Language',
+    auto: 'Automatic (browser)',
+    chinese: '简体中文',
+    english: 'English',
   },
   theme: {
     label: 'Theme',
@@ -435,7 +473,7 @@ const enUS: typeof zhCN = {
     security: 'Security',
     audit: 'Audit',
     panelTitle: 'Panel title',
-    language: 'Interface language',
+    language: 'Default language for new browsers',
     publicHost: 'Default public host',
     publicHostHint: 'Used for share links; this does not change DNS, firewall, or reverse proxy configuration.',
     endpointSettings: 'Endpoint settings (restart in order)',
@@ -512,7 +550,7 @@ const enUS: typeof zhCN = {
 
 export const i18n = createI18n({
   legacy: false,
-  locale: navigator.language.toLowerCase().startsWith('zh') ? 'zh-CN' : 'en-US',
+  locale: resolveLanguage(readLanguageMode()),
   fallbackLocale: 'en-US',
   messages: {
     'zh-CN': zhCN,

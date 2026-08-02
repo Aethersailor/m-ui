@@ -16,10 +16,13 @@ import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 
 import { useThemeStore } from '@/stores/theme'
+import { usePreferencesStore } from '@/stores/preferences'
 
 const theme = useThemeStore()
+const preferences = usePreferencesStore()
 const { locale } = useI18n()
 theme.initialize()
+preferences.initialize()
 
 const naiveLocale = computed(() => (locale.value === 'zh-CN' ? zhCN : enUS))
 const naiveDateLocale = computed(() =>

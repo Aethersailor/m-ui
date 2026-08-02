@@ -1,36 +1,45 @@
 services:
+  data-init:
+    image: ghcr.io/aethersailor/m-ui:${M_UI_IMAGE_TAG:-edge}
+    container_name: m-ui-data-init
+    user: "0:0"
+    restart: "no"
+    network_mode: none
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      M_UI_INIT_DATA: "1"
+    healthcheck:
+      disable: true
+    volumes:
+      - ${M_UI_DATA_DIR:-/opt/m-ui}/etc/m-ui:/etc/m-ui
+      - ${M_UI_DATA_DIR:-/opt/m-ui}/etc/mihomo:/etc/mihomo
+      - ${M_UI_DATA_DIR:-/opt/m-ui}/var/lib/m-ui:/var/lib/m-ui
+      - ${M_UI_DATA_DIR:-/opt/m-ui}/var/lib/mihomo:/var/lib/mihomo
+
   m-ui:
     image: ghcr.io/aethersailor/m-ui:${M_UI_IMAGE_TAG:-edge}
     container_name: m-ui
     restart: unless-stopped
+    depends_on:
+      data-init:
+        condition: service_completed_successfully
     network_mode: host
+    cap_drop:
+      - ALL
     cap_add:
       - NET_BIND_SERVICE
     security_opt:
       - no-new-privileges:true
     environment:
       M_UI_PUBLIC_HOST: localhost
-      M_UI_LANGUAGE: en-US
       M_UI_MIHOMO_CHANNEL: release
       M_UI_MIHOMO_AUTO_UPDATE: "off"
       M_UI_MIHOMO_CHECK_INTERVAL: 24h
-      M_UI_ADMIN_PASSWORD_FILE: /run/secrets/admin_password
-    secrets:
-      - admin_password
     volumes:
-      - m-ui-etc:/etc/m-ui
-      - mihomo-etc:/etc/mihomo
-      - m-ui-data:/var/lib/m-ui
-      - mihomo-data:/var/lib/mihomo
+      - ${M_UI_DATA_DIR:-/opt/m-ui}/etc/m-ui:/etc/m-ui
+      - ${M_UI_DATA_DIR:-/opt/m-ui}/etc/mihomo:/etc/mihomo
+      - ${M_UI_DATA_DIR:-/opt/m-ui}/var/lib/m-ui:/var/lib/m-ui
+      - ${M_UI_DATA_DIR:-/opt/m-ui}/var/lib/mihomo:/var/lib/mihomo
     tmpfs:
       - /tmp:mode=1777
-
-secrets:
-  admin_password:
-    file: ./admin-password.txt
-
-volumes:
-  m-ui-etc:
-  mihomo-etc:
-  m-ui-data:
-  mihomo-data:

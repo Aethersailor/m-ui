@@ -9,7 +9,7 @@ interface MeResponse {
   admin: Admin
 }
 
-interface LoginResponse {
+export interface LoginResponse {
   admin: Admin
   csrf_token: string
   expires_at: string

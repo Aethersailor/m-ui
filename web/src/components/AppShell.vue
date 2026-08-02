@@ -17,14 +17,16 @@ import { useI18n } from 'vue-i18n'
 
 import { useAuthStore } from '@/stores/auth'
 import { useManagementStore } from '@/stores/management'
+import { usePreferencesStore } from '@/stores/preferences'
 import { useThemeStore } from '@/stores/theme'
 
 const route = useRoute()
 const router = useRouter()
 const auth = useAuthStore()
 const management = useManagementStore()
+const preferences = usePreferencesStore()
 const theme = useThemeStore()
-const { locale, t } = useI18n()
+const { t } = useI18n()
 const drawerOpen = ref(false)
 const collapsed = ref(false)
 
@@ -62,7 +64,7 @@ onMounted(async () => {
   try {
     await management.loadShellSettings()
     if (management.settings) {
-      locale.value = management.settings.ui_language
+      preferences.setServerLanguageDefault(management.settings.ui_language)
     }
   } catch {
     // Individual pages expose actionable request failures.

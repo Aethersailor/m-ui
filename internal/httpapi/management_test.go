@@ -572,13 +572,7 @@ func newManagementTestEnvironment(t *testing.T) managementTestEnvironment {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := authService.ResetPassword(
-		ctx,
-		"admin",
-		"initial-test-password",
-	); err != nil {
-		t.Fatal(err)
-	}
+	seedAdministrator(t, database, authService)
 	return managementTestEnvironment{
 		handler: New(Options{
 			Logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),

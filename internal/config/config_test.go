@@ -37,6 +37,18 @@ format = "json"
 	}
 }
 
+func TestValidateAcceptsAutomaticPanelLanguage(t *testing.T) {
+	t.Parallel()
+
+	cfg := Default()
+	if cfg.Panel.UILanguage != "auto" {
+		t.Fatalf("default panel language = %q, want auto", cfg.Panel.UILanguage)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("automatic panel language rejected: %v", err)
+	}
+}
+
 func TestLoadRejectsInvalidConfiguration(t *testing.T) {
 	t.Parallel()
 

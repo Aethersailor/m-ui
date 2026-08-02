@@ -57,6 +57,7 @@ func New(options Options) http.Handler {
 				cookieSecure: options.CookieSecure,
 			}
 			mountAuthRoutes(api, authentication)
+			mountSetupRoutes(api, authentication)
 			if options.Management != nil {
 				mountManagementRoutes(
 					api,

@@ -558,10 +558,10 @@ func (manager *Manager) UpdateSettings(
 		)
 	}
 	switch settings.UILanguage {
-	case "en-US", "zh-CN":
+	case "auto", "en-US", "zh-CN":
 	default:
 		return domain.Revision{}, fmt.Errorf(
-			"%w: UI language must be en-US or zh-CN",
+			"%w: UI language must be auto, en-US, or zh-CN",
 			ErrValidation,
 		)
 	}

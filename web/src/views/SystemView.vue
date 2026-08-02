@@ -46,7 +46,9 @@ import AppShell from '@/components/AppShell.vue'
 import PageHeader from '@/components/PageHeader.vue'
 import { useAuthStore } from '@/stores/auth'
 import { useManagementStore } from '@/stores/management'
+import { usePreferencesStore } from '@/stores/preferences'
 import { useThemeStore, type ThemeMode } from '@/stores/theme'
+import type { LanguageMode } from '@/utils/preferences'
 import { errorTranslationKey } from '@/utils/errors'
 import { formatDateTime } from '@/utils/format'
 
@@ -54,6 +56,7 @@ const { locale, t } = useI18n()
 const router = useRouter()
 const auth = useAuthStore()
 const management = useManagementStore()
+const preferences = usePreferencesStore()
 const theme = useThemeStore()
 const dialog = useDialog()
 const message = useMessage()
@@ -65,7 +68,7 @@ const coreStatus = ref<CoreStatus | null>(null)
 const activeTab = ref('settings')
 const settingsForm = reactive<Settings>({
   panel_title: 'm-ui',
-  ui_language: 'en-US',
+  ui_language: 'auto',
   public_host: 'localhost',
 })
 const endpointForm = reactive<EndpointSettings>({
@@ -87,10 +90,11 @@ const passwords = reactive({
   confirm: '',
 })
 
-const languageOptions = [
-  { label: '简体中文', value: 'zh-CN' },
-  { label: 'English', value: 'en-US' },
-]
+const languageOptions = computed(() => [
+  { label: t('language.auto'), value: 'auto' as LanguageMode },
+  { label: t('language.chinese'), value: 'zh-CN' as LanguageMode },
+  { label: t('language.english'), value: 'en-US' as LanguageMode },
+])
 const themeOptions = computed(() => [
   { label: t('theme.auto'), value: 'auto' },
   { label: t('theme.light'), value: 'light' },
@@ -212,7 +216,7 @@ async function saveSettings() {
   try {
     const saved = await updateSettings(auth.csrfToken, { ...settingsForm })
     management.settings = saved
-    locale.value = saved.ui_language
+    preferences.setServerLanguageDefault(saved.ui_language)
     message.success(t('common.saved'))
   } catch (error) {
     message.error(t(errorTranslationKey(error)))

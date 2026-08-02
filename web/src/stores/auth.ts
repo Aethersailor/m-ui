@@ -6,6 +6,7 @@ import {
   me,
   readCSRFCookie,
   type Admin,
+  type LoginResponse,
 } from '@/api/auth'
 import { APIError } from '@/api/client'
 
@@ -22,6 +23,11 @@ export const useAuthStore = defineStore('auth', {
     authenticated: (state) => state.admin !== null,
   },
   actions: {
+    acceptCredentials(response: LoginResponse) {
+      this.admin = response.admin
+      this.csrfToken = response.csrf_token
+      this.initialized = true
+    },
     async initialize() {
       if (this.initialized) {
         return
@@ -46,9 +52,7 @@ export const useAuthStore = defineStore('auth', {
       this.errorRetryAfter = 0
       try {
         const response = await loginRequest(username, password)
-        this.admin = response.admin
-        this.csrfToken = response.csrf_token
-        this.initialized = true
+        this.acceptCredentials(response)
       } catch (error) {
         this.admin = null
         this.csrfToken = ''

@@ -73,6 +73,15 @@ func Run(ctx context.Context, cfg config.Config, build version.Info) error {
 			logger.Error("close store", "error", closeErr)
 		}
 	}()
+	if err := auth.EnsureBootstrap(
+		ctx,
+		database,
+		sealer,
+		nil,
+		time.Now,
+	); err != nil {
+		return fmt.Errorf("initialize administrator bootstrap: %w", err)
+	}
 	authService, err := auth.NewService(database, auth.Options{
 		SessionTTL: sessionTTL,
 	})

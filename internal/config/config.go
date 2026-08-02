@@ -92,7 +92,7 @@ func Default() Config {
 		},
 		Panel: Panel{
 			Title:      "m-ui",
-			UILanguage: "en-US",
+			UILanguage: "auto",
 			PublicHost: "localhost",
 		},
 		Mihomo: Mihomo{
@@ -246,9 +246,9 @@ func (c Config) Validate() error {
 		return fmt.Errorf("panel.title must contain between 1 and 80 bytes")
 	}
 	switch c.Panel.UILanguage {
-	case "en-US", "zh-CN":
+	case "auto", "en-US", "zh-CN":
 	default:
-		return fmt.Errorf("panel.ui_language must be en-US or zh-CN")
+		return fmt.Errorf("panel.ui_language must be auto, en-US, or zh-CN")
 	}
 	if err := validateHost(c.Panel.PublicHost); err != nil {
 		return fmt.Errorf("panel.public_host: %w", err)

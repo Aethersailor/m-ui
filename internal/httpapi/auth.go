@@ -20,10 +20,11 @@ import (
 )
 
 const (
-	sessionCookieName = "m_ui_session"
-	csrfCookieName    = "m_ui_csrf"
-	csrfHeaderName    = "X-CSRF-Token"
-	maxJSONBody       = 64 << 10
+	sessionCookieName    = "m_ui_session"
+	csrfCookieName       = "m_ui_csrf"
+	csrfHeaderName       = "X-CSRF-Token"
+	setupTokenHeaderName = "X-M-UI-Setup-Token"
+	maxJSONBody          = 64 << 10
 )
 
 type authContextKey struct{}
@@ -54,6 +55,19 @@ type loginResponse struct {
 	ExpiresAt time.Time     `json:"expires_at"`
 }
 
+type setupStatusResponse struct {
+	State          string `json:"state"`
+	PasswordPolicy struct {
+		MinimumCharacters int `json:"minimum_characters"`
+		MaximumBytes      int `json:"maximum_bytes"`
+	} `json:"password_policy"`
+}
+
+type setupRequest struct {
+	Username string `json:"username"`
+	Password string `json:"password"`
+}
+
 type meResponse struct {
 	Admin adminResponse `json:"admin"`
 }
@@ -82,6 +96,197 @@ func mountAuthRoutes(router chi.Router, handler authHandler) {
 			})
 		})
 	})
+}
+
+func mountSetupRoutes(router chi.Router, handler authHandler) {
+	router.Route("/setup", func(setupRouter chi.Router) {
+		setupRouter.Get("/status", handler.setupStatus)
+		setupRouter.Post("/complete", handler.completeSetup)
+	})
+}
+
+func (h authHandler) setupStatus(
+	response http.ResponseWriter,
+	request *http.Request,
+) {
+	status, err := h.service.SetupStatus(request.Context())
+	if err != nil {
+		writeAPIError(
+			response,
+			request,
+			http.StatusInternalServerError,
+			"INTERNAL_ERROR",
+			"Setup status could not be read.",
+		)
+		return
+	}
+	state := "complete"
+	if status.Required {
+		state = "required"
+	}
+	response.Header().Set("Cache-Control", "no-store")
+	result := setupStatusResponse{State: state}
+	result.PasswordPolicy.MinimumCharacters = auth.MinimumPasswordCharacters
+	result.PasswordPolicy.MaximumBytes = auth.MaximumPasswordBytes
+	writeJSON(response, http.StatusOK, result)
+}
+
+func (h authHandler) completeSetup(
+	response http.ResponseWriter,
+	request *http.Request,
+) {
+	if !setupTransportAllowed(request) {
+		writeAPIError(
+			response,
+			request,
+			http.StatusForbidden,
+			"SETUP_TRANSPORT_NOT_ALLOWED",
+			"First administrator setup is allowed only through the local loopback panel or an SSH tunnel.",
+		)
+		return
+	}
+	if !isJSONContentType(request.Header.Get("Content-Type")) {
+		writeAPIError(
+			response,
+			request,
+			http.StatusBadRequest,
+			"INVALID_REQUEST",
+			"Request body must use application/json.",
+		)
+		return
+	}
+	var input setupRequest
+	if err := decodeJSON(response, request, &input); err != nil {
+		writeAPIError(
+			response,
+			request,
+			http.StatusBadRequest,
+			"INVALID_REQUEST",
+			"Request body is invalid.",
+		)
+		return
+	}
+	credentials, err := h.service.CompleteSetup(
+		request.Context(),
+		request.Header.Get(setupTokenHeaderName),
+		input.Username,
+		input.Password,
+		remoteIP(request.RemoteAddr),
+		request.UserAgent(),
+	)
+	var rateLimit *auth.RateLimitError
+	switch {
+	case errors.As(err, &rateLimit):
+		seconds := int(math.Ceil(rateLimit.RetryAfter.Seconds()))
+		if seconds < 1 {
+			seconds = 1
+		}
+		response.Header().Set("Retry-After", strconv.Itoa(seconds))
+		writeAPIError(
+			response,
+			request,
+			http.StatusTooManyRequests,
+			"SETUP_RATE_LIMITED",
+			"Setup is temporarily rate limited. Try again later.",
+		)
+	case errors.Is(err, auth.ErrInvalidBootstrapToken):
+		writeAPIError(
+			response,
+			request,
+			http.StatusForbidden,
+			"SETUP_AUTHORIZATION_FAILED",
+			"The setup capability is invalid or expired.",
+		)
+	case errors.Is(err, auth.ErrBootstrapCompleted):
+		writeAPIError(
+			response,
+			request,
+			http.StatusConflict,
+			"SETUP_ALREADY_COMPLETED",
+			"The first administrator has already been created.",
+		)
+	case errors.Is(err, auth.ErrPasswordPolicy):
+		writeAPIError(
+			response,
+			request,
+			http.StatusBadRequest,
+			"PASSWORD_POLICY_FAILED",
+			"Password does not satisfy the password policy.",
+		)
+	case errors.Is(err, auth.ErrNoAdministrator):
+		writeAPIError(
+			response,
+			request,
+			http.StatusConflict,
+			"SETUP_ALREADY_COMPLETED",
+			"The first administrator has already been created.",
+		)
+	case err != nil:
+		writeAPIError(
+			response,
+			request,
+			http.StatusInternalServerError,
+			"INTERNAL_ERROR",
+			"Administrator setup could not be completed.",
+		)
+	default:
+		h.setAuthCookies(response, credentials)
+		response.Header().Set("Cache-Control", "no-store")
+		writeJSON(response, http.StatusCreated, loginResponse{
+			Admin: adminResponse{
+				ID:       credentials.Admin.ID,
+				Username: credentials.Admin.Username,
+			},
+			CSRFToken: credentials.CSRFToken,
+			ExpiresAt: credentials.Session.ExpiresAt,
+		})
+	}
+}
+
+func setupTransportAllowed(request *http.Request) bool {
+	peer := net.ParseIP(remoteIP(request.RemoteAddr))
+	if peer == nil || !peer.IsLoopback() {
+		return false
+	}
+	if request.Header.Get("Forwarded") != "" ||
+		request.Header.Get("X-Forwarded-For") != "" ||
+		request.Header.Get("X-Forwarded-Host") != "" ||
+		request.Header.Get("X-Forwarded-Proto") != "" {
+		return false
+	}
+	host := request.Host
+	if host == "" {
+		return false
+	}
+	hostname := host
+	if parsedHost, _, err := net.SplitHostPort(host); err == nil {
+		hostname = parsedHost
+	} else if strings.Contains(host, ":") {
+		return false
+	}
+	if strings.ToLower(hostname) != "localhost" {
+		ip := net.ParseIP(hostname)
+		if ip == nil || !ip.IsLoopback() {
+			return false
+		}
+	}
+	scheme := "http"
+	if request.TLS != nil {
+		scheme = "https"
+	}
+	if request.Header.Get("Origin") != scheme+"://"+host {
+		return false
+	}
+	if fetchSite := request.Header.Get("Sec-Fetch-Site"); fetchSite != "" &&
+		fetchSite != "same-origin" && fetchSite != "none" {
+		return false
+	}
+	return true
+}
+
+func isJSONContentType(value string) bool {
+	parts := strings.Split(value, ";")
+	return strings.EqualFold(strings.TrimSpace(parts[0]), "application/json")
 }
 
 func (h authHandler) login(response http.ResponseWriter, request *http.Request) {

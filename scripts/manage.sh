@@ -18,7 +18,6 @@ mihomo_auto_update_set=0
 mihomo_check_interval_set=0
 archive=""
 archive_sha256=""
-admin_password_file=""
 no_start=0
 assume_yes=0
 
@@ -35,7 +34,6 @@ Options:
   --mihomo-check-interval 6h|12h|24h|168h
   --archive PATH
   --sha256 SHA256
-  --admin-password-file PATH
   --no-start
   --yes
 EOF
@@ -98,11 +96,6 @@ while [ "$#" -gt 0 ]; do
         --sha256)
             require_value "$@"
             archive_sha256="$2"
-            shift 2
-            ;;
-        --admin-password-file)
-            require_value "$@"
-            admin_password_file="$2"
             shift 2
             ;;
         --no-start)
@@ -346,7 +339,7 @@ cookie_secure = false
 
 [panel]
 title = "m-ui"
-ui_language = "en-US"
+ui_language = "auto"
 public_host = "localhost"
 
 [mihomo]
@@ -545,35 +538,6 @@ configure_bootstrap() {
     [ "$mihomo_check_interval_set" -eq 1 ] &&
         set -- "$@" --check-interval "$mihomo_check_interval"
     run_as_m_ui "$binary" "$@"
-}
-
-initialize_administrator() {
-    [ "$database_was_present" -eq 0 ] || return
-    password_path="$(target /var/lib/m-ui/.initial-admin-password)"
-    generated_password=""
-    if [ -n "$admin_password_file" ]; then
-        [ -f "$admin_password_file" ] ||
-            fail "--admin-password-file must name a regular file"
-        cp "$admin_password_file" "$password_path"
-    else
-        generated_password="$(od -An -N24 -tx1 /dev/urandom | tr -d ' \n')"
-        printf '%s\n' "$generated_password" >"$password_path"
-    fi
-    chmod 0600 "$password_path"
-    chown "$m_ui_owner" "$password_path"
-    run_as_m_ui "$(target /usr/bin/m-ui)" admin reset-password \
-        --config "$(target /etc/m-ui/config.toml)" \
-        --username admin \
-        --password-file "$password_path"
-    rm -f "$password_path"
-    if [ -n "$generated_password" ]; then
-        printf '%s\n' \
-            "Initial administrator: admin" \
-            "One-time initial password: $generated_password"
-    else
-        printf '%s\n' \
-            "Initial administrator admin was created from --admin-password-file."
-    fi
 }
 
 clear_bootstrap_controller_secret() {
@@ -793,9 +757,9 @@ if [ "$package_mode" = "tar" ]; then
 elif [ -n "$root" ]; then
     fail "package-manager archives are not supported with M_UI_ROOT"
 elif [ "$package_mode" = "deb" ]; then
-    M_UI_SKIP_ADMIN_INIT=1 dpkg -i "$input" || install_failed=1
+    dpkg -i "$input" || install_failed=1
 else
-    M_UI_SKIP_ADMIN_INIT=1 apk add --allow-untrusted "$input" ||
+    apk add --allow-untrusted "$input" ||
         install_failed=1
 fi
 if [ "$install_failed" -ne 0 ]; then
@@ -806,7 +770,6 @@ fi
 if ! (
     write_initial_configuration
     configure_bootstrap
-    initialize_administrator
     clear_bootstrap_controller_secret
 ); then
     restore_program_files
@@ -823,4 +786,5 @@ fi
 printf '%s\n' \
     "m-ui $command_name completed." \
     "Configuration, database, master key, revisions, and core settings were preserved." \
+    "Create the first administrator in the Web UI with: m-ui admin setup-link" \
     "No SSH, firewall, reverse proxy, or Cloudflare settings were changed."

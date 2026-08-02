@@ -16,9 +16,12 @@ import (
 )
 
 var (
-	ErrInvalidCredentials = errors.New("invalid credentials")
-	ErrInvalidCSRF        = errors.New("invalid CSRF token")
-	ErrPasswordPolicy     = errors.New("password does not satisfy policy")
+	ErrInvalidCredentials    = errors.New("invalid credentials")
+	ErrInvalidCSRF           = errors.New("invalid CSRF token")
+	ErrPasswordPolicy        = errors.New("password does not satisfy policy")
+	ErrBootstrapCompleted    = errors.New("administrator bootstrap is already completed")
+	ErrInvalidBootstrapToken = errors.New("administrator bootstrap token is invalid")
+	ErrNoAdministrator       = errors.New("no administrator exists; use web bootstrap")
 )
 
 type RateLimitError struct {
@@ -53,21 +56,25 @@ type Repository interface {
 }
 
 type Options struct {
-	SessionTTL     time.Duration
-	Clock          func() time.Time
-	Random         io.Reader
-	Limiter        *LoginLimiter
-	PasswordParams PasswordParams
+	SessionTTL       time.Duration
+	Clock            func() time.Time
+	Random           io.Reader
+	Limiter          *LoginLimiter
+	BootstrapLimiter *LoginLimiter
+	PasswordParams   PasswordParams
 }
 
 type Service struct {
-	repository Repository
-	sessionTTL time.Duration
-	clock      func() time.Time
-	random     io.Reader
-	limiter    *LoginLimiter
-	dummyHash  string
-	params     PasswordParams
+	repository   Repository
+	sessionTTL   time.Duration
+	clock        func() time.Time
+	random       io.Reader
+	limiter      *LoginLimiter
+	bootstrap    BootstrapRepository
+	setupLimiter *LoginLimiter
+	setupSlots   chan struct{}
+	dummyHash    string
+	params       PasswordParams
 }
 
 type Credentials struct {
@@ -93,6 +100,9 @@ func NewService(repository Repository, options Options) (*Service, error) {
 	if options.Limiter == nil {
 		options.Limiter = NewLoginLimiter(options.Clock)
 	}
+	if options.BootstrapLimiter == nil {
+		options.BootstrapLimiter = NewLoginLimiter(options.Clock)
+	}
 	if options.PasswordParams.Memory == 0 {
 		options.PasswordParams = DefaultPasswordParams
 	}
@@ -106,13 +116,16 @@ func NewService(repository Repository, options Options) (*Service, error) {
 		return nil, fmt.Errorf("initialize password verifier: %w", err)
 	}
 	return &Service{
-		repository: repository,
-		sessionTTL: options.SessionTTL,
-		clock:      options.Clock,
-		random:     options.Random,
-		limiter:    options.Limiter,
-		dummyHash:  dummyHash,
-		params:     options.PasswordParams,
+		repository:   repository,
+		sessionTTL:   options.SessionTTL,
+		clock:        options.Clock,
+		random:       options.Random,
+		limiter:      options.Limiter,
+		bootstrap:    bootstrapRepository(repository),
+		setupLimiter: options.BootstrapLimiter,
+		setupSlots:   make(chan struct{}, 2),
+		dummyHash:    dummyHash,
+		params:       options.PasswordParams,
 	}, nil
 }
 
@@ -123,6 +136,11 @@ func (s *Service) ResetPassword(
 ) (store.Admin, bool, error) {
 	if err := ValidateUsername(username); err != nil {
 		return store.Admin{}, false, err
+	}
+	if _, err := s.repository.AdminByUsername(ctx, username); errors.Is(err, store.ErrNotFound) {
+		return store.Admin{}, false, ErrNoAdministrator
+	} else if err != nil {
+		return store.Admin{}, false, fmt.Errorf("lookup administrator: %w", err)
 	}
 	if err := ValidatePassword(password); err != nil {
 		return store.Admin{}, false, err
@@ -158,6 +176,150 @@ func (s *Service) ResetPassword(
 		return admin, created, fmt.Errorf("record password reset audit: %w", err)
 	}
 	return admin, created, nil
+}
+
+func bootstrapRepository(repository Repository) BootstrapRepository {
+	value, _ := repository.(BootstrapRepository)
+	return value
+}
+
+func (s *Service) SetupStatus(ctx context.Context) (SetupStatus, error) {
+	if s.bootstrap == nil {
+		return SetupStatus{}, errors.New("bootstrap repository is unavailable")
+	}
+	state, err := s.bootstrap.BootstrapState(ctx)
+	if errors.Is(err, store.ErrNotFound) {
+		return SetupStatus{}, errors.New("administrator bootstrap state is unavailable")
+	}
+	if err != nil {
+		return SetupStatus{}, err
+	}
+	return SetupStatus{Required: state.Required}, nil
+}
+
+func (s *Service) CompleteSetup(
+	ctx context.Context,
+	rawToken string,
+	username string,
+	password string,
+	sourceIP string,
+	userAgent string,
+) (Credentials, error) {
+	if s.bootstrap == nil {
+		return Credentials{}, errors.New("bootstrap repository is unavailable")
+	}
+	key := "bootstrap\x00" + sourceIP
+	if retry := s.setupLimiter.RetryAfter(key); retry > 0 {
+		return Credentials{}, &RateLimitError{RetryAfter: retry}
+	}
+	if err := validateBootstrapToken(rawToken); err != nil {
+		s.setupLimiter.Failure(key)
+		return Credentials{}, ErrInvalidBootstrapToken
+	}
+	state, err := s.bootstrap.BootstrapState(ctx)
+	if errors.Is(err, store.ErrNotFound) || (err == nil && !state.Required) {
+		return Credentials{}, ErrBootstrapCompleted
+	}
+	if err != nil {
+		return Credentials{}, err
+	}
+	actualHash := HashToken(rawToken)
+	if subtle.ConstantTimeCompare(
+		[]byte(actualHash),
+		[]byte(state.TokenHash),
+	) != 1 {
+		s.setupLimiter.Failure(key)
+		return Credentials{}, ErrInvalidBootstrapToken
+	}
+	select {
+	case s.setupSlots <- struct{}{}:
+		defer func() { <-s.setupSlots }()
+	default:
+		return Credentials{}, &RateLimitError{RetryAfter: time.Second}
+	}
+	if err := ValidateUsername(username); err != nil {
+		s.setupLimiter.Failure(key)
+		return Credentials{}, err
+	}
+	if err := ValidatePassword(password); err != nil {
+		s.setupLimiter.Failure(key)
+		return Credentials{}, fmt.Errorf("%w: %v", ErrPasswordPolicy, err)
+	}
+	passwordHash, err := hashPassword(password, s.params, s.random)
+	if err != nil {
+		return Credentials{}, err
+	}
+	sessionToken, err := newToken(s.random, sessionTokenBytes)
+	if err != nil {
+		return Credentials{}, err
+	}
+	csrfToken, err := newToken(s.random, csrfTokenBytes)
+	if err != nil {
+		return Credentials{}, err
+	}
+	adminID, err := newOpaqueID(s.random)
+	if err != nil {
+		return Credentials{}, err
+	}
+	sessionID, err := newOpaqueID(s.random)
+	if err != nil {
+		return Credentials{}, err
+	}
+	auditID, err := newOpaqueID(s.random)
+	if err != nil {
+		return Credentials{}, err
+	}
+	now := s.clock().UTC()
+	admin := store.Admin{
+		ID:                adminID,
+		Username:          username,
+		PasswordHash:      passwordHash,
+		PasswordChangedAt: now,
+		CreatedAt:         now,
+		UpdatedAt:         now,
+	}
+	session := store.Session{
+		ID:               sessionID,
+		AdminUserID:      adminID,
+		SessionTokenHash: HashToken(sessionToken),
+		CSRFTokenHash:    HashToken(csrfToken),
+		ExpiresAt:        now.Add(s.sessionTTL),
+		LastSeenAt:       now,
+		CreatedAt:        now,
+		UserAgent:        sanitizeUserAgent(userAgent),
+	}
+	if err := s.bootstrap.CompleteBootstrap(
+		ctx,
+		actualHash,
+		store.BootstrapCompletion{
+			Admin:   admin,
+			Session: session,
+			Audit: store.AuditEntry{
+				ID:              auditID,
+				ActorAdminID:    adminID,
+				Action:          "auth.bootstrap_complete",
+				ResourceType:    "administrator",
+				ResourceID:      adminID,
+				Result:          "success",
+				SummaryRedacted: "Initial administrator was created through the local bootstrap flow.",
+				CreatedAt:       now,
+			},
+		},
+		now,
+	); errors.Is(err, store.ErrBootstrapCompleted) {
+		return Credentials{}, ErrBootstrapCompleted
+	} else if errors.Is(err, store.ErrInvalidBootstrapToken) {
+		return Credentials{}, ErrInvalidBootstrapToken
+	} else if err != nil {
+		return Credentials{}, err
+	}
+	s.setupLimiter.Success(key)
+	return Credentials{
+		Admin:        admin,
+		Session:      session,
+		SessionToken: sessionToken,
+		CSRFToken:    csrfToken,
+	}, nil
 }
 
 func (s *Service) Login(

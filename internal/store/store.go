@@ -20,6 +20,10 @@ import (
 var (
 	ErrNotFound                = errors.New("record not found")
 	ErrSingleAdminConflict     = errors.New("a different administrator already exists")
+	ErrMultipleAdministrators  = errors.New("multiple administrators exist")
+	ErrBootstrapCompleted      = errors.New("administrator bootstrap is already completed")
+	ErrBootstrapUnavailable    = errors.New("administrator bootstrap is unavailable")
+	ErrInvalidBootstrapToken   = errors.New("administrator bootstrap token is invalid")
 	ErrMultipleActiveRevisions = errors.New("multiple active configuration revisions found")
 )
 
