@@ -313,9 +313,9 @@ jobs:
               }
               rc-service mihomo start || true
               if ! rc-service mihomo status >/dev/null 2>&1; then
-                printf '%s\n' '--- Mihomo OpenRC startup log ---'
+                printf "%s\n" "--- Mihomo OpenRC startup log ---"
                 cat /var/log/mihomo.log || true
-                printf '%s\n' '--- m-ui OpenRC startup log ---'
+                printf "%s\n" "--- m-ui OpenRC startup log ---"
                 cat /var/log/m-ui.log || true
               fi
               wait_service mihomo
