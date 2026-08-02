@@ -18,7 +18,12 @@ depend() {
 start_pre() {
     checkpath --directory --owner mihomo:mihomo --mode 0750 /var/lib/mihomo
     checkpath --file --owner mihomo:mihomo --mode 0640 /var/log/mihomo.log
-    /sbin/setcap cap_net_bind_service=+ep /var/lib/m-ui/core/current/mihomo
+    setcap_bin="$(command -v setcap 2>/dev/null || true)"
+    if [ -z "$setcap_bin" ]; then
+        eerror "setcap is required to grant Mihomo low-port capability"
+        return 1
+    fi
+    "$setcap_bin" cap_net_bind_service=+ep /var/lib/m-ui/core/current/mihomo
 }
 
 reload() {
