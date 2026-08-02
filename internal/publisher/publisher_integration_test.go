@@ -57,6 +57,24 @@ func TestPublisherValidatesPublishesCommitsAndArchives(t *testing.T) {
 	}
 }
 
+func TestPublisherRejectsPublicationWhenCoreSafetyGateIsBlocked(t *testing.T) {
+	t.Parallel()
+	fixture := newPublisherFixture(t)
+	fixture.publisher.options.SafetyGate = staticSafetyGate{blocked: true}
+
+	_, err := fixture.publisher.Publish(
+		context.Background(),
+		fixture.request(fixture.nextState),
+	)
+	if !errors.Is(err, ErrDegraded) {
+		t.Fatalf("Publish() error = %v, want ErrDegraded", err)
+	}
+	fixture.assertOldStateAndConfig(t)
+	if fixture.repository.auditCount() != 0 {
+		t.Fatal("blocked publication wrote an audit entry")
+	}
+}
+
 func TestPublisherCommitsManagedStateAndRevisionInRealSQLite(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -670,6 +688,15 @@ type publisherFixture struct {
 	configPath string
 	oldState   domain.DesiredState
 	nextState  domain.DesiredState
+}
+
+type staticSafetyGate struct {
+	blocked bool
+	err     error
+}
+
+func (gate staticSafetyGate) SafetyBlocked(context.Context) (bool, error) {
+	return gate.blocked, gate.err
 }
 
 func newPublisherFixture(t *testing.T) *publisherFixture {

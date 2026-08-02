@@ -27,6 +27,7 @@ type Options struct {
 	ErrorLogInterval time.Duration
 	Clock            func() time.Time
 	Logger           *slog.Logger
+	SafetyGate       publisher.SafetyGate
 }
 
 type BatchResult struct {
@@ -42,6 +43,7 @@ type Expiry struct {
 	errorLogInterval time.Duration
 	clock            func() time.Time
 	logger           *slog.Logger
+	safetyGate       publisher.SafetyGate
 	logMutex         sync.Mutex
 	lastErrorLog     time.Time
 }
@@ -71,6 +73,7 @@ func NewExpiry(
 		errorLogInterval: options.ErrorLogInterval,
 		clock:            options.Clock,
 		logger:           options.Logger,
+		safetyGate:       options.SafetyGate,
 	}, nil
 }
 
@@ -91,6 +94,15 @@ func (scheduler *Expiry) Run(ctx context.Context) {
 func (scheduler *Expiry) RunOnce(
 	ctx context.Context,
 ) (BatchResult, error) {
+	if scheduler.safetyGate != nil {
+		blocked, err := scheduler.safetyGate.SafetyBlocked(ctx)
+		if err != nil {
+			return BatchResult{}, fmt.Errorf("check fail-closed safety state: %w", err)
+		}
+		if blocked {
+			return BatchResult{}, publisher.ErrDegraded
+		}
+	}
 	batchTime := scheduler.clock().UTC()
 	result := BatchResult{BatchTime: batchTime}
 	revision, err := scheduler.publisher.Publish(ctx, publisher.Request{

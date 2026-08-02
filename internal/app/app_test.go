@@ -153,6 +153,32 @@ func TestBackgroundServicesFailClosedMatrix(t *testing.T) {
 	}
 }
 
+func TestBackgroundServicesSkipExpiryWhenCoreSafetyGateIsBlocked(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	runtime := &signalRunner{started: make(chan struct{})}
+	expiry := &signalRunner{started: make(chan struct{})}
+	additional := &signalRunner{started: make(chan struct{})}
+
+	err := startBackgroundServicesWithSafetyGate(
+		ctx,
+		staticStartupReconciler{},
+		staticSystemStateReader{},
+		runtime,
+		expiry,
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		staticSafetyGate{blocked: true},
+		additional,
+	)
+	if err != nil {
+		t.Fatalf("startBackgroundServicesWithSafetyGate() error = %v", err)
+	}
+	assertStarted(t, runtime.started, "runtime monitor")
+	assertNotStarted(t, expiry.started, "expiry scheduler")
+	assertNotStarted(t, additional.started, "additional scheduler")
+}
+
 func assertNotStarted(t *testing.T, started <-chan struct{}, name string) {
 	t.Helper()
 	select {
@@ -193,6 +219,15 @@ func (reconciler staticStartupReconciler) ReconcileStartup(context.Context) erro
 type staticSystemStateReader struct {
 	state domain.SystemState
 	err   error
+}
+
+type staticSafetyGate struct {
+	blocked bool
+	err     error
+}
+
+func (gate staticSafetyGate) SafetyBlocked(context.Context) (bool, error) {
+	return gate.blocked, gate.err
 }
 
 func (reader staticSystemStateReader) SystemState(

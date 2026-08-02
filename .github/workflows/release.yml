@@ -517,7 +517,7 @@ jobs:
           gh release create "${release_args[@]}"
           touch "$state_dir/release-created"
 
-      - name: Publish formal architecture images and manifests
+      - name: Prepare candidate manifest and attestation inputs
         id: formal-images
         env:
           GH_TOKEN: ${{ github.token }}
@@ -528,33 +528,9 @@ jobs:
         run: |
           set -euo pipefail
           state_dir="$RUNNER_TEMP/m-ui-release-state"
-          touch "$state_dir/formal-started"
           repository="ghcr.io/${GITHUB_REPOSITORY,,}"
-          version_without_v="${VERSION#v}"
-          IFS=. read -r major minor _ <<< "$version_without_v"
-          base_tags=("$VERSION" "$version_without_v" "${major}.${minor}" "$major")
-          for arch in amd64 arm64; do
-            source="m-ui:${SHA12}-${arch}"
-            for tag in "${base_tags[@]}"; do
-              docker tag "$source" "${repository}:${tag}-${arch}"
-              docker push "${repository}:${tag}-${arch}"
-            done
-            docker tag "$source" "${repository}:sha-${SHA12}-${arch}"
-            docker push "${repository}:sha-${SHA12}-${arch}"
-          done
-          for tag in "${base_tags[@]}" sha-${SHA12}; do
-            docker buildx imagetools create \
-              --tag "${repository}:${tag}" \
-              "${repository}:${tag}-amd64" \
-              "${repository}:${tag}-arm64"
-          done
-          if [ "$PRERELEASE" != true ]; then
-            docker buildx imagetools create \
-              --tag "${repository}:latest" \
-              "${repository}:${VERSION}-amd64" \
-              "${repository}:${VERSION}-arm64"
-          fi
-          docker buildx imagetools inspect "${repository}:${VERSION}" \
+          candidate="release-candidate-${GITHUB_RUN_ID}"
+          docker buildx imagetools inspect "${repository}:${candidate}" \
             --raw >release/IMAGE_MANIFEST.json
           cp images/m-ui-image-*.sbom.spdx.json release/
           jq -e '
@@ -568,10 +544,9 @@ jobs:
             sha256sum --check SHA256SUMS
           )
           digest="$(docker buildx imagetools inspect \
-            "${repository}:${VERSION}" --format '{{ .Manifest.Digest }}')"
+            "${repository}:${candidate}" --format '{{ .Manifest.Digest }}')"
           printf 'subject_name=%s\n' "$repository" >>"$GITHUB_OUTPUT"
           printf 'subject_digest=%s\n' "$digest" >>"$GITHUB_OUTPUT"
-          touch "$state_dir/formal-complete"
 
       - name: Attest release assets
         uses: actions/attest-build-provenance@43d14bc2b83dec42d39ecae14e916627a18bb661 # v3
@@ -595,6 +570,69 @@ jobs:
           subject-name: ${{ steps.formal-images.outputs.subject_name }}
           subject-digest: ${{ steps.formal-images.outputs.subject_digest }}
           push-to-registry: true
+
+      - name: Promote attested images and preserve prior tags
+        id: formal-promotion
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.validate.outputs.version }}
+          SHA12: ${{ needs.validate.outputs.sha12 }}
+          TARGET_SHA: ${{ needs.validate.outputs.target_sha }}
+          PRERELEASE: ${{ needs.validate.outputs.prerelease }}
+        run: |
+          set -euo pipefail
+          state_dir="$RUNNER_TEMP/m-ui-release-state"
+          repository="ghcr.io/${GITHUB_REPOSITORY,,}"
+          candidate="release-candidate-${GITHUB_RUN_ID}"
+          version_without_v="${VERSION#v}"
+          IFS=. read -r major minor _ <<< "$version_without_v"
+          base_tags=("$VERSION" "$version_without_v" "${major}.${minor}" "$major")
+          all_tags=("${base_tags[@]}" "sha-${SHA12}")
+          if [ "$PRERELEASE" != true ]; then
+            all_tags+=(latest)
+          fi
+          snapshot="$state_dir/formal-tag-snapshot"
+          : >"$snapshot"
+          snapshot_tag() {
+            local tag="$1"
+            local digest
+            digest="$(docker buildx imagetools inspect \
+              "${repository}:${tag}" --format '{{ .Manifest.Digest }}' \
+              2>/dev/null || true)"
+            if [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              printf '%s\t%s\n' "$tag" "$digest" >>"$snapshot"
+            else
+              printf '%s\t-\n' "$tag" >>"$snapshot"
+            fi
+          }
+          for tag in "${all_tags[@]}"; do
+            snapshot_tag "$tag"
+            snapshot_tag "${tag}-amd64"
+            snapshot_tag "${tag}-arm64"
+          done
+          touch "$state_dir/promotion-started"
+
+          for arch in amd64 arm64; do
+            for tag in "${all_tags[@]}"; do
+              docker buildx imagetools create \
+                --tag "${repository}:${tag}-${arch}" \
+                "${repository}:${candidate}-${arch}"
+            done
+          done
+          for tag in "${all_tags[@]}"; do
+            docker buildx imagetools create \
+              --tag "${repository}:${tag}" \
+              "${repository}:${candidate}"
+          done
+          candidate_digest="$(docker buildx imagetools inspect \
+            "${repository}:${candidate}" --format '{{ .Manifest.Digest }}')"
+          promoted_digest="$(docker buildx imagetools inspect \
+            "${repository}:${VERSION}" --format '{{ .Manifest.Digest }}')"
+          test "$candidate_digest" = "$promoted_digest"
+          (
+            cd release
+            sha256sum --check SHA256SUMS
+          )
 
       - name: Complete verified GitHub Release
         env:
@@ -624,17 +662,20 @@ jobs:
           for tag in "$candidate" "$candidate-amd64" "$candidate-arm64"; do
             docker buildx imagetools rm "${repository}:${tag}" || true
           done
-          if [ -f "$state_dir/formal-started" ] &&
+          if [ -f "$state_dir/promotion-started" ] &&
               [ ! -f "$state_dir/release-complete" ]; then
-            version_without_v="${VERSION#v}"
-            IFS=. read -r major minor _ <<< "$version_without_v"
-            for tag in "$VERSION" "$version_without_v" "${major}.${minor}" "$major" "sha-${SHA12}"; do
-              for suffix in "" "-amd64" "-arm64"; do
-                docker buildx imagetools rm "${repository}:${tag}${suffix}" || true
-              done
-            done
-            if [ "$PRERELEASE" != true ]; then
-              docker buildx imagetools rm "${repository}:latest" || true
+            snapshot="$state_dir/formal-tag-snapshot"
+            if [ -r "$snapshot" ]; then
+              while IFS=$'\t' read -r tag digest; do
+                [ -n "$tag" ] || continue
+                docker buildx imagetools rm "${repository}:${tag}" || true
+                if [ "$digest" != "-" ]; then
+                  docker buildx imagetools create \
+                    --tag "${repository}:${tag}" \
+                    "${repository}@${digest}" || \
+                    echo "::warning::failed to restore ${repository}:${tag} at ${digest}"
+                fi
+              done <"$snapshot"
             fi
           fi
           if [ -f "$state_dir/release-created" ] &&

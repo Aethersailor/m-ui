@@ -50,6 +50,15 @@ type Options struct {
 	HealthInterval    time.Duration
 	Logger            *slog.Logger
 	Coordinator       *operation.Coordinator
+	SafetyGate        SafetyGate
+}
+
+// SafetyGate is the cross-component fail-closed contract.  The core manager
+// implements it by checking both its in-memory latch and the durable marker /
+// system state, allowing publication to stop even when the database update
+// that recorded a recovery failure could not be committed.
+type SafetyGate interface {
+	SafetyBlocked(context.Context) (bool, error)
 }
 
 type Publisher struct {
@@ -551,6 +560,15 @@ func (publisher *Publisher) publishLocked(
 	}
 	if systemState.Degraded {
 		return domain.Revision{}, fmt.Errorf("%w: %s", ErrDegraded, systemState.DegradedReason)
+	}
+	if publisher.options.SafetyGate != nil {
+		blocked, err := publisher.options.SafetyGate.SafetyBlocked(ctx)
+		if err != nil {
+			return domain.Revision{}, fmt.Errorf("check fail-closed safety state: %w", err)
+		}
+		if blocked {
+			return domain.Revision{}, ErrDegraded
+		}
 	}
 
 	now := publisher.now().UTC()

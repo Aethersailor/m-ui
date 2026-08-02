@@ -283,7 +283,7 @@ jobs:
 
       - name: Test apk install, remove, persistence, and reinstall
         run: |
-          docker run --rm \
+          docker run --rm --privileged \
             -v "$PWD/artifacts:/artifacts:ro" \
             "alpine:3.20" sh -euxc '
               package="$(find /artifacts -maxdepth 1 \
@@ -296,13 +296,21 @@ jobs:
               /usr/bin/m-ui version
               su-exec m-ui /usr/bin/m-ui core status \
                 --json --config /etc/m-ui/config.toml
-              sed -i "s/^process_mode = \"auto\"/process_mode = \"managed\"/" \
-                /etc/m-ui/config.toml
-              su-exec m-ui /usr/bin/m-ui server \
-                --config /etc/m-ui/config.toml >/tmp/m-ui-server.log 2>&1 &
-              server_pid=$!
-              trap "kill \"$server_pid\" 2>/dev/null || true" EXIT
-              sleep 3
+              test -x /sbin/rc-service
+              test -x /sbin/rc-update
+              rc-update add mihomo default
+              rc-update add m-ui default
+              rc-service mihomo start
+              rc-service m-ui start
+              trap "rc-service m-ui stop 2>/dev/null || true; rc-service mihomo stop 2>/dev/null || true" EXIT
+              rc-service mihomo status
+              rc-service m-ui status
+              i=0
+              while ! curl --fail --silent http://127.0.0.1:2095/healthz >/dev/null; do
+                i=$((i + 1))
+                test "$i" -lt 30
+                sleep 1
+              done
               su-exec m-ui /usr/bin/m-ui doctor \
                 --config /etc/m-ui/config.toml
               su-exec m-ui /usr/bin/m-ui core bootstrap \
@@ -314,6 +322,8 @@ jobs:
                 --json --config /etc/m-ui/config.toml | grep "\"channel\": \"alpha\""
               printf "%s\n" preserve > /var/lib/m-ui/package-test-marker
               apk add --allow-untrusted --force-broken-world "$package"
+              rc-service mihomo status
+              rc-service m-ui status
               su-exec m-ui /usr/bin/m-ui core status \
                 --json --config /etc/m-ui/config.toml | grep "\"channel\": \"alpha\""
               test -f /var/lib/m-ui/package-test-marker

@@ -330,6 +330,13 @@ func TestManagerFailClosedLatchSurvivesDatabaseMarkFailure(t *testing.T) {
 	if !degraded {
 		t.Fatal("systemDegraded() ignored fail-closed latch")
 	}
+	blocked, err := fixture.manager.SafetyBlocked(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !blocked {
+		t.Fatal("SafetyBlocked() ignored fail-closed latch")
+	}
 }
 
 func TestManagerSettingsUpdateSchedulesAndWakesCoreChecks(t *testing.T) {

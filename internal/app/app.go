@@ -211,6 +211,7 @@ func Run(ctx context.Context, cfg config.Config, build version.Info) error {
 			HealthTimeout:     10 * time.Second,
 			HealthInterval:    250 * time.Millisecond,
 			Coordinator:       coordinator,
+			SafetyGate:        coreManager,
 		},
 	)
 	if err != nil {
@@ -248,8 +249,9 @@ func Run(ctx context.Context, cfg config.Config, build version.Info) error {
 	expiryScheduler, err := scheduler.NewExpiry(
 		configurationPublisher,
 		scheduler.Options{
-			Interval: time.Minute,
-			Logger:   logger,
+			Interval:   time.Minute,
+			Logger:     logger,
+			SafetyGate: coreManager,
 		},
 	)
 	if err != nil {
@@ -266,13 +268,14 @@ func Run(ctx context.Context, cfg config.Config, build version.Info) error {
 		return fmt.Errorf("initialize core update scheduler: %w", err)
 	}
 	coreManager.SetWake(coreScheduler.Wake)
-	if err := startBackgroundServices(
+	if err := startBackgroundServicesWithSafetyGate(
 		ctx,
 		configurationPublisher,
 		managedStore,
 		runtimeMonitor,
 		expiryScheduler,
 		logger,
+		coreManager,
 		coreScheduler,
 	); err != nil {
 		return err
@@ -343,6 +346,32 @@ func startBackgroundServices(
 	logger *slog.Logger,
 	additionalSchedulers ...backgroundRunner,
 ) error {
+	return startBackgroundServicesWithSafetyGate(
+		ctx,
+		reconciler,
+		stateReader,
+		runtimeMonitor,
+		expiryScheduler,
+		logger,
+		nil,
+		additionalSchedulers...,
+	)
+}
+
+type safetyGate interface {
+	SafetyBlocked(context.Context) (bool, error)
+}
+
+func startBackgroundServicesWithSafetyGate(
+	ctx context.Context,
+	reconciler startupReconciler,
+	stateReader systemStateReader,
+	runtimeMonitor backgroundRunner,
+	expiryScheduler backgroundRunner,
+	logger *slog.Logger,
+	gate safetyGate,
+	additionalSchedulers ...backgroundRunner,
+) error {
 	reconcileErr := reconciler.ReconcileStartup(ctx)
 	reconcileDegraded := errors.Is(reconcileErr, publisher.ErrStartupDegraded)
 	if reconcileErr != nil && !reconcileDegraded {
@@ -370,6 +399,18 @@ func startBackgroundServices(
 			"expiry scheduler is disabled while configuration publishing is degraded",
 		)
 		return nil
+	}
+	if gate != nil {
+		blocked, err := gate.SafetyBlocked(ctx)
+		if err != nil {
+			return fmt.Errorf("read fail-closed safety state after startup reconciliation: %w", err)
+		}
+		if blocked {
+			logger.Warn(
+				"expiry scheduler is disabled while the managed core is fail-closed",
+			)
+			return nil
+		}
 	}
 	go expiryScheduler.Run(ctx)
 	for _, runner := range additionalSchedulers {

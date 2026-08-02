@@ -147,6 +147,14 @@ func (manager *Manager) FailClosed() bool {
 	return manager.failClosed.Load()
 }
 
+// SafetyBlocked exposes the same durable and in-memory fail-closed decision
+// used by every core operation.  Configuration publication and background
+// schedulers use this gate as well, so a rollback failure cannot leave another
+// mutating path active when persisting degraded state also failed.
+func (manager *Manager) SafetyBlocked(ctx context.Context) (bool, error) {
+	return manager.systemDegraded(ctx)
+}
+
 func (manager *Manager) systemDegraded(ctx context.Context) (bool, error) {
 	if manager.failClosed.Load() {
 		return true, nil

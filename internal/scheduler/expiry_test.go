@@ -119,6 +119,29 @@ func TestExpiryFailureRollsBackAndRetriesSameBatch(t *testing.T) {
 	}
 }
 
+func TestExpiryBatchStopsBeforeMutationWhenSafetyGateIsBlocked(t *testing.T) {
+	t.Parallel()
+	fixture := newExpiryFixture(t)
+	fixture.scheduler.safetyGate = blockedSafetyGate{}
+
+	if _, err := fixture.scheduler.RunOnce(context.Background()); !errors.Is(err, publisher.ErrDegraded) {
+		t.Fatalf("RunOnce() error = %v, want publisher.ErrDegraded", err)
+	}
+	state, err := fixture.store.ReadDesiredState(context.Background(), fixture.batchTime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !expiryUserByName(t, expiryListenerByID(t, state, "11111111-1111-4111-8111-111111111111"), "expired").Enabled {
+		t.Fatal("blocked expiry scheduler changed managed state")
+	}
+}
+
+type blockedSafetyGate struct{}
+
+func (blockedSafetyGate) SafetyBlocked(context.Context) (bool, error) {
+	return true, nil
+}
+
 type expiryFixture struct {
 	store      *store.ManagedStore
 	scheduler  *Expiry
