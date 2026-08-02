@@ -300,8 +300,19 @@ jobs:
               test -x /sbin/rc-update
               rc-update add mihomo default
               rc-update add m-ui default
-              rc-service mihomo start
-              rc-service m-ui start
+              wait_service() {
+                service="$1"
+                i=0
+                until rc-service "$service" status >/dev/null 2>&1; do
+                  i=$((i + 1))
+                  test "$i" -lt 30
+                  sleep 1
+                done
+              }
+              rc-service mihomo start || true
+              wait_service mihomo
+              rc-service m-ui start || true
+              wait_service m-ui
               trap "rc-service m-ui stop 2>/dev/null || true; rc-service mihomo stop 2>/dev/null || true" EXIT
               rc-service mihomo status
               rc-service m-ui status
