@@ -26,7 +26,7 @@ var (
 	ErrDegraded              = errors.New("configuration publishing is blocked because the system is degraded")
 	ErrCandidateValidation   = errors.New("candidate configuration validation failed")
 	ErrStartupDegraded       = errors.New("startup reconciliation marked the system degraded")
-	ErrMihomoRestartRequired = errors.New("Mihomo restart is required before configuration publication")
+	ErrMihomoRestartRequired = errors.New("mihomo restart is required before configuration publication")
 )
 
 type endpointSettingsReader interface {
@@ -511,7 +511,7 @@ func (publisher *Publisher) validateReloadAndCheckActive(ctx context.Context) er
 		return err
 	}
 	if !active {
-		return errors.New("Mihomo runtime is inactive during startup health recovery")
+		return errors.New("mihomo runtime is inactive during startup health recovery")
 	}
 	if err := publisher.reloadWithFallback(ctx); err != nil {
 		return err
