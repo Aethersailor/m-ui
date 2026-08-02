@@ -527,7 +527,6 @@ jobs:
           PRERELEASE: ${{ needs.validate.outputs.prerelease }}
         run: |
           set -euo pipefail
-          state_dir="$RUNNER_TEMP/m-ui-release-state"
           repository="ghcr.io/${GITHUB_REPOSITORY,,}"
           candidate="release-candidate-${GITHUB_RUN_ID}"
           docker buildx imagetools inspect "${repository}:${candidate}" \
