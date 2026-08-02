@@ -53,6 +53,18 @@ const errorMessage = computed(() => {
   if (formError.value === 'SETUP_ALREADY_COMPLETED') {
     return t('setup.completed')
   }
+  if (formError.value === 'SETUP_AUTHORIZATION_FAILED') {
+    return t('setup.authorizationFailed')
+  }
+  if (formError.value === 'SETUP_RATE_LIMITED') {
+    return t('setup.rateLimited')
+  }
+  if (formError.value === 'SETUP_TRANSPORT_NOT_ALLOWED') {
+    return t('setup.transportNotAllowed')
+  }
+  if (formError.value === 'PASSWORD_POLICY_FAILED') {
+    return t('setup.passwordPolicy')
+  }
   if (formError.value || setup.errorCode) {
     return t('setup.unavailable')
   }
@@ -163,6 +175,7 @@ async function submit() {
               :disabled="loading"
             />
           </NFormItem>
+          <NText depth="3" class="setup-hint">{{ t('setup.usernameHint') }}</NText>
           <NFormItem :label="t('auth.password')" :show-feedback="false">
             <NInput
               v-model:value="password"

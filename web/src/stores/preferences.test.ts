@@ -28,4 +28,13 @@ describe('browser preferences store', () => {
     expect(store.languageMode).toBe('auto')
     expect(store.language).toBe('zh-CN')
   })
+
+  it('does not discard the server default when a public view initializes', () => {
+    const store = usePreferencesStore()
+
+    store.initialize('zh-CN')
+    store.initialize()
+
+    expect(store.language).toBe('zh-CN')
+  })
 })

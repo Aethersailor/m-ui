@@ -19,8 +19,10 @@ export const usePreferencesStore = defineStore('preferences', {
       resolveLanguage(state.languageMode, state.serverLanguageDefault),
   },
   actions: {
-    initialize(serverDefault: LanguageMode = 'auto') {
-      this.serverLanguageDefault = serverDefault
+    initialize(serverDefault?: LanguageMode) {
+      if (serverDefault !== undefined) {
+        this.serverLanguageDefault = serverDefault
+      }
       if (!this.initialized) {
         this.languageMode = readLanguageMode()
         this.initialized = true
