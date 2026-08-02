@@ -49,8 +49,12 @@ only when all of its tags are run-scoped candidate or newly-created failed-
 promotion tags; if a formal tag shares the version, deletion is refused and the
 job summary records the retained candidate tag. The cleanup status and every
 residual tag are therefore explicit and auditable. If the package API does not
-grant the workflow admin access, no deletion is attempted and the summary marks
-cleanup as blocked. The release contains:
+grant the workflow admin access, no package version is deleted and the summary
+marks cleanup as blocked. Before promotion, the workflow also snapshots formal
+tag ownership through the same paginated API and stops without promotion when a
+tag lookup is ambiguous or fails. A failed promotion must verify every formal
+tag restore before any failed-promotion package version deletion is considered.
+The release contains:
 
 ```text
 m-ui_<version>_linux_amd64.tar.gz
