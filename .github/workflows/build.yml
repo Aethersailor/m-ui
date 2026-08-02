@@ -312,16 +312,6 @@ jobs:
                 done
               }
               rc-service mihomo start || true
-              if ! rc-service mihomo status >/dev/null 2>&1; then
-                printf "%s\n" "--- Mihomo OpenRC startup log ---"
-                id mihomo || true
-                ls -ld /var /var/lib /var/lib/m-ui /var/lib/m-ui/core \
-                  /var/lib/m-ui/core/current /var/lib/m-ui/core/current/mihomo || true
-                getcap /var/lib/m-ui/core/current/mihomo || true
-                cat /var/log/mihomo.log || true
-                printf "%s\n" "--- m-ui OpenRC startup log ---"
-                cat /var/log/m-ui.log || true
-              fi
               wait_service mihomo
               rc-service m-ui start || true
               wait_service m-ui

@@ -17,7 +17,7 @@ depend() {
 }
 
 start_pre() {
-    checkpath --directory --owner m-ui:m-ui --mode 0700 /var/lib/m-ui
+    checkpath --directory --owner m-ui:mihomo --mode 2710 /var/lib/m-ui
     checkpath --directory --owner m-ui:m-ui --mode 0750 /run/m-ui
     checkpath --file --owner m-ui:m-ui --mode 0600 /var/log/m-ui.log
 }
