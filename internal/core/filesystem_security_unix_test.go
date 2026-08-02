@@ -3,6 +3,10 @@
 package core
 
 import (
+	"compress/gzip"
+	"crypto/sha256"
+	"encoding/hex"
+	"io"
 	"os"
 	"path/filepath"
 	"syscall"
@@ -59,6 +63,86 @@ func TestFileStoreKeepsCoreExecutableForServiceGroupUnderRestrictiveUmask(t *tes
 	}
 	if got := currentInfo.Mode().Perm(); got != 0o750 {
 		t.Fatalf("active core directory mode = %o, want 750", got)
+	}
+}
+
+func TestFileStoreDownloadedCoreKeepsServiceGroupUnderRestrictiveUmask(t *testing.T) {
+	previous := syscall.Umask(0o077)
+	defer syscall.Umask(previous)
+	root := filepath.Join(t.TempDir(), "core")
+	files, err := NewFileStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := files.Prepare(); err != nil {
+		t.Fatal(err)
+	}
+	stage, archivePath, err := files.CreateDownloadStage()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer files.RemoveStage(stage)
+
+	archiveFile, err := os.Create(archivePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gzipWriter := gzip.NewWriter(archiveFile)
+	if _, err := io.WriteString(gzipWriter, "synthetic-downloaded-core"); err != nil {
+		t.Fatal(err)
+	}
+	if err := gzipWriter.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := archiveFile.Close(); err != nil {
+		t.Fatal(err)
+	}
+	archiveBytes, err := os.ReadFile(archivePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	archiveSum := sha256.Sum256(archiveBytes)
+	identity := ReleaseIdentity{
+		Channel:           ChannelRelease,
+		Repository:        UpstreamRepository,
+		ReleaseID:         1,
+		TagName:           "v1.0.0",
+		PublishedAt:       time.Unix(1, 0).UTC(),
+		AssetID:           1,
+		AssetName:         "mihomo-linux-amd64-compatible-v1.0.0.gz",
+		AssetSize:         int64(len(archiveBytes)),
+		AssetDigestSHA256: hex.EncodeToString(archiveSum[:]),
+	}
+	if _, err := files.FinalizeDownloadedStage(
+		stage,
+		identity,
+		identity.AssetDigestSHA256,
+		"synthetic-downloaded-core",
+		time.Unix(2, 0),
+	); err != nil {
+		t.Fatal(err)
+	}
+	binaryInfo, err := os.Stat(filepath.Join(stage, "mihomo"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	stageInfo, err := os.Stat(stage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	binaryStat, ok := binaryInfo.Sys().(*syscall.Stat_t)
+	if !ok {
+		t.Fatal("downloaded core did not expose unix ownership")
+	}
+	stageStat, ok := stageInfo.Sys().(*syscall.Stat_t)
+	if !ok {
+		t.Fatal("staging directory did not expose unix ownership")
+	}
+	if binaryStat.Gid != stageStat.Gid {
+		t.Fatalf("downloaded core gid = %d, staging gid = %d", binaryStat.Gid, stageStat.Gid)
+	}
+	if got := binaryInfo.Mode().Perm(); got != 0o750 {
+		t.Fatalf("downloaded core mode = %o, want 750", got)
 	}
 }
 

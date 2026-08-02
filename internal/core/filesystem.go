@@ -221,6 +221,9 @@ func (store *FileStore) FinalizeDownloadedStage(
 	if err := os.Chmod(binaryPath, 0o750); err != nil {
 		return Manifest{}, errors.New("set staged core binary permissions")
 	}
+	if err := setCoreGroupFromParent(binaryPath); err != nil {
+		return Manifest{}, errors.New("set staged core binary group")
+	}
 	if err := syncFile(binaryPath); err != nil {
 		return Manifest{}, err
 	}
