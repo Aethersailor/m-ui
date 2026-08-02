@@ -20,7 +20,7 @@ var (
 	ErrDegraded              = errors.New("core updates are disabled while the system is degraded")
 	ErrExternal              = errors.New("external Mihomo core is not managed by m-ui")
 	ErrNoBackup              = errors.New("no previous managed Mihomo core backup is available")
-	ErrMihomoRestartRequired = errors.New("Mihomo restart is required before core mutation")
+	ErrMihomoRestartRequired = errors.New("mihomo restart is required before core mutation")
 )
 
 // EndpointRestartGate is implemented by the durable settings store. Core

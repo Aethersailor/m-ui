@@ -244,13 +244,6 @@ func (boundary *RuntimeBoundary) finalizeLocked(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	active, err := boundary.process.IsActive(ctx)
-	if err != nil {
-		return err
-	}
-	if !active {
-		return errors.New("Mihomo process is not active after service start")
-	}
 	if err := boundary.waitHealthy(ctx); err != nil {
 		return err
 	}
@@ -292,7 +285,7 @@ func (boundary *RuntimeBoundary) waitHealthy(ctx context.Context) error {
 		select {
 		case <-healthContext.Done():
 			timer.Stop()
-			return errors.New("Mihomo did not become healthy after lifecycle action")
+			return errors.New("mihomo did not become healthy after lifecycle action")
 		case <-timer.C:
 		}
 	}

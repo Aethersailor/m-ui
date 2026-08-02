@@ -6,7 +6,9 @@ backup_dir="/var/lib/m-ui-package-backups"
 transaction_dir="/run/m-ui-package"
 snapshot_state="$transaction_dir/package-backup-snapshot"
 
-if [ -e "$backup_dir" ] && [ ! -d "$backup_dir" -o -L "$backup_dir" ]; then
+if [ -e "$backup_dir" ] &&
+    { [ ! -d "$backup_dir" ] || [ -L "$backup_dir" ]; }
+then
     printf '%s\n' "refusing an unsafe package backup directory" >&2
     exit 1
 fi
@@ -14,7 +16,8 @@ install -d -o root -g root -m 0700 "$backup_dir"
 [ "$(stat -c '%u:%g:%a' "$backup_dir" 2>/dev/null)" = "0:0:700" ]
 
 if [ -e "$transaction_dir" ] &&
-    [ ! -d "$transaction_dir" -o -L "$transaction_dir" ]; then
+    { [ ! -d "$transaction_dir" ] || [ -L "$transaction_dir" ]; }
+then
     printf '%s\n' "refusing an unsafe package transaction directory" >&2
     exit 1
 fi

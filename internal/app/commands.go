@@ -375,7 +375,7 @@ func preflightNativeFinalizerCore(
 		}
 		coordinatorRelease()
 		return false, nil, nil, errors.New(
-			"Mihomo lifecycle marker is live without the runtime coordinator",
+			"mihomo lifecycle marker is live without the runtime coordinator",
 		)
 	}
 
@@ -427,7 +427,7 @@ func preflightNativeFinalizerCore(
 			_ = readyRelease()
 		}
 		return false, nil, nil, errors.New(
-			"Mihomo lifecycle marker became live during finalizer preflight",
+			"mihomo lifecycle marker became live during finalizer preflight",
 		)
 	}
 	return false, coordinator, func() {
@@ -679,7 +679,7 @@ func checkPanelHealth(
 	if err != nil {
 		return fmt.Errorf("request panel health endpoint: %w", err)
 	}
-	defer response.Body.Close()
+	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode != http.StatusOK {
 		return fmt.Errorf(
 			"panel health endpoint returned HTTP status %d",

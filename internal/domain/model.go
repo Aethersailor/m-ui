@@ -62,7 +62,7 @@ func SplitLegacyControllerEndpoint(endpoint Endpoint) (Endpoint, Endpoint, error
 		return endpoint, Endpoint{Host: "::1", Port: endpoint.Port}, nil
 	default:
 		return Endpoint{}, Endpoint{}, fmt.Errorf(
-			"legacy controller endpoint host %q cannot be safely migrated; use 127.0.0.1, 0.0.0.0, ::1, or ::",
+			"legacy controller endpoint host %q cannot be safely migrated; use 127.0.0.1, 0.0.0.0, ::1, or the IPv6 wildcard address",
 			endpoint.Host,
 		)
 	}

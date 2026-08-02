@@ -270,17 +270,6 @@ func WaitForRuntimeReadyAt(
 	return guard.Close()
 }
 
-func runtimeReadyLive(leasePath, readyPath string) (bool, error) {
-	guard, live, err := tryAcquireRuntimeReadyGuardAt(leasePath, readyPath)
-	if err != nil {
-		return false, err
-	}
-	if !live {
-		return false, nil
-	}
-	return true, guard.Close()
-}
-
 func tryAcquireRuntimeReadyGuardAt(
 	leasePath string,
 	readyPath string,
@@ -397,7 +386,7 @@ func readRuntimeLockToken(path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	return readRuntimeLockTokenFromFile(file)
 }
 

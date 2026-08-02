@@ -197,10 +197,12 @@ func TestRuntimeActionRestartKeepsPendingAfterHealthFailure(t *testing.T) {
 func TestRuntimeBoundaryFinalizeRequiresHealthyActiveProcess(t *testing.T) {
 	manager, managed, process, controller := newRuntimeEndpointManager(t, true)
 	boundary, err := NewRuntimeBoundary(RuntimeBoundaryOptions{
-		Store:       managed,
-		Controller:  controller,
-		Process:     process,
-		Coordinator: manager.coordinator,
+		Store:          managed,
+		Controller:     controller,
+		Process:        process,
+		Coordinator:    manager.coordinator,
+		HealthTimeout:  100 * time.Millisecond,
+		HealthInterval: 10 * time.Millisecond,
 	})
 	if err != nil {
 		t.Fatal(err)

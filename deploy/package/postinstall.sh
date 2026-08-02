@@ -174,6 +174,7 @@ install -d -o m-ui -g mihomo -m 2710 /var/lib/m-ui/core
 install -d -o m-ui -g mihomo -m 2750 \
     /var/lib/m-ui/core/staging /var/lib/m-ui/core/backups
 install -d -o mihomo -g mihomo -m 0750 /var/lib/mihomo
+install -d -o m-ui -g m-ui -m 0750 /run/m-ui
 
 master_key="/var/lib/m-ui/master.key"
 config_path="/etc/m-ui/config.toml"

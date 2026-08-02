@@ -213,7 +213,7 @@ do
     exit 1
   fi
 done
-if printf '%s\n' "$postinstall_block" | grep -q '\. "\$state_file"'; then
+if printf '%s\n' "$postinstall_block" | grep -qF ". \"\$state_file\""; then
   echo "postinstall sources an upgrade state file" >&2
   exit 1
 fi

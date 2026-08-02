@@ -165,10 +165,6 @@ func redactedOutput(output []byte, sensitiveValues []string) string {
 	return result
 }
 
-func availableTCPPort(t *testing.T) int {
-	return availableTCPPortForHost(t, "127.0.0.1")
-}
-
 func availableTCPPortForHost(t *testing.T, host string) int {
 	t.Helper()
 	network := "tcp4"

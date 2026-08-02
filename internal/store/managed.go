@@ -687,26 +687,6 @@ func (managed *ManagedStore) MihomoRestartRequired(ctx context.Context) (bool, e
 	return state.Pending != nil && state.Pending.RequiresMihomoRestart, nil
 }
 
-func endpointGenerationFromSettings(
-	ctx context.Context,
-	managed *ManagedStore,
-	fallback int64,
-) int64 {
-	var value string
-	if err := managed.store.db.QueryRowContext(
-		ctx,
-		"SELECT value FROM settings WHERE key = ?",
-		settingEndpointGeneration,
-	).Scan(&value); err != nil {
-		return fallback
-	}
-	generation, err := strconv.ParseInt(value, 10, 64)
-	if err != nil || generation < 1 {
-		return fallback
-	}
-	return generation
-}
-
 func (managed *ManagedStore) readLastAppliedEndpointSettings(
 	ctx context.Context,
 ) (EndpointSettings, error) {
