@@ -239,13 +239,15 @@ jobs:
 
       - name: Install verified Syft
         run: |
+          syft_dir="$RUNNER_TEMP/m-ui-syft"
+          mkdir -p "$syft_dir"
           curl --fail --location --proto '=https' --proto-redir '=https' \
-            --output syft.tar.gz \
+            --output "$syft_dir/syft.tar.gz" \
             https://github.com/anchore/syft/releases/download/v1.44.0/syft_1.44.0_linux_amd64.tar.gz
-          echo "0e91737aee2b5baf1d255b959630194a302335d848ff97bb07921eb6205b5f5a  syft.tar.gz" |
+          echo "0e91737aee2b5baf1d255b959630194a302335d848ff97bb07921eb6205b5f5a  $syft_dir/syft.tar.gz" |
             sha256sum --check
-          tar -xzf syft.tar.gz syft
-          sudo install -m 0755 syft /usr/local/bin/syft
+          tar -xzf "$syft_dir/syft.tar.gz" -C "$syft_dir" syft
+          sudo install -m 0755 "$syft_dir/syft" /usr/local/bin/syft
 
       - name: Build release archives, packages, checksums, and SBOMs
         uses: goreleaser/goreleaser-action@4c6ab561adb47e50c45ef534e2155934e91c40c1 # v7.2.0
@@ -333,12 +335,14 @@ jobs:
 
       - name: Install verified native Syft
         run: |
+          syft_dir="$RUNNER_TEMP/m-ui-syft"
+          mkdir -p "$syft_dir"
           curl --fail --location --proto '=https' --proto-redir '=https' \
-            --output syft.tar.gz \
+            --output "$syft_dir/syft.tar.gz" \
             "https://github.com/anchore/syft/releases/download/v1.44.0/syft_1.44.0_linux_${{ matrix.arch }}.tar.gz"
-          echo "${{ matrix.syft_sha }}  syft.tar.gz" | sha256sum --check
-          tar -xzf syft.tar.gz syft
-          sudo install -m 0755 syft /usr/local/bin/syft
+          echo "${{ matrix.syft_sha }}  $syft_dir/syft.tar.gz" | sha256sum --check
+          tar -xzf "$syft_dir/syft.tar.gz" -C "$syft_dir" syft
+          sudo install -m 0755 "$syft_dir/syft" /usr/local/bin/syft
 
       - name: Build and smoke-test native image
         env:
