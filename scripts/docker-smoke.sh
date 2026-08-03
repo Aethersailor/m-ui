@@ -4,6 +4,15 @@ set -euo pipefail
 
 image="${1:?usage: docker-smoke.sh IMAGE}"
 name="m-ui-smoke-${RANDOM}-${RANDOM}"
+if [[ "$EUID" -eq 0 ]]; then
+  root_command=()
+else
+  command -v sudo >/dev/null 2>&1 || {
+    echo "docker-smoke.sh requires root or sudo" >&2
+    exit 1
+  }
+  root_command=(sudo)
+fi
 data_directory="$(mktemp -d /opt/m-ui-smoke.XXXXXX)"
 unsafe_directory="$(mktemp -d /opt/m-ui-smoke-unsafe.XXXXXX)"
 unsafe_target="$(mktemp -d /opt/m-ui-smoke-target.XXXXXX)"
@@ -13,8 +22,8 @@ ln -s "$unsafe_target" "$unsafe_directory/etc/m-ui"
 
 cleanup() {
   docker rm -f "$name" >/dev/null 2>&1 || true
-  rm -rf "$data_directory"
-  rm -rf "$unsafe_directory" "$unsafe_target"
+  "${root_command[@]}" rm -rf -- \
+    "$data_directory" "$unsafe_directory" "$unsafe_target"
 }
 trap cleanup EXIT
 
