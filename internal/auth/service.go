@@ -39,12 +39,10 @@ type Repository interface {
 		context.Context,
 		string,
 		string,
-		string,
 		time.Time,
 	) (store.Admin, bool, error)
 	ResetAdminPasswordWithAudit(
 		context.Context,
-		string,
 		string,
 		string,
 		time.Time,
@@ -157,10 +155,6 @@ func (s *Service) ResetPassword(
 	if err != nil {
 		return store.Admin{}, false, err
 	}
-	id, err := newOpaqueID(s.random)
-	if err != nil {
-		return store.Admin{}, false, err
-	}
 	now := s.clock().UTC()
 	auditID, err := newOpaqueID(s.random)
 	if err != nil {
@@ -168,7 +162,6 @@ func (s *Service) ResetPassword(
 	}
 	admin, created, err := s.repository.ResetAdminPasswordWithAudit(
 		ctx,
-		id,
 		username,
 		passwordHash,
 		now,

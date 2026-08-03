@@ -394,7 +394,11 @@ func TestBootstrapCompletionProcessHelper(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer database.Close()
+	defer func() {
+		if err := database.Close(); err != nil {
+			t.Errorf("close bootstrap process helper database: %v", err)
+		}
+	}()
 	if err := os.WriteFile(readyPath, []byte("ready\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}

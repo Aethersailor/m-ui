@@ -92,12 +92,11 @@ func scanAdmin(row *sql.Row) (Admin, error) {
 // creation is intentionally handled only by CompleteBootstrap.
 func (s *Store) ResetAdminPassword(
 	ctx context.Context,
-	id string,
 	username string,
 	passwordHash string,
 	now time.Time,
 ) (Admin, bool, error) {
-	return s.resetAdminPassword(ctx, id, username, passwordHash, now, nil)
+	return s.resetAdminPassword(ctx, username, passwordHash, now, nil)
 }
 
 // ResetAdminPasswordWithAudit updates the existing administrator, revokes all
@@ -105,18 +104,16 @@ func (s *Store) ResetAdminPassword(
 // first administrator is never created by this recovery primitive.
 func (s *Store) ResetAdminPasswordWithAudit(
 	ctx context.Context,
-	id string,
 	username string,
 	passwordHash string,
 	now time.Time,
 	audit AuditEntry,
 ) (Admin, bool, error) {
-	return s.resetAdminPassword(ctx, id, username, passwordHash, now, &audit)
+	return s.resetAdminPassword(ctx, username, passwordHash, now, &audit)
 }
 
 func (s *Store) resetAdminPassword(
 	ctx context.Context,
-	id string,
 	username string,
 	passwordHash string,
 	now time.Time,
@@ -155,12 +152,10 @@ func (s *Store) resetAdminPassword(
 	); err != nil {
 		return Admin{}, false, fmt.Errorf("update administrator password: %w", err)
 	}
-	id = existingID
-
 	if _, err := transaction.ExecContext(
 		ctx,
 		"DELETE FROM sessions WHERE admin_user_id = ?",
-		id,
+		existingID,
 	); err != nil {
 		return Admin{}, false, fmt.Errorf("revoke administrator sessions: %w", err)
 	}
@@ -190,7 +185,7 @@ func (s *Store) resetAdminPassword(
 	if err := transaction.Commit(); err != nil {
 		return Admin{}, false, fmt.Errorf("commit administrator reset: %w", err)
 	}
-	admin, err := s.AdminByID(ctx, id)
+	admin, err := s.AdminByID(ctx, existingID)
 	return admin, false, err
 }
 

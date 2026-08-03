@@ -63,7 +63,7 @@ done
   echo "target must be an absolute path other than /" >&2
   exit 1
 }
-script_dir="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+script_dir="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
 bash "$script_dir/prepare-data-root.sh" --check "$target"
 if [[ -L "$target" ]]; then
   echo "target must not be a symbolic link" >&2

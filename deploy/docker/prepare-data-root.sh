@@ -80,8 +80,8 @@ check_component() {
     if [ -d "$path" ]; then
         mode="$(stat -c '%a' "$path")"
         group="${mode%?}"
-        group="${group#${group%?}}"
-        other="${mode#${mode%?}}"
+        group="${group#"${group%?}"}"
+        other="${mode#"${mode%?}"}"
         case "$group$other" in
             *[2367]*) fail "$path is writable by group or other users" ;;
         esac

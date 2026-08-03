@@ -119,7 +119,6 @@ func TestResetPasswordRevokesSessions(t *testing.T) {
 
 	updated, created, err := store.ResetAdminPassword(
 		ctx,
-		"ignored-new-id",
 		"admin",
 		"second-hash",
 		now.Add(time.Minute),
