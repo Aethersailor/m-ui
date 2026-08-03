@@ -96,11 +96,11 @@ jobs:
           VERSION_MODE="${VERSION_MODE:-auto}"
           PRERELEASE="${PRERELEASE:-false}"
           if [ "$EVENT_NAME" != workflow_dispatch ]; then
-            MODE=test
+            MODE="test"
             TARGET_REF="$GITHUB_SHA"
-            VERSION_MODE=auto
+            VERSION_MODE="auto"
             VERSION_INPUT=
-            PRERELEASE=false
+            PRERELEASE="false"
           fi
           case "$MODE" in
             test|build|release) ;;
@@ -127,7 +127,7 @@ jobs:
           latest="$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' |
             awk '/^v[0-9]+\.[0-9]+\.[0-9]+$/' |
             sort -V | tail -n 1)"
-          [ -n "$latest" ] || latest=v0.0.0
+          [ -n "$latest" ] || latest="v0.0.0"
           if [ "$VERSION_MODE" = explicit ]; then
             test -n "$VERSION_INPUT"
             VERSION="$(normalize_version "$VERSION_INPUT")"
@@ -139,7 +139,7 @@ jobs:
             minor=$((10#$minor))
             patch=$((10#$patch))
             bump="$VERSION_MODE"
-            [ "$bump" != auto ] || bump=patch
+            [ "$bump" != auto ] || bump="patch"
             case "$bump" in
               patch) patch=$((patch + 1)) ;;
               minor) minor=$((minor + 1)); patch=0 ;;
