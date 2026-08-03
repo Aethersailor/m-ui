@@ -30,7 +30,7 @@ Every run resolves one strict base tag `vX.Y.Z` and the exact target commit.
 The complete product version is:
 
 ```text
-vX.Y.Z-g<12-character-commit-id>
+vX.Y.Z.g<12-character-commit-id>
 ```
 
 For non-release runs, `auto` uses the latest strict semantic-version tag. For
