@@ -79,7 +79,7 @@ then
   echo "container accepted a symbolic-link persistence subtree" >&2
   exit 1
 fi
-[[ -z "$(find "$unsafe_target" -mindepth 1 -print -quit)" ]]
+[[ -z "$("${root_command[@]}" find "$unsafe_target" -mindepth 1 -print -quit)" ]]
 
 docker_root run -d --name "$name" \
   --cap-drop ALL --cap-add NET_BIND_SERVICE \
@@ -119,6 +119,10 @@ docker_root exec "$name" sh -c '
     test "$(awk "/^Uid:/{print \$2}" /proc/$pid/status)" = 10001
   done
 '
+docker_root exec "$name" grep -Fq \
+  'database_path = "/data/var/lib/m-ui/m-ui.db"' /data/etc/m-ui/config.toml
+docker_root exec "$name" grep -Fq \
+  'config_path = "/data/etc/mihomo/config.yaml"' /data/etc/m-ui/config.toml
 for path in \
   etc/m-ui/config.toml \
   etc/mihomo/config.yaml \

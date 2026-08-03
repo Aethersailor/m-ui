@@ -5,10 +5,11 @@ set -eu
 umask 077
 
 data_root=/data
-config_path=/etc/m-ui/config.toml
-master_key=/var/lib/m-ui/master.key
-database_path=/var/lib/m-ui/m-ui.db
-current_core=/var/lib/m-ui/core/current/mihomo
+config_path=/data/etc/m-ui/config.toml
+master_key=/data/var/lib/m-ui/master.key
+database_path=/data/var/lib/m-ui/m-ui.db
+current_core=/data/var/lib/m-ui/core/current/mihomo
+mihomo_config=/data/etc/mihomo/config.yaml
 
 fail() {
     echo "m-ui container startup: $*" >&2
@@ -92,8 +93,8 @@ level = "info"
 format = "json"
 
 [storage]
-database_path = "/var/lib/m-ui/m-ui.db"
-master_key_path = "/var/lib/m-ui/master.key"
+database_path = "/data/var/lib/m-ui/m-ui.db"
+master_key_path = "/data/var/lib/m-ui/master.key"
 
 [security]
 session_ttl = "12h"
@@ -105,26 +106,38 @@ ui_language = "auto"
 public_host = "localhost"
 
 [mihomo]
-binary_path = "/var/lib/m-ui/core/current/mihomo"
+binary_path = "/data/var/lib/m-ui/core/current/mihomo"
 managed_core = true
 process_mode = "managed"
-config_directory = "/etc/mihomo"
-config_path = "/etc/mihomo/config.yaml"
+config_directory = "/data/etc/mihomo"
+config_path = "/data/etc/mihomo/config.yaml"
 external_controller_address = "127.0.0.1:9090"
 controller_connect_address = "127.0.0.1:9090"
 external_controller_cors_origins = []
 controller_secret = "$controller_secret"
 service_name = "mihomo.service"
-revision_directory = "/var/lib/m-ui/revisions"
+revision_directory = "/data/var/lib/m-ui/revisions"
 history_limit = 20
 EOF
     chmod 0600 "$config_path"
 fi
 
-if [ ! -f /etc/mihomo/config.yaml ]; then
+temporary_config="${config_path}.tmp"
+sed \
+    -e 's|database_path = "/var/lib/m-ui/m-ui.db"|database_path = "/data/var/lib/m-ui/m-ui.db"|' \
+    -e 's|master_key_path = "/var/lib/m-ui/master.key"|master_key_path = "/data/var/lib/m-ui/master.key"|' \
+    -e 's|binary_path = "/var/lib/m-ui/core/current/mihomo"|binary_path = "/data/var/lib/m-ui/core/current/mihomo"|' \
+    -e 's|config_directory = "/etc/mihomo"|config_directory = "/data/etc/mihomo"|' \
+    -e 's|config_path = "/etc/mihomo/config.yaml"|config_path = "/data/etc/mihomo/config.yaml"|' \
+    -e 's|revision_directory = "/var/lib/m-ui/revisions"|revision_directory = "/data/var/lib/m-ui/revisions"|' \
+    "$config_path" >"$temporary_config"
+chmod 0600 "$temporary_config"
+mv "$temporary_config" "$config_path"
+
+if [ ! -f "$mihomo_config" ]; then
     controller_secret="$(sed -n \
         's/^controller_secret = "\(.*\)"$/\1/p' "$config_path")"
-    cat >/etc/mihomo/config.yaml <<EOF
+    cat >"$mihomo_config" <<EOF
 mode: rule
 log-level: info
 ipv6: true
@@ -134,7 +147,7 @@ listeners: []
 rules:
   - MATCH,DIRECT
 EOF
-    chmod 0600 /etc/mihomo/config.yaml
+    chmod 0600 "$mihomo_config"
 fi
 
 if [ ! -x "$current_core" ]; then
@@ -147,7 +160,6 @@ if [ ! -x "$current_core" ]; then
         --check-interval 24h
 fi
 
-temporary_config="${config_path}.tmp"
 sed 's/^controller_secret = ".*"$/controller_secret = ""/' \
     "$config_path" >"$temporary_config"
 chmod 0600 "$temporary_config"
