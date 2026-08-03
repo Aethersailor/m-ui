@@ -79,32 +79,16 @@ m-ui 的正式 Release 同时提供原生安装包、压缩包和多架构容器
 
 适用于 Debian、Ubuntu 和 Alpine。安装器会自动识别系统与架构，并选择 `.deb`、`.apk` 或 `.tar.gz` 产物。
 
-#### 1. 下载并校验安装器
+#### 快速安装
 
 ```sh
-mkdir -p ~/m-ui-install
-cd ~/m-ui-install
-
-curl --fail --location \
-  --proto '=https' --proto-redir '=https' \
-  -O https://github.com/Aethersailor/m-ui/releases/latest/download/manage.sh
-
-curl --fail --location \
-  --proto '=https' --proto-redir '=https' \
-  -O https://github.com/Aethersailor/m-ui/releases/latest/download/SHA256SUMS
-
-grep ' manage.sh$' SHA256SUMS | sha256sum --check
-chmod 0755 manage.sh
+curl -fsSL https://github.com/Aethersailor/m-ui/releases/latest/download/install.sh | sudo sh
 ```
 
-只有在校验结果显示 `manage.sh: OK` 后再继续安装。
-
-#### 2. 安装最新稳定版本
+安装脚本会自动下载并校验正式 Release，然后安装最新稳定版本。需要固定版本时：
 
 ```sh
-sudo ./manage.sh install \
-  --version latest \
-  --package auto
+curl -fsSL https://github.com/Aethersailor/m-ui/releases/latest/download/install.sh | sudo sh -s -- --version vX.Y.Z
 ```
 
 安装器将自动完成：
@@ -116,18 +100,14 @@ sudo ./manage.sh install \
 - 启动 m-ui 与 Mihomo；
 - 执行服务、Controller 和配置健康检查。
 
-全新安装不会生成、打印或要求任何管理员密码。管理员账号和密码在
-Web 页面中首次设置；CLI 只负责显示一次性 setup link：
-
-```sh
-sudo m-ui admin setup-link --config /etc/m-ui/config.toml
-```
+全新安装不会生成、打印或要求管理员密码。安装完成后终端会直接显示一次性
+setup link；打开它，在 Web 页面中创建管理员账号和密码即可。
 
 该链接的能力位于 URL fragment 中，不会进入 HTTP 请求、访问日志或
 Referer。首次设置推荐使用 SSH 隧道；`m-ui admin reset-password` 仅用于
 已有管理员的本机恢复，不能创建首个管理员。
 
-#### 3. 访问面板
+#### 访问面板
 
 推荐通过 SSH 隧道首次访问：
 
@@ -141,10 +121,10 @@ ssh -L 2095:127.0.0.1:2095 user@server
 http://127.0.0.1:2095/
 ```
 
-请先打开 `m-ui admin setup-link` 输出的 `/setup#token=...` 链接，在页面中
+请打开安装器输出的 `/setup#token=...` 链接，在页面中
 创建管理员。首次设置完成后，页面会自动进入面板。
 
-使用安装时生成的 `admin` 账号登录。
+使用刚刚在首次设置页面中创建的管理员账号登录。
 
 长期使用域名访问时，应配置独立的 HTTPS 反向代理，并保持 m-ui 继续监听回环地址。具体示例见：
 
@@ -169,33 +149,34 @@ sudo systemctl restart m-ui
 > [!WARNING]
 > 不要直接将管理面板暴露到公网，也不要反向代理或公开 Mihomo Controller 的 `9090` 端口。
 
-#### 4. 常用管理命令
+#### 常用管理命令
 
-安装后可直接使用系统内置的管理脚本：
+安装后不需要记住 `/usr/lib/m-ui/manage.sh` 路径，直接使用 `m-ui`：
 
 ```sh
 # 查看版本、目录和服务状态
-sudo /usr/lib/m-ui/manage.sh status
+m-ui status
 
 # 执行完整诊断
-sudo /usr/lib/m-ui/manage.sh doctor
+sudo m-ui doctor
 
 # 更新到最新稳定版本
-sudo /usr/lib/m-ui/manage.sh update --version latest
+sudo m-ui update
 
 # 重新安装程序并保留数据
-sudo /usr/lib/m-ui/manage.sh reinstall --version latest
+sudo m-ui reinstall
 
 # 删除程序和服务，保留配置与数据
-sudo /usr/lib/m-ui/manage.sh uninstall
+sudo m-ui uninstall
 
 # 删除程序、配置、数据库、密钥、Revision 和核心
-sudo /usr/lib/m-ui/manage.sh purge
+sudo m-ui purge
 ```
 
-`uninstall` 会保留已有数据；只有 `purge` 才会删除全部托管内容。
+`status`、`update`、`reinstall`、`uninstall` 和 `purge` 会安全转交给已安装的生命周期脚本；
+`uninstall` 会保留已有数据，只有 `purge` 才会删除全部托管内容。
 
-#### 5. 文件与数据位置
+#### 文件与数据位置
 
 | 路径 | 内容 |
 |---|---|
@@ -218,51 +199,24 @@ ghcr.io/aethersailor/m-ui
 
 容器以 UID/GID `10001:10001` 非 root 身份运行，内部直接监督 Mihomo，不运行 systemd 或 OpenRC。
 
-#### 1. 准备部署目录
+#### 快速部署
+
+确认 Docker Engine 与 Docker Compose v2 已安装后，只需三步：
 
 ```sh
-sudo install -d -m 0700 /opt/m-ui
-cd /opt/m-ui
-
-sudo curl --fail --location \
-  --proto '=https' --proto-redir '=https' \
-  -o compose.yml \
-  https://raw.githubusercontent.com/Aethersailor/m-ui/master/deploy/docker/compose.yml
-```
-
-#### 2. 选择镜像版本
-
-使用最新稳定版本：
-
-```sh
-printf '%s\n' 'M_UI_IMAGE_TAG=latest' | sudo tee .env >/dev/null
-```
-
-生产环境建议在确认版本后固定为不可变的正式版本标签：
-
-```env
-M_UI_IMAGE_TAG=vX.Y.Z
-```
-
-`edge` 对应当前 `master` 分支的开发快照，不建议用于正式环境。
-
-#### 3. 选择持久化目录
-
-Compose 默认只需要一个持久化根目录 `/opt/m-ui`，也可以通过 `.env` 中的
-`M_UI_DATA_DIR` 指定其他绝对路径。启动 Compose 前执行一次目录准备命令；
-它会校验路径组件、拒绝符号链接和宽泛系统目录，并创建四个与程序内部
-路径对应的子目录。不需要创建密码文件或 Docker Secret。
-
-```sh
-sudo sh deploy/docker/prepare-data-root.sh "${M_UI_DATA_DIR:-/opt/m-ui}"
-```
-
-#### 4. 启动服务
-
-```sh
+sudo mkdir -p /opt/m-ui && cd /opt/m-ui
+sudo curl -fsSLo compose.yml https://raw.githubusercontent.com/Aethersailor/m-ui/master/deploy/docker/compose.yml
 sudo docker compose up -d
-sudo docker compose ps
 ```
+
+Compose 只会自动创建四个固定子目录；一次性、无网络 `data-init` 服务会在
+主服务启动前校验路径并设置权限。长期运行的 m-ui/Mihomo 始终使用 UID/GID
+`10001:10001`。整个部署只持久化 `/opt/m-ui`，不需要 `.env`、密码文件、
+Docker Secret 或额外准备脚本。
+
+如需其他持久化目录，在启动命令前设置 `M_UI_DATA_DIR=/srv/m-ui`；该目录必须
+预先存在。正式 Release 的 Compose 会固定对应版本镜像；`master` 中的 Compose
+默认跟随通过快照构建验证的 `edge` 镜像。
 
 查看健康状态：
 
@@ -275,10 +229,10 @@ sudo docker inspect \
 查看日志：
 
 ```sh
-sudo docker compose logs --tail=100 -f m-ui
+sudo docker compose -f /opt/m-ui/compose.yml logs --tail=100 -f m-ui
 ```
 
-#### 5. 访问面板
+#### 访问面板
 
 Docker Compose 使用 host network，但 m-ui 仍默认只监听宿主机回环地址：
 
@@ -294,23 +248,25 @@ ssh -L 2095:127.0.0.1:2095 user@server
 
 然后运行 setup link 命令并打开它：
 
-```text
-http://127.0.0.1:2095/setup#token=...
+```sh
+sudo docker compose -f /opt/m-ui/compose.yml exec m-ui m-ui admin setup-link
 ```
+
+在本地浏览器打开命令输出的 `/setup#token=...` 链接，在 Web 页面中创建管理员。
 
 > [!WARNING]
 > Compose 使用 `network_mode: host`，以便面板动态创建的 Mihomo Listener 直接绑定宿主机端口。
 >
 > 这意味着 Docker 不会为这些端口提供独立的端口映射和隔离，必须自行配置宿主机防火墙。
 
-#### 6. 更新容器
+#### 更新与数据
 
-更新 `.env` 中的镜像标签后执行：
+更新到最新通过快照构建的 `edge` 版本：
 
 ```sh
+cd /opt/m-ui
 sudo docker compose pull
 sudo docker compose up -d
-sudo docker compose ps
 ```
 
 容器重建不会覆盖已有数据库、主密钥、配置、Revision 或托管核心。
@@ -319,11 +275,9 @@ sudo docker compose ps
 `deploy/docker/README.md` 使用 `deploy/docker/migrate-volumes.sh` 显式迁移。
 迁移拒绝非空目标目录，不删除源 volume，也不会自动覆盖已有数据。
 
-#### 7. 持久化数据
-
 Compose 使用一个宿主持久化根目录中的四个固定 bind mount：
 
-| Volume | 容器路径 | 内容 |
+| 宿主目录 | 容器路径 | 内容 |
 |---|---|---|
 | `etc/m-ui` | `/etc/m-ui` | m-ui 配置 |
 | `etc/mihomo` | `/etc/mihomo` | Mihomo 配置 |
@@ -333,17 +287,15 @@ Compose 使用一个宿主持久化根目录中的四个固定 bind mount：
 停止并删除容器：
 
 ```sh
-sudo docker compose down
+sudo docker compose -f /opt/m-ui/compose.yml down
 ```
 
-该命令默认保留命名卷。
+该命令保留 `/opt/m-ui` 中的持久化数据。
 
 > [!CAUTION]
-> 除非已经完成备份并确认需要永久清除全部数据，否则不要执行：
->
-> ```sh
-> docker compose down --volumes
-> ```
+> `docker compose down`（包括带 `--volumes`）不会删除 bind mount 对应的
+> `/opt/m-ui` 宿主目录。只有在完成备份并再次确认路径后，才手动删除整个
+> 持久化根目录；不要把它与 Compose 的容器删除混为一谈。
 
 更多 Docker 运维说明见 [Docker 部署文档](deploy/docker/README.md)。
 

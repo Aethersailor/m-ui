@@ -18,14 +18,12 @@ import { useI18n } from 'vue-i18n'
 import { useAuthStore } from '@/stores/auth'
 import { useManagementStore } from '@/stores/management'
 import { usePreferencesStore } from '@/stores/preferences'
-import { useThemeStore } from '@/stores/theme'
 
 const route = useRoute()
 const router = useRouter()
 const auth = useAuthStore()
 const management = useManagementStore()
 const preferences = usePreferencesStore()
-const theme = useThemeStore()
 const { t } = useI18n()
 const drawerOpen = ref(false)
 const collapsed = ref(false)
@@ -60,7 +58,6 @@ function menuLink(key: string, routeName: string, label: string): MenuOption {
 }
 
 onMounted(async () => {
-  theme.initialize()
   try {
     await management.loadShellSettings()
     if (management.settings) {
@@ -135,14 +132,6 @@ async function signOut() {
           ☰
         </NButton>
         <div class="topbar-spacer" />
-        <NButton
-          quaternary
-          circle
-          :aria-label="t('theme.toggle')"
-          @click="theme.cycle"
-        >
-          {{ theme.dark ? '☀' : '◐' }}
-        </NButton>
         <NButton text @click="signOut">{{ t('auth.signOut') }}</NButton>
       </header>
       <NLayoutContent class="workspace">

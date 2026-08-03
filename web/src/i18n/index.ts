@@ -83,7 +83,10 @@ const zhCN = {
     auto: '跟随系统',
     light: '浅色',
     dark: '深色',
-    toggle: '切换主题',
+  },
+  appearance: {
+    title: '界面外观',
+    description: '语言与主题选择只保存在当前浏览器，可随时切换。',
   },
   dashboard: {
     title: '运行概览',
@@ -362,7 +365,10 @@ const enUS: typeof zhCN = {
     auto: 'Use system',
     light: 'Light',
     dark: 'Dark',
-    toggle: 'Toggle theme',
+  },
+  appearance: {
+    title: 'Appearance',
+    description: 'Language and theme choices are stored only in this browser.',
   },
   dashboard: {
     title: 'Runtime overview',

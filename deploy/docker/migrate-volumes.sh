@@ -2,6 +2,11 @@
 
 set -euo pipefail
 
+if [[ "$EUID" -ne 0 ]]; then
+  echo "migrate-volumes.sh must run as root (invoke it with sudo)" >&2
+  exit 1
+fi
+
 usage() {
   cat <<'EOF'
 Usage: migrate-volumes.sh --source-project PROJECT --target /opt/m-ui [--image IMAGE] [--dry-run] [--yes]

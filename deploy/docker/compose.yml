@@ -1,6 +1,6 @@
 services:
   data-init:
-    image: ghcr.io/aethersailor/m-ui:${M_UI_IMAGE_TAG:-edge}
+    image: "${M_UI_IMAGE:-ghcr.io/aethersailor/m-ui}:${M_UI_IMAGE_TAG:-edge}"
     container_name: m-ui-data-init
     user: "0:0"
     restart: "no"
@@ -19,28 +19,13 @@ services:
       disable: true
     volumes:
       - type: bind
-        source: "${M_UI_DATA_DIR:-/opt/m-ui}/etc/m-ui"
-        target: /etc/m-ui
-        bind:
-          create_host_path: false
-      - type: bind
-        source: "${M_UI_DATA_DIR:-/opt/m-ui}/etc/mihomo"
-        target: /etc/mihomo
-        bind:
-          create_host_path: false
-      - type: bind
-        source: "${M_UI_DATA_DIR:-/opt/m-ui}/var/lib/m-ui"
-        target: /var/lib/m-ui
-        bind:
-          create_host_path: false
-      - type: bind
-        source: "${M_UI_DATA_DIR:-/opt/m-ui}/var/lib/mihomo"
-        target: /var/lib/mihomo
+        source: "${M_UI_DATA_DIR:-/opt/m-ui}"
+        target: /data
         bind:
           create_host_path: false
 
   m-ui:
-    image: ghcr.io/aethersailor/m-ui:${M_UI_IMAGE_TAG:-edge}
+    image: "${M_UI_IMAGE:-ghcr.io/aethersailor/m-ui}:${M_UI_IMAGE_TAG:-edge}"
     container_name: m-ui
     restart: unless-stopped
     depends_on:
@@ -63,21 +48,21 @@ services:
         source: "${M_UI_DATA_DIR:-/opt/m-ui}/etc/m-ui"
         target: /etc/m-ui
         bind:
-          create_host_path: false
+          create_host_path: true
       - type: bind
         source: "${M_UI_DATA_DIR:-/opt/m-ui}/etc/mihomo"
         target: /etc/mihomo
         bind:
-          create_host_path: false
+          create_host_path: true
       - type: bind
         source: "${M_UI_DATA_DIR:-/opt/m-ui}/var/lib/m-ui"
         target: /var/lib/m-ui
         bind:
-          create_host_path: false
+          create_host_path: true
       - type: bind
         source: "${M_UI_DATA_DIR:-/opt/m-ui}/var/lib/mihomo"
         target: /var/lib/mihomo
         bind:
-          create_host_path: false
+          create_host_path: true
     tmpfs:
       - /tmp:mode=1777

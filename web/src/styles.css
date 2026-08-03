@@ -574,22 +574,25 @@ code,
     var(--mui-bg);
 }
 
-.login-toolbar {
-  position: absolute;
-  z-index: 3;
-  top: 24px;
-  right: 28px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
+.appearance-preferences {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
 }
 
-.language-select {
-  width: 120px;
+.appearance-preferences.compact {
+  gap: 10px;
 }
 
-.theme-select {
-  width: 112px;
+.appearance-field {
+  display: grid;
+  gap: 7px;
+}
+
+.login-appearance {
+  margin-top: 22px;
+  padding-top: 20px;
+  border-top: 1px solid var(--mui-border);
 }
 
 .login-shell {
@@ -776,13 +779,12 @@ code,
     padding: 7px 0;
   }
 
-  .login-toolbar {
-    top: 16px;
-    right: 16px;
+  .login-page {
+    padding-top: 36px;
   }
 
-  .login-page {
-    padding-top: 88px;
+  .appearance-preferences {
+    grid-template-columns: 1fr;
   }
 
   .login-card .n-card__content {

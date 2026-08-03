@@ -256,9 +256,18 @@ jobs:
           version: v2.17.1
           args: release --clean --skip=publish
 
-      - name: Add verified lifecycle scripts and regenerate checksums
+      - name: Add lifecycle scripts and pinned Compose definition
+        env:
+          VERSION: ${{ needs.validate.outputs.version }}
         run: |
           cp scripts/manage.sh scripts/install.sh scripts/uninstall.sh dist/
+          sed "s/M_UI_IMAGE_TAG:-edge/M_UI_IMAGE_TAG:-${VERSION}/g" \
+            deploy/docker/compose.yml >dist/compose.yml
+          grep -q "M_UI_IMAGE_TAG:-${VERSION}" dist/compose.yml
+          if grep -q 'M_UI_IMAGE_TAG:-edge' dist/compose.yml; then
+            echo "formal Release Compose still references edge" >&2
+            exit 1
+          fi
           cp packaging/bootstrap/identity.json \
             dist/MIHOMO_BOOTSTRAP_IDENTITY.json
           (
@@ -267,6 +276,7 @@ jobs:
               \( -name '*.tar.gz' -o -name '*.deb' -o -name '*.apk' \
                  -o -name '*.sbom.spdx.json' -o -name 'manage.sh' \
                  -o -name 'install.sh' -o -name 'uninstall.sh' \
+                 -o -name 'compose.yml' \
                  -o -name 'MIHOMO_BOOTSTRAP_IDENTITY.json' \) \
               -printf '%f\n' | sort |
               xargs sha256sum >SHA256SUMS
@@ -278,6 +288,7 @@ jobs:
           test "$(find dist -maxdepth 1 -name '*.deb' | wc -l)" -eq 2
           test "$(find dist -maxdepth 1 -name '*.apk' | wc -l)" -eq 2
           test -s dist/SHA256SUMS
+          test -s dist/compose.yml
           test "$(find dist -maxdepth 1 -name '*.sbom.spdx.json' | wc -l)" -ge 6
           (
             cd dist
@@ -297,6 +308,7 @@ jobs:
             dist/manage.sh
             dist/install.sh
             dist/uninstall.sh
+            dist/compose.yml
             dist/MIHOMO_BOOTSTRAP_IDENTITY.json
           if-no-files-found: error
           retention-days: 7
@@ -355,6 +367,7 @@ jobs:
             --build-arg CREATED="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             --tag "$IMAGE" .
           bash scripts/docker-smoke.sh "$IMAGE"
+          bash scripts/docker-compose-smoke.sh "$IMAGE"
           syft "$IMAGE" \
             -o spdx-json=m-ui-image-${{ matrix.arch }}.sbom.spdx.json
           docker save "$IMAGE" | gzip -1 >m-ui-image-${{ matrix.arch }}.tar.gz
@@ -419,10 +432,11 @@ jobs:
               fi
               test -x /usr/bin/m-ui
               test -x /var/lib/m-ui/core/current/mihomo
+              m-ui status
               $run_core /usr/bin/m-ui core status \
                 --json --config /etc/m-ui/config.toml
               printf "%s\n" preserve > /var/lib/m-ui/package-test-marker
-              /usr/lib/m-ui/manage.sh uninstall
+              m-ui uninstall
               test ! -e /usr/bin/m-ui
               test -f /var/lib/m-ui/package-test-marker
               if [ "$FORMAT" = deb ]; then
@@ -430,6 +444,7 @@ jobs:
               else
                 apk add --allow-untrusted "$package"
               fi
+              m-ui status
               test -f /var/lib/m-ui/package-test-marker
             '
 
@@ -563,6 +578,7 @@ jobs:
             release/manage.sh
             release/install.sh
             release/uninstall.sh
+            release/compose.yml
             release/IMAGE_MANIFEST.json
             release/m-ui-image-*.sbom.spdx.json
             release/MIHOMO_BOOTSTRAP_IDENTITY.json

@@ -43,11 +43,11 @@ import {
   type CoreStatus,
 } from '@/api/management'
 import AppShell from '@/components/AppShell.vue'
+import AppearancePreferences from '@/components/AppearancePreferences.vue'
 import PageHeader from '@/components/PageHeader.vue'
 import { useAuthStore } from '@/stores/auth'
 import { useManagementStore } from '@/stores/management'
 import { usePreferencesStore } from '@/stores/preferences'
-import { useThemeStore, type ThemeMode } from '@/stores/theme'
 import type { LanguageMode } from '@/utils/preferences'
 import { errorTranslationKey } from '@/utils/errors'
 import { formatDateTime } from '@/utils/format'
@@ -57,7 +57,6 @@ const router = useRouter()
 const auth = useAuthStore()
 const management = useManagementStore()
 const preferences = usePreferencesStore()
-const theme = useThemeStore()
 const dialog = useDialog()
 const message = useMessage()
 const loading = ref(true)
@@ -94,11 +93,6 @@ const languageOptions = computed(() => [
   { label: t('language.auto'), value: 'auto' as LanguageMode },
   { label: t('language.chinese'), value: 'zh-CN' as LanguageMode },
   { label: t('language.english'), value: 'en-US' as LanguageMode },
-])
-const themeOptions = computed(() => [
-  { label: t('theme.auto'), value: 'auto' },
-  { label: t('theme.light'), value: 'light' },
-  { label: t('theme.dark'), value: 'dark' },
 ])
 const coreChannelOptions = computed(() => [
   { label: t('system.coreRelease'), value: 'release' },
@@ -260,10 +254,6 @@ async function saveEndpointSettings() {
   }
 }
 
-function setTheme(value: ThemeMode) {
-  theme.setMode(value)
-}
-
 function confirmRuntimeAction(
   action: 'start' | 'stop' | 'restart' | 'reload',
 ) {
@@ -372,13 +362,6 @@ async function submitPassword() {
                     :options="languageOptions"
                   />
                 </NFormItem>
-                <NFormItem :label="t('theme.label')">
-                  <NSelect
-                    :value="theme.mode"
-                    :options="themeOptions"
-                    @update:value="setTheme"
-                  />
-                </NFormItem>
                 <NFormItem :label="t('system.publicHost')" required>
                   <NInput v-model:value="settingsForm.public_host" />
                 </NFormItem>
@@ -399,6 +382,15 @@ async function submitPassword() {
                 </NButton>
               </NSpace>
             </NForm>
+
+            <NCard
+              :title="t('appearance.title')"
+              size="small"
+              class="section-gap"
+            >
+              <NText depth="3">{{ t('appearance.description') }}</NText>
+              <AppearancePreferences class="section-gap" />
+            </NCard>
 
             <NCard
               :title="t('system.endpointSettings')"

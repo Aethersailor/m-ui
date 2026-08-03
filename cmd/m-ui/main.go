@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"os/exec"
 	"os/signal"
 	"syscall"
 	"time"
@@ -22,6 +23,8 @@ const usage = `m-ui manages one dedicated Mihomo service.
 Usage:
   m-ui server [--config /etc/m-ui/config.toml]
   m-ui version
+  m-ui status
+  m-ui update|reinstall|uninstall|purge [options]
   m-ui doctor [panel|database] [--config /etc/m-ui/config.toml]
   m-ui admin setup-link [--config /etc/m-ui/config.toml]
   m-ui admin rotate-setup-token [--config /etc/m-ui/config.toml]
@@ -41,6 +44,10 @@ Usage:
 
 const runtimeCommandTimeout = 120 * time.Second
 
+const managementScriptPath = "/usr/lib/m-ui/manage.sh"
+
+var managementCommand = exec.Command
+
 func main() {
 	if err := run(os.Args[1:]); err != nil {
 		slog.Error("m-ui stopped", "error", err)
@@ -52,6 +59,10 @@ func run(args []string) error {
 	if len(args) == 0 {
 		fmt.Fprint(os.Stderr, usage)
 		return errors.New("a command is required")
+	}
+
+	if isManagementCommand(args[0]) {
+		return runManagement(args)
 	}
 
 	switch args[0] {
@@ -77,6 +88,33 @@ func run(args []string) error {
 		fmt.Fprint(os.Stderr, usage)
 		return fmt.Errorf("unknown command %q", args[0])
 	}
+}
+
+func isManagementCommand(command string) bool {
+	switch command {
+	case "status", "update", "reinstall", "uninstall", "purge":
+		return true
+	default:
+		return false
+	}
+}
+
+// runManagement keeps the installed command surface small without giving the
+// shell script control over arbitrary command construction. The script still
+// owns package lifecycle behavior; the Go binary only passes the already
+// parsed argv directly to it.
+func runManagement(args []string) error {
+	if len(args) == 0 {
+		return errors.New("management command is required")
+	}
+	command := managementCommand(managementScriptPath, args...)
+	command.Stdin = os.Stdin
+	command.Stdout = os.Stdout
+	command.Stderr = os.Stderr
+	if err := command.Run(); err != nil {
+		return fmt.Errorf("m-ui %s failed: %w", args[0], err)
+	}
+	return nil
 }
 
 func runRuntime(args []string) error {

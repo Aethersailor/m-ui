@@ -796,8 +796,19 @@ if ! start_services; then
     fail "services failed health checks and previous program files were restored"
 fi
 
+setup_message="Administrator setup is already complete or can be recovered with: m-ui admin setup-link"
+if [ "$database_was_present" -eq 0 ]; then
+    setup_link="$(run_as_m_ui "$(target /usr/bin/m-ui)" admin setup-link \
+        --config "$(target /etc/m-ui/config.toml)" 2>/dev/null || true)"
+    case "$setup_link" in
+        http://*/setup\#token=*)
+            setup_message="Open this one-time link to create the administrator in the Web UI: $setup_link"
+            ;;
+    esac
+fi
+
 printf '%s\n' \
     "m-ui $command_name completed." \
     "Configuration, database, master key, revisions, and core settings were preserved." \
-    "Create the first administrator in the Web UI with: m-ui admin setup-link" \
+    "$setup_message" \
     "No SSH, firewall, reverse proxy, or Cloudflare settings were changed."

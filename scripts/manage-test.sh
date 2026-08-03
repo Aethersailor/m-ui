@@ -9,6 +9,16 @@ cleanup() {
 }
 trap cleanup EXIT
 
+bash "$repository_root/scripts/install-test.sh"
+
+test "$(grep -c 'create_host_path: false' \
+  "$repository_root/deploy/docker/compose.yml")" -eq 1
+test "$(grep -c 'create_host_path: true' \
+  "$repository_root/deploy/docker/compose.yml")" -eq 4
+grep -q 'raw.githubusercontent.com/Aethersailor/m-ui/master/deploy/docker/compose.yml' \
+  "$repository_root/README.md" "$repository_root/deploy/docker/README.md"
+sh -n "$repository_root/deploy/docker/prepare-data-root.sh"
+
 make_archive() {
   version="$1"
   output="$2"

@@ -42,11 +42,6 @@ export const useThemeStore = defineStore('theme', {
       writeStoredValue(preferredStorageKey, mode)
       this.applyDocumentTheme()
     },
-    cycle() {
-      const modes: ThemeMode[] = ['auto', 'light', 'dark']
-      const index = modes.indexOf(this.mode)
-      this.setMode(modes[(index + 1) % modes.length] ?? 'auto')
-    },
     applyDocumentTheme() {
       document.documentElement.dataset.theme = this.dark ? 'dark' : 'light'
     },

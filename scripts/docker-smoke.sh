@@ -5,12 +5,16 @@ set -euo pipefail
 image="${1:?usage: docker-smoke.sh IMAGE}"
 name="m-ui-smoke-${RANDOM}-${RANDOM}"
 data_directory="$(mktemp -d /opt/m-ui-smoke.XXXXXX)"
-mkdir -p "$data_directory/etc/m-ui" "$data_directory/etc/mihomo" \
-  "$data_directory/var/lib/m-ui" "$data_directory/var/lib/mihomo"
+unsafe_directory="$(mktemp -d /opt/m-ui-smoke-unsafe.XXXXXX)"
+unsafe_target="$(mktemp -d /opt/m-ui-smoke-target.XXXXXX)"
+chmod 0700 "$data_directory"
+mkdir -p "$unsafe_directory/etc"
+ln -s "$unsafe_target" "$unsafe_directory/etc/m-ui"
 
 cleanup() {
   docker rm -f "$name" >/dev/null 2>&1 || true
   rm -rf "$data_directory"
+  rm -rf "$unsafe_directory" "$unsafe_target"
 }
 trap cleanup EXIT
 
@@ -25,14 +29,23 @@ do
   [[ -n "$value" && "$value" != "<no value>" ]]
 done
 
+if docker run --rm --user 0:0 --network none \
+  --cap-drop ALL --cap-add CHOWN --cap-add DAC_OVERRIDE --cap-add FOWNER \
+  --security-opt no-new-privileges \
+  -e M_UI_INIT_DATA=1 \
+  -v "$unsafe_directory:/data" \
+  "$image" >/dev/null 2>&1
+then
+  echo "data initializer accepted a symbolic-link subtree" >&2
+  exit 1
+fi
+[[ -z "$(find "$unsafe_target" -mindepth 1 -print -quit)" ]]
+
 docker run --rm --user 0:0 --network none \
   --cap-drop ALL --cap-add CHOWN --cap-add DAC_OVERRIDE --cap-add FOWNER \
   --security-opt no-new-privileges \
   -e M_UI_INIT_DATA=1 \
-  -v "$data_directory/etc/m-ui:/etc/m-ui" \
-  -v "$data_directory/etc/mihomo:/etc/mihomo" \
-  -v "$data_directory/var/lib/m-ui:/var/lib/m-ui" \
-  -v "$data_directory/var/lib/mihomo:/var/lib/mihomo" \
+  -v "$data_directory:/data" \
   "$image" >/dev/null
 docker run -d --name "$name" \
   --cap-drop ALL --cap-add NET_BIND_SERVICE \
@@ -65,6 +78,10 @@ if [[ "$(docker inspect --format '{{.State.Health.Status}}' "$name")" != "health
 fi
 docker exec "$name" m-ui core status --json \
   --config /etc/m-ui/config.toml >/dev/null
+if docker exec "$name" test -e /usr/lib/m-ui/manage.sh; then
+  echo "container unexpectedly contains the native lifecycle manager" >&2
+  exit 1
+fi
 docker exec "$name" /var/lib/m-ui/core/current/mihomo -v >/dev/null
 docker exec "$name" /var/lib/m-ui/core/current/mihomo \
   -t -f /etc/mihomo/config.yaml >/dev/null

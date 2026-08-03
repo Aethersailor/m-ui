@@ -48,6 +48,8 @@ fail() {
     exit 1
 }
 
+[ "$(id -u)" -eq 0 ] || fail "must run as root"
+
 case "$root" in
     /*) ;;
     *) fail "path must be absolute" ;;
@@ -77,10 +79,21 @@ check_component() {
     fi
     if [ -d "$path" ]; then
         mode="$(stat -c '%a' "$path")"
-        last="${mode#${mode%?}}"
-        case "$last" in
-            2|3|6|7) fail "$path is writable by other users" ;;
+        group="${mode%?}"
+        group="${group#${group%?}}"
+        other="${mode#${mode%?}}"
+        case "$group$other" in
+            *[2367]*) fail "$path is writable by group or other users" ;;
         esac
+    fi
+}
+
+check_control_component() {
+    path="$1"
+    check_component "$path"
+    if [ -d "$path" ]; then
+        owner="$(stat -c '%u' "$path")"
+        [ "$owner" = 0 ] || fail "$path is not owned by root"
     fi
 }
 
@@ -95,7 +108,11 @@ check_path_components() {
             remaining="${remaining#*/}"
         fi
         path="$path/$component"
-        check_component "$path"
+        if [ -n "$remaining" ]; then
+            check_control_component "$path"
+        else
+            check_component "$path"
+        fi
     done
 }
 
@@ -109,7 +126,7 @@ while [ -n "$remaining" ]; do
         remaining="${remaining#*/}"
     fi
     walk_path="$walk_path/$component"
-    check_component "$walk_path"
+    check_control_component "$walk_path"
     if [ ! -e "$walk_path" ] && [ "$check_only" -eq 0 ]; then
         mkdir "$walk_path"
         chmod 0700 "$walk_path"

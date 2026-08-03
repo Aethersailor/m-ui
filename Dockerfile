@@ -40,6 +40,7 @@ LABEL org.opencontainers.image.source="https://github.com/Aethersailor/m-ui" \
 RUN apk add --no-cache ca-certificates libcap tini tzdata \
     && addgroup -S -g 10001 m-ui \
     && adduser -S -D -H -u 10001 -G m-ui -h /var/lib/m-ui m-ui \
+    && install -d -o root -g root -m 0711 /data \
     && install -d -o m-ui -g m-ui -m 0750 /etc/m-ui /etc/mihomo \
     && install -d -o m-ui -g m-ui -m 0700 \
        /var/lib/m-ui /var/lib/m-ui/core \

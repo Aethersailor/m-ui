@@ -6,7 +6,6 @@ import {
   NForm,
   NFormItem,
   NInput,
-  NSelect,
   NText,
 } from 'naive-ui'
 import { computed, onMounted, ref } from 'vue'
@@ -15,19 +14,15 @@ import { useRouter } from 'vue-router'
 
 import { completeSetup } from '@/api/setup'
 
+import AppearancePreferences from '@/components/AppearancePreferences.vue'
 import { getSetupToken } from '@/setup-token'
 import { useAuthStore } from '@/stores/auth'
-import { usePreferencesStore } from '@/stores/preferences'
 import { useSetupStore } from '@/stores/setup'
-import { useThemeStore } from '@/stores/theme'
-import type { LanguageMode } from '@/utils/preferences'
 
 const { t } = useI18n()
 const router = useRouter()
 const auth = useAuthStore()
-const preferences = usePreferencesStore()
 const setup = useSetupStore()
-const theme = useThemeStore()
 const token = ref('')
 const username = ref('admin')
 const password = ref('')
@@ -35,16 +30,6 @@ const confirmation = ref('')
 const formError = ref('')
 const loading = ref(false)
 
-const languageOptions = computed(() => [
-  { label: t('language.auto'), value: 'auto' as LanguageMode },
-  { label: t('language.chinese'), value: 'zh-CN' as LanguageMode },
-  { label: t('language.english'), value: 'en-US' as LanguageMode },
-])
-const themeOptions = computed(() => [
-  { label: t('theme.auto'), value: 'auto' as const },
-  { label: t('theme.light'), value: 'light' as const },
-  { label: t('theme.dark'), value: 'dark' as const },
-])
 const errorMessage = computed(() => {
   if (formError.value === 'PASSWORD_MISMATCH') {
     return t('auth.passwordMismatch')
@@ -77,8 +62,6 @@ const canSubmit = computed(
 )
 
 onMounted(() => {
-  preferences.initialize()
-  theme.initialize()
   token.value = getSetupToken()
   if (!token.value) {
     formError.value = 'MISSING_TOKEN'
@@ -117,24 +100,6 @@ async function submit() {
   <main class="login-page setup-page">
     <div class="login-orb login-orb-one" />
     <div class="login-orb login-orb-two" />
-    <div class="login-toolbar">
-      <NSelect
-        :value="preferences.languageMode"
-        :options="languageOptions"
-        size="small"
-        class="language-select"
-        :aria-label="t('language.label')"
-        @update:value="preferences.setLanguageMode"
-      />
-      <NSelect
-        :value="theme.mode"
-        :options="themeOptions"
-        size="small"
-        class="theme-select"
-        :aria-label="t('theme.label')"
-        @update:value="theme.setMode"
-      />
-    </div>
 
     <section class="login-shell">
       <header class="login-brand">
@@ -202,6 +167,7 @@ async function submit() {
         <NText depth="3" class="setup-hint setup-token-hint">
           {{ t('setup.tokenHint') }}
         </NText>
+        <AppearancePreferences compact class="login-appearance" />
       </NCard>
     </section>
   </main>

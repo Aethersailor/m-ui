@@ -5,13 +5,40 @@ set -eu
 umask 077
 
 if [ "${M_UI_INIT_DATA:-0}" = "1" ]; then
-    install -d -m 0750 /etc/m-ui /etc/mihomo
-    install -d -m 0700 /var/lib/m-ui /var/lib/m-ui/core \
-        /var/lib/m-ui/core/current \
-        /var/lib/m-ui/core/staging \
-        /var/lib/m-ui/core/backups \
-        /var/lib/m-ui/revisions
-    install -d -m 0750 /var/lib/mihomo
+    [ "$(id -u)" -eq 0 ] || {
+        echo "data initialization must run as root" >&2
+        exit 1
+    }
+    data_root=/data
+    [ -d "$data_root" ] && [ ! -L "$data_root" ] || {
+        echo "refusing unsafe persistence root: $data_root" >&2
+        exit 1
+    }
+
+    ensure_directory() {
+        directory="$1"
+        mode="$2"
+        owner="$3"
+        if [ -L "$directory" ] || { [ -e "$directory" ] && [ ! -d "$directory" ]; }; then
+            echo "refusing unsafe persistence path: $directory" >&2
+            exit 1
+        fi
+        if [ ! -d "$directory" ]; then
+            mkdir "$directory"
+        fi
+        chown "$owner" "$directory"
+        chmod "$mode" "$directory"
+    }
+
+    chmod 0711 "$data_root"
+    ensure_directory /data/etc 0711 0:0
+    ensure_directory /data/var 0711 0:0
+    ensure_directory /data/var/lib 0711 0:0
+    ensure_directory /data/etc/m-ui 0750 10001:10001
+    ensure_directory /data/etc/mihomo 0750 10001:10001
+    ensure_directory /data/var/lib/m-ui 0700 10001:10001
+    ensure_directory /data/var/lib/mihomo 0750 10001:10001
+
     safe_tree() {
         tree="$1"
         [ -d "$tree" ] && [ ! -L "$tree" ] || {
@@ -26,11 +53,16 @@ if [ "${M_UI_INIT_DATA:-0}" = "1" ]; then
         find "$tree" -type d -exec chown 10001:10001 {} +
         find "$tree" -type f -exec chown 10001:10001 {} +
     }
-    for tree in /etc/m-ui /etc/mihomo /var/lib/m-ui /var/lib/mihomo; do
+    for tree in \
+        /data/etc/m-ui \
+        /data/etc/mihomo \
+        /data/var/lib/m-ui \
+        /data/var/lib/mihomo
+    do
         safe_tree "$tree"
     done
-    chmod 0750 /etc/m-ui /etc/mihomo /var/lib/mihomo
-    chmod 0700 /var/lib/m-ui /var/lib/m-ui/core /var/lib/m-ui/revisions
+    chmod 0750 /data/etc/m-ui /data/etc/mihomo /data/var/lib/mihomo
+    chmod 0700 /data/var/lib/m-ui
     exit 0
 fi
 
