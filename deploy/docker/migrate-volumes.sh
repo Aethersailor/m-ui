@@ -220,6 +220,7 @@ else
   copy_volume data var/lib/m-ui
   copy_volume mihomo-data var/lib/mihomo
 fi
+chmod 0700 "$staging"
 
 database="$staging/var/lib/m-ui/m-ui.db"
 master_key="$staging/var/lib/m-ui/master.key"
