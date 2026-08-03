@@ -597,6 +597,10 @@ jobs:
           EXPECTED_VERSION: ${{ needs.validate.outputs.full_version }}
           EXPECTED_REVISION: ${{ needs.validate.outputs.target_sha }}
         run: |
+          sudo test -d /opt
+          sudo test ! -L /opt
+          sudo chown root:root /opt
+          sudo chmod 0755 /opt
           docker buildx build \
             --platform linux/${{ matrix.arch }} \
             --build-arg VERSION="$EXPECTED_VERSION" \
