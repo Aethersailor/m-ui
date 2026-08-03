@@ -190,7 +190,7 @@ jobs:
 
       - name: Upload locked bootstrap identity
         if: steps.guard.outputs.mode != 'test'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-identity-${{ steps.guard.outputs.sha12 }}
           path: packaging/bootstrap/identity.json
@@ -395,7 +395,7 @@ jobs:
           ref: ${{ needs.validate.outputs.target_sha }}
 
       - name: Download locked bootstrap identity
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: release-identity-${{ needs.validate.outputs.sha12 }}
           path: packaging/bootstrap
@@ -410,7 +410,7 @@ jobs:
             -t -f internal/publisher/testdata/vless_reality.golden.yaml
 
       - name: Upload verified native bootstrap
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-bootstrap-${{ needs.validate.outputs.sha12 }}-${{ matrix.arch }}
           path: packaging/bootstrap
@@ -432,7 +432,7 @@ jobs:
           fetch-depth: 0
 
       - name: Download verified bootstraps
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: release-bootstrap-${{ needs.validate.outputs.sha12 }}-*
           path: packaging/bootstrap
@@ -533,7 +533,7 @@ jobs:
           done
 
       - name: Upload release assets
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: m-ui-${{ needs.validate.outputs.full_version }}-native
           path: |
@@ -574,13 +574,13 @@ jobs:
           ref: ${{ needs.validate.outputs.target_sha }}
 
       - name: Download verified native bootstrap
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: release-bootstrap-${{ needs.validate.outputs.sha12 }}-${{ matrix.arch }}
           path: packaging/bootstrap
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
 
       - name: Install verified native Syft
         run: |
@@ -622,7 +622,7 @@ jobs:
             >docker-SHA256SUMS
 
       - name: Upload native image
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: m-ui-${{ needs.validate.outputs.full_version }}-image-${{ matrix.arch }}
           path: |
@@ -651,7 +651,7 @@ jobs:
 
     steps:
       - name: Download release assets
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: m-ui-${{ needs.validate.outputs.full_version }}-native
           path: release
@@ -719,20 +719,20 @@ jobs:
           fetch-depth: 0
 
       - name: Download native release assets
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: m-ui-${{ needs.validate.outputs.full_version }}-native
           path: release
 
       - name: Download image evidence
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: m-ui-${{ needs.validate.outputs.full_version }}-image-*
           path: images
           merge-multiple: true
 
       - name: Download verified native bootstraps
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: release-bootstrap-${{ needs.validate.outputs.sha12 }}-*
           path: packaging/bootstrap
@@ -742,7 +742,7 @@ jobs:
         uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
 
       - name: Snapshot protected GHCR tags
         env:
