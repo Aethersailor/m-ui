@@ -106,7 +106,7 @@ ui_language = "auto"
 public_host = "localhost"
 
 [mihomo]
-binary_path = "/data/var/lib/m-ui/core/current/mihomo"
+binary_path = "/var/lib/m-ui/core/current/mihomo"
 managed_core = true
 process_mode = "managed"
 config_directory = "/data/etc/mihomo"
@@ -126,7 +126,6 @@ temporary_config="${config_path}.tmp"
 sed \
     -e 's|database_path = "/var/lib/m-ui/m-ui.db"|database_path = "/data/var/lib/m-ui/m-ui.db"|' \
     -e 's|master_key_path = "/var/lib/m-ui/master.key"|master_key_path = "/data/var/lib/m-ui/master.key"|' \
-    -e 's|binary_path = "/var/lib/m-ui/core/current/mihomo"|binary_path = "/data/var/lib/m-ui/core/current/mihomo"|' \
     -e 's|config_directory = "/etc/mihomo"|config_directory = "/data/etc/mihomo"|' \
     -e 's|config_path = "/etc/mihomo/config.yaml"|config_path = "/data/etc/mihomo/config.yaml"|' \
     -e 's|revision_directory = "/var/lib/m-ui/revisions"|revision_directory = "/data/var/lib/m-ui/revisions"|' \

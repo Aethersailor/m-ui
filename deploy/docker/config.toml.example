@@ -22,7 +22,7 @@ ui_language = "auto"
 public_host = "localhost"
 
 [mihomo]
-binary_path = "/data/var/lib/m-ui/core/current/mihomo"
+binary_path = "/var/lib/m-ui/core/current/mihomo"
 managed_core = true
 process_mode = "managed"
 config_directory = "/data/etc/mihomo"
