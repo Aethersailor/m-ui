@@ -41,13 +41,21 @@ RUN apk add --no-cache ca-certificates libcap tini tzdata \
     && addgroup -S -g 10001 m-ui \
     && adduser -S -D -H -u 10001 -G m-ui -h /var/lib/m-ui m-ui \
     && install -d -o root -g root -m 0711 /data \
-    && install -d -o m-ui -g m-ui -m 0750 /etc/m-ui /etc/mihomo \
     && install -d -o m-ui -g m-ui -m 0700 \
-       /var/lib/m-ui /var/lib/m-ui/core \
-       /var/lib/m-ui/core/staging /var/lib/m-ui/core/backups \
-    && install -d -o m-ui -g m-ui -m 0750 /var/lib/mihomo \
+       /data/etc /data/var /data/var/lib \
+    && install -d -o m-ui -g m-ui -m 0750 \
+       /data/etc/m-ui /data/etc/mihomo \
+    && install -d -o m-ui -g m-ui -m 0700 \
+       /data/var/lib/m-ui /data/var/lib/m-ui/core \
+       /data/var/lib/m-ui/core/staging \
+       /data/var/lib/m-ui/core/backups \
+    && install -d -o m-ui -g m-ui -m 0750 /data/var/lib/mihomo \
     && install -d -o m-ui -g m-ui -m 0750 /run/m-ui \
-    && install -d -o root -g root -m 0755 /usr/lib/m-ui/bootstrap
+    && install -d -o root -g root -m 0755 /usr/lib/m-ui/bootstrap \
+    && ln -s /data/etc/m-ui /etc/m-ui \
+    && ln -s /data/etc/mihomo /etc/mihomo \
+    && ln -s /data/var/lib/m-ui /var/lib/m-ui \
+    && ln -s /data/var/lib/mihomo /var/lib/mihomo
 
 COPY --from=go-builder /out/m-ui /usr/bin/m-ui
 COPY packaging/bootstrap/linux_${TARGETARCH}/mihomo /usr/lib/m-ui/bootstrap/mihomo
@@ -62,11 +70,10 @@ RUN chmod 0755 /usr/bin/m-ui /usr/lib/m-ui/bootstrap/mihomo \
         /usr/share/doc/m-ui/THIRD_PARTY_NOTICES.md
 
 USER 10001:10001
-WORKDIR /var/lib/m-ui
+WORKDIR /data
 EXPOSE 2095
 ENTRYPOINT ["/sbin/tini", "--", "/usr/lib/m-ui/entrypoint.sh"]
 HEALTHCHECK --interval=15s --timeout=5s --start-period=20s --retries=4 \
-  CMD wget -q -T 3 -O /dev/null http://127.0.0.1:2095/api/v1/health \
-    && status="$(/usr/bin/m-ui core status --json --config /etc/m-ui/config.toml)" \
+  CMD status="$(/usr/bin/m-ui core status --json --config /etc/m-ui/config.toml)" \
     && printf '%s' "$status" | grep -Eq '"process_active"[[:space:]]*:[[:space:]]*true' \
     && printf '%s' "$status" | grep -Eq '"controller_reachable"[[:space:]]*:[[:space:]]*true'

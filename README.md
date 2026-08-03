@@ -201,22 +201,26 @@ ghcr.io/aethersailor/m-ui
 
 #### 快速部署
 
-确认 Docker Engine 与 Docker Compose v2 已安装后，只需三步：
+确认 Docker Engine 与 Docker Compose v2 已安装后：
 
 ```sh
-sudo mkdir -p /opt/m-ui && cd /opt/m-ui
+sudo install -d -o root -g root -m 0755 /opt/m-ui
+sudo install -d -o 10001 -g 10001 -m 0700 /opt/m-ui/data
+cd /opt/m-ui
 sudo curl -fsSLo compose.yml https://raw.githubusercontent.com/Aethersailor/m-ui/master/deploy/docker/compose.yml
 sudo docker compose up -d
 ```
 
-Compose 只会自动创建四个固定子目录；一次性、无网络 `data-init` 服务会在
-主服务启动前校验路径并设置权限。长期运行的 m-ui/Mihomo 始终使用 UID/GID
-`10001:10001`。整个部署只持久化 `/opt/m-ui`，不需要 `.env`、密码文件、
-Docker Secret 或额外准备脚本。
+默认 Compose 只有一个服务和一个 `/opt/m-ui/data:/data` 映射。长期运行的
+m-ui/Mihomo 始终使用 UID/GID `10001:10001`；数据目录必须预先交给该 UID，
+容器不会以 root 修复宿主机权限。无需 `.env`、密码文件、Docker Secret 或
+初始化容器。
 
-如需其他持久化目录，在启动命令前设置 `M_UI_DATA_DIR=/srv/m-ui`；该目录必须
-预先存在。正式 Release 的 Compose 会固定对应版本镜像；`master` 中的 Compose
-默认跟随最新稳定 Release 的 `latest` 镜像。
+仓库和所有正式 Release 附带的 Compose 永远使用
+`ghcr.io/aethersailor/m-ui:latest`。面板地址、Public Host、Mihomo Controller、
+CORS、核心通道、自动更新和检查周期均使用安全初始值，首次登录后在 Web 的
+系统设置中管理。若要改用其他宿主目录，直接修改 Compose 中唯一的 volume
+源路径，并以 `10001:10001`、`0700` 权限提前创建它。
 
 查看健康状态：
 
@@ -271,18 +275,18 @@ sudo docker compose up -d
 
 容器重建不会覆盖已有数据库、主密钥、配置、Revision 或托管核心。
 
-旧版本使用四个 named volumes 的用户，请先停止旧项目，按照
-`deploy/docker/README.md` 使用 `deploy/docker/migrate-volumes.sh` 显式迁移。
-迁移拒绝非空目标目录，不删除源 volume，也不会自动覆盖已有数据。
+旧版本使用四个 bind mount 或四个 named volumes 的用户，请先停止旧项目，
+按照 `deploy/docker/README.md` 使用 `deploy/docker/migrate-volumes.sh` 显式
+迁移。迁移拒绝非空目标目录，不删除或修改源数据。
 
-Compose 使用一个宿主持久化根目录中的四个固定 bind mount：
+容器内仍保留标准路径，它们由镜像映射到单一数据根目录：
 
-| 宿主目录 | 容器路径 | 内容 |
+| 宿主目录 | 容器内数据路径 | 标准访问路径 |
 |---|---|---|
-| `etc/m-ui` | `/etc/m-ui` | m-ui 配置 |
-| `etc/mihomo` | `/etc/mihomo` | Mihomo 配置 |
-| `var/lib/m-ui` | `/var/lib/m-ui` | 数据库、密钥、Revision 和核心 |
-| `var/lib/mihomo` | `/var/lib/mihomo` | Mihomo 运行数据 |
+| `/opt/m-ui/data/etc/m-ui` | `/data/etc/m-ui` | `/etc/m-ui` |
+| `/opt/m-ui/data/etc/mihomo` | `/data/etc/mihomo` | `/etc/mihomo` |
+| `/opt/m-ui/data/var/lib/m-ui` | `/data/var/lib/m-ui` | `/var/lib/m-ui` |
+| `/opt/m-ui/data/var/lib/mihomo` | `/data/var/lib/mihomo` | `/var/lib/mihomo` |
 
 停止并删除容器：
 
@@ -290,11 +294,11 @@ Compose 使用一个宿主持久化根目录中的四个固定 bind mount：
 sudo docker compose -f /opt/m-ui/compose.yml down
 ```
 
-该命令保留 `/opt/m-ui` 中的持久化数据。
+该命令保留 `/opt/m-ui/data` 中的持久化数据。
 
 > [!CAUTION]
 > `docker compose down`（包括带 `--volumes`）不会删除 bind mount 对应的
-> `/opt/m-ui` 宿主目录。只有在完成备份并再次确认路径后，才手动删除整个
+> `/opt/m-ui/data` 宿主目录。只有在完成备份并再次确认路径后，才手动删除整个
 > 持久化根目录；不要把它与 Compose 的容器删除混为一谈。
 
 更多 Docker 运维说明见 [Docker 部署文档](deploy/docker/README.md)。

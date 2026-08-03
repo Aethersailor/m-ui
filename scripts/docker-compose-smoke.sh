@@ -14,11 +14,20 @@ else
   }
   root_command=(sudo)
 fi
-data_directory="$("${root_command[@]}" mktemp -d /opt/m-ui-compose-smoke.XXXXXX)"
-"${root_command[@]}" chmod 0700 "$data_directory"
-"${root_command[@]}" cp "$repository_root/deploy/docker/compose.yml" \
-  "$data_directory/compose.yml"
-compose_file="$data_directory/compose.yml"
+test_root="$("${root_command[@]}" mktemp -d /opt/m-ui-compose-smoke.XXXXXX)"
+data_directory="$test_root/data"
+compose_file="$test_root/compose.yml"
+override_file="$test_root/compose.test.yml"
+"${root_command[@]}" cp "$repository_root/deploy/docker/compose.yml" "$compose_file"
+"${root_command[@]}" bash \
+  "$repository_root/deploy/docker/prepare-data-root.sh" "$data_directory" >/dev/null
+"${root_command[@]}" tee "$override_file" >/dev/null <<EOF
+services:
+  m-ui:
+    image: m-ui:$tag
+    volumes:
+      - $data_directory:/data
+EOF
 
 docker_root() {
   if [[ "$EUID" -eq 0 ]]; then
@@ -29,59 +38,64 @@ docker_root() {
 }
 
 compose() {
-  if [[ "$EUID" -eq 0 ]]; then
-    M_UI_DATA_DIR="$data_directory" \
-    M_UI_IMAGE=m-ui \
-    M_UI_IMAGE_TAG="$tag" \
-      docker compose -f "$compose_file" "$@"
-  else
-    sudo env \
-      M_UI_DATA_DIR="$data_directory" \
-      M_UI_IMAGE=m-ui \
-      M_UI_IMAGE_TAG="$tag" \
-      docker compose -f "$compose_file" "$@"
-  fi
+  docker_root compose -f "$compose_file" -f "$override_file" "$@"
 }
 
 cleanup() {
   compose down --remove-orphans >/dev/null 2>&1 || true
   docker_root image rm -f "m-ui:$tag" >/dev/null 2>&1 || true
-  "${root_command[@]}" rm -rf -- "$data_directory"
+  "${root_command[@]}" rm -rf -- "$test_root"
 }
 trap cleanup EXIT
 
 docker_root tag "$image" "m-ui:$tag"
-compose config >/dev/null
-compose up -d
+[[ "$(compose config --services)" == m-ui ]]
+[[ "$(compose config --images)" == "m-ui:$tag" ]]
+compose up -d --pull never
 
 for _ in $(seq 1 60); do
   health="$(docker_root inspect --format '{{.State.Health.Status}}' m-ui 2>/dev/null || true)"
-  [[ "$health" == "healthy" ]] && break
-  [[ "$health" != "unhealthy" ]] || {
+  [[ "$health" == healthy ]] && break
+  [[ "$health" != unhealthy ]] || {
     compose logs --no-color
     exit 1
   }
   sleep 1
 done
-[[ "$(docker_root inspect --format '{{.State.Health.Status}}' m-ui)" == "healthy" ]] || {
+[[ "$(docker_root inspect --format '{{.State.Health.Status}}' m-ui)" == healthy ]] || {
   compose logs --no-color
   exit 1
 }
-[[ "$(docker_root inspect --format '{{.State.Status}}:{{.State.ExitCode}}' \
-  m-ui-data-init)" == "exited:0" ]]
-[[ "$(docker_root exec m-ui id -u)" == "10001" ]]
-[[ "$("${root_command[@]}" stat -c '%a' "$data_directory")" == "711" ]]
+[[ "$(docker_root exec m-ui id -u)" == 10001 ]]
+[[ "$(docker_root inspect --format '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Source}}{{end}}{{end}}' m-ui)" == "$data_directory" ]]
+[[ "$(docker_root inspect --format '{{.HostConfig.RestartPolicy.Name}}' m-ui)" == always ]]
+[[ "$(docker_root inspect --format '{{.HostConfig.NetworkMode}}' m-ui)" == host ]]
 
 for path in \
-  etc/m-ui \
-  etc/mihomo \
-  var/lib/m-ui \
+  etc/m-ui/config.toml \
+  etc/mihomo/config.yaml \
+  var/lib/m-ui/m-ui.db \
+  var/lib/m-ui/master.key \
+  var/lib/m-ui/core/current/mihomo \
   var/lib/mihomo
 do
-  "${root_command[@]}" test -d "$data_directory/$path"
-  [[ "$("${root_command[@]}" stat -c '%u:%g' "$data_directory/$path")" == \
-    "10001:10001" ]]
+  "${root_command[@]}" test -e "$data_directory/$path"
 done
+
+key_hash="$("${root_command[@]}" sha256sum \
+  "$data_directory/var/lib/m-ui/master.key" | awk '{print $1}')"
+old_id="$(docker_root inspect --format '{{.Id}}' m-ui)"
+compose up -d --pull never --force-recreate
+new_id="$(docker_root inspect --format '{{.Id}}' m-ui)"
+[[ "$new_id" != "$old_id" ]]
+for _ in $(seq 1 60); do
+  [[ "$(docker_root inspect --format '{{.State.Health.Status}}' m-ui)" == healthy ]] &&
+    break
+  sleep 1
+done
+[[ "$(docker_root inspect --format '{{.State.Health.Status}}' m-ui)" == healthy ]]
+[[ "$("${root_command[@]}" sha256sum "$data_directory/var/lib/m-ui/master.key" |
+  awk '{print $1}')" == "$key_hash" ]]
 
 docker_root exec m-ui m-ui core status --json \
   --config /etc/m-ui/config.toml >/dev/null

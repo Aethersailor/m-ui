@@ -481,16 +481,14 @@ jobs:
           version: v2.17.1
           args: release --snapshot --clean --skip=publish
 
-      - name: Add lifecycle scripts and pinned Compose definition
-        env:
-          VERSION: ${{ needs.validate.outputs.version }}
+      - name: Add lifecycle scripts and latest Compose definition
         run: |
           cp scripts/manage.sh scripts/install.sh scripts/uninstall.sh dist/
-          sed "s/M_UI_IMAGE_TAG:-latest/M_UI_IMAGE_TAG:-${VERSION}/g" \
-            deploy/docker/compose.yml >dist/compose.yml
-          grep -q "M_UI_IMAGE_TAG:-${VERSION}" dist/compose.yml
-          if grep -q 'M_UI_IMAGE_TAG:-latest' dist/compose.yml; then
-            echo "versioned Compose still references latest" >&2
+          cp deploy/docker/compose.yml dist/compose.yml
+          grep -q '^    image: ghcr.io/aethersailor/m-ui:latest$' \
+            dist/compose.yml
+          if grep -Eq '\$\{|M_UI_|data-init' dist/compose.yml; then
+            echo "release Compose contains a variable or legacy initializer" >&2
             exit 1
           fi
           cp packaging/bootstrap/identity.json \

@@ -4,94 +4,74 @@ set -eu
 
 umask 077
 
-if [ "${M_UI_INIT_DATA:-0}" = "1" ]; then
-    [ "$(id -u)" -eq 0 ] || {
-        echo "data initialization must run as root" >&2
-        exit 1
-    }
-    data_root=/data
-    [ -d "$data_root" ] && [ ! -L "$data_root" ] || {
-        echo "refusing unsafe persistence root: $data_root" >&2
-        exit 1
-    }
+data_root=/data
+config_path=/etc/m-ui/config.toml
+master_key=/var/lib/m-ui/master.key
+database_path=/var/lib/m-ui/m-ui.db
+current_core=/var/lib/m-ui/core/current/mihomo
 
-    ensure_directory() {
-        directory="$1"
-        mode="$2"
-        owner="$3"
-        if [ -L "$directory" ] || { [ -e "$directory" ] && [ ! -d "$directory" ]; }; then
-            echo "refusing unsafe persistence path: $directory" >&2
-            exit 1
-        fi
-        if [ ! -d "$directory" ]; then
-            mkdir "$directory"
-        fi
-        chown "$owner" "$directory"
-        chmod "$mode" "$directory"
-    }
+fail() {
+    echo "m-ui container startup: $*" >&2
+    exit 1
+}
 
-    chmod 0711 "$data_root"
-    ensure_directory /data/etc 0711 0:0
-    ensure_directory /data/var 0711 0:0
-    ensure_directory /data/var/lib 0711 0:0
-    ensure_directory /data/etc/m-ui 0750 10001:10001
-    ensure_directory /data/etc/mihomo 0750 10001:10001
-    ensure_directory /data/var/lib/m-ui 0700 10001:10001
-    ensure_directory /data/var/lib/mihomo 0750 10001:10001
+[ "$(id -u)" -eq 10001 ] || fail "the long-running container must use UID 10001"
+[ -d "$data_root" ] && [ ! -L "$data_root" ] || \
+    fail "persistence root /data must be a real directory"
 
-    safe_tree() {
-        tree="$1"
-        [ -d "$tree" ] && [ ! -L "$tree" ] || {
-            echo "refusing unsafe persistence path: $tree" >&2
-            exit 1
-        }
-        if find "$tree" \( -type l -o -type b -o -type c -o -type p -o -type s \) \
-            -print -quit | grep -q .; then
-            echo "refusing symlink or special file below: $tree" >&2
-            exit 1
-        fi
-        find "$tree" -type d -exec chown 10001:10001 {} +
-        find "$tree" -type f -exec chown 10001:10001 {} +
-    }
-    for tree in \
-        /data/etc/m-ui \
-        /data/etc/mihomo \
-        /data/var/lib/m-ui \
-        /data/var/lib/mihomo
-    do
-        safe_tree "$tree"
-    done
-    chmod 0750 /data/etc/m-ui /data/etc/mihomo /data/var/lib/mihomo
-    chmod 0700 /data/var/lib/m-ui
-    exit 0
+for mapping in \
+    "/etc/m-ui:/data/etc/m-ui" \
+    "/etc/mihomo:/data/etc/mihomo" \
+    "/var/lib/m-ui:/data/var/lib/m-ui" \
+    "/var/lib/mihomo:/data/var/lib/mihomo"
+do
+    link=${mapping%%:*}
+    target=${mapping#*:}
+    [ -L "$link" ] && [ "$(readlink "$link")" = "$target" ] || \
+        fail "invalid image persistence adapter: $link"
+done
+
+if find "$data_root" \( -type l -o -type b -o -type c -o -type p -o -type s \) \
+    -print -quit | grep -q .; then
+    fail "persistence data must not contain symbolic links or special files"
 fi
 
-config_path="/etc/m-ui/config.toml"
-master_key="/var/lib/m-ui/master.key"
-database_path="/var/lib/m-ui/m-ui.db"
-current_core="/var/lib/m-ui/core/current/mihomo"
+ensure_directory() {
+    directory=$1
+    mode=$2
+    if [ -e "$directory" ] && [ ! -d "$directory" ]; then
+        fail "persistence path is not a directory: $directory"
+    fi
+    if [ ! -d "$directory" ]; then
+        mkdir "$directory" 2>/dev/null || fail \
+            "cannot create $directory; prepare /opt/m-ui/data for UID 10001"
+    fi
+    chmod "$mode" "$directory" 2>/dev/null || fail \
+        "cannot secure $directory; it must be owned by UID 10001"
+}
 
-install -d -m 0750 /etc/m-ui /etc/mihomo
-install -d -m 0700 /var/lib/m-ui /var/lib/m-ui/core \
-    /var/lib/m-ui/core/staging \
-    /var/lib/m-ui/core/backups
-install -d -m 0750 /var/lib/mihomo
+ensure_directory /data/etc 0700
+ensure_directory /data/var 0700
+ensure_directory /data/var/lib 0700
+ensure_directory /data/etc/m-ui 0750
+ensure_directory /data/etc/mihomo 0750
+ensure_directory /data/var/lib/m-ui 0700
+ensure_directory /data/var/lib/m-ui/core 0700
+ensure_directory /data/var/lib/m-ui/core/staging 0700
+ensure_directory /data/var/lib/m-ui/core/backups 0700
+ensure_directory /data/var/lib/mihomo 0750
 
 if [ -L "$master_key" ] || [ -L "$database_path" ]; then
-    echo "refusing symbolic-link database or master key" >&2
-    exit 1
+    fail "refusing symbolic-link database or master key"
 fi
 if [ -e "$database_path" ] && [ ! -f "$database_path" ]; then
-    echo "database path is not a regular file" >&2
-    exit 1
+    fail "database path is not a regular file"
 fi
 if [ -e "$master_key" ] && [ ! -f "$master_key" ]; then
-    echo "master key path is not a regular file" >&2
-    exit 1
+    fail "master key path is not a regular file"
 fi
 if [ -e "$database_path" ] && [ ! -f "$master_key" ]; then
-    echo "database exists but master key is missing; refusing to generate a replacement" >&2
-    exit 1
+    fail "database exists but master key is missing; refusing to generate a replacement"
 fi
 if [ ! -f "$master_key" ]; then
     dd if=/dev/urandom of="$master_key" bs=32 count=1 status=none
@@ -122,7 +102,7 @@ cookie_secure = false
 [panel]
 title = "m-ui"
 ui_language = "auto"
-public_host = "${M_UI_PUBLIC_HOST:-localhost}"
+public_host = "localhost"
 
 [mihomo]
 binary_path = "/var/lib/m-ui/core/current/mihomo"
@@ -162,9 +142,9 @@ if [ ! -x "$current_core" ]; then
         --config "$config_path" \
         --binary /usr/lib/m-ui/bootstrap/mihomo \
         --manifest /usr/share/m-ui/bootstrap/manifest.json \
-        --channel "${M_UI_MIHOMO_CHANNEL:-release}" \
-        --auto-update "${M_UI_MIHOMO_AUTO_UPDATE:-off}" \
-        --check-interval "${M_UI_MIHOMO_CHECK_INTERVAL:-24h}"
+        --channel release \
+        --auto-update off \
+        --check-interval 24h
 fi
 
 temporary_config="${config_path}.tmp"

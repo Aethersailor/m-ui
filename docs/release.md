@@ -87,8 +87,9 @@ GHCR retains only these public image tags:
 
 A prerelease publishes only its exact version tag. Push and `build` runs never
 publish `edge`, commit, architecture, major, minor, candidate, or other
-registry tags. The source Compose file defaults to `latest`; the Compose file
-inside a GitHub Release is pinned to that Release's exact version tag.
+registry tags. The source Compose file and every copy included in a formal
+GitHub Release always use `ghcr.io/aethersailor/m-ui:latest`; Compose is an
+auto-update deployment entrypoint, not an immutable release-identity artifact.
 
 The multi-architecture image is pushed directly with its final tags, so no
 temporary registry tags are required. Before publication, the workflow

@@ -11,10 +11,16 @@ trap cleanup EXIT
 
 bash "$repository_root/scripts/install-test.sh"
 
-test "$(grep -c 'create_host_path: false' \
+grep -q '^    image: ghcr.io/aethersailor/m-ui:latest$' \
+  "$repository_root/deploy/docker/compose.yml"
+grep -q '^      - /opt/m-ui/data:/data$' \
+  "$repository_root/deploy/docker/compose.yml"
+test "$(grep -c '^  [a-zA-Z0-9_-]*:$' \
   "$repository_root/deploy/docker/compose.yml")" -eq 1
-test "$(grep -c 'create_host_path: true' \
-  "$repository_root/deploy/docker/compose.yml")" -eq 4
+if grep -Eq '\$\{|M_UI_|data-init' "$repository_root/deploy/docker/compose.yml"; then
+  echo "default Compose contains a variable or legacy initializer" >&2
+  exit 1
+fi
 grep -q 'raw.githubusercontent.com/Aethersailor/m-ui/master/deploy/docker/compose.yml' \
   "$repository_root/README.md" "$repository_root/deploy/docker/README.md"
 sh -n "$repository_root/deploy/docker/prepare-data-root.sh"

@@ -154,13 +154,14 @@ When using a reverse proxy:
 - apply independent authentication or IP restrictions if appropriate;
 - preserve request size and timeout limits.
 
-The Docker deployment uses one operator-selected host root (by default
-`/opt/m-ui`) with four deterministic subdirectories mapped to the existing
-`/etc/m-ui`, `/etc/mihomo`, `/var/lib/m-ui`, and `/var/lib/mihomo` paths. A
-root-only, networkless initialization container fixes ownership and exits;
-the long-running container remains UID/GID `10001:10001`. The old named-volume
-layout is migrated only through the explicit non-destructive migration script;
-source volumes are never removed automatically.
+The Docker deployment uses one operator-prepared host directory (by default
+`/opt/m-ui/data`) mounted at `/data`. Trusted links built into the image retain
+the existing `/etc/m-ui`, `/etc/mihomo`, `/var/lib/m-ui`, and `/var/lib/mihomo`
+paths. The host directory is prepared for UID/GID `10001:10001`; there is no
+root initialization container and both long-running processes remain
+non-root. Former four-bind and four-volume layouts are migrated only through
+the explicit non-destructive migration script; source data is never removed
+automatically.
 
 See [reverse-proxy.md](reverse-proxy.md) for minimal examples.
 
