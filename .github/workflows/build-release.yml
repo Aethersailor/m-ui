@@ -148,8 +148,8 @@ jobs:
             VERSION="v${major}.${minor}.${patch}"
           fi
           SHA12="${TARGET_SHA:0:12}"
-          FULL_VERSION="${VERSION}+g${SHA12}"
-          PACKAGE_VERSION="${VERSION#v}+g${SHA12}"
+          FULL_VERSION="${VERSION}-g${SHA12}"
+          PACKAGE_VERSION="${VERSION#v}-g${SHA12}"
           CREATED="$(git show -s --format=%cI "$TARGET_SHA")"
           if [ "$MODE" = release ]; then
             test "$CONFIRM" = RELEASE
@@ -338,10 +338,10 @@ jobs:
       - name: Check GoReleaser configuration
         uses: goreleaser/goreleaser-action@4c6ab561adb47e50c45ef534e2155934e91c40c1 # v7.2.0
         env:
-          M_UI_BUILD_VERSION: v0.0.0+g000000000000
+          M_UI_BUILD_VERSION: v0.0.0-g000000000000
           M_UI_BUILD_COMMIT: 0000000000000000000000000000000000000000
           M_UI_BUILD_DATE: 1970-01-01T00:00:00Z
-          M_UI_PACKAGE_VERSION: 0.0.0+g000000000000
+          M_UI_PACKAGE_VERSION: 0.0.0-g000000000000
           M_UI_ARTIFACT_VERSION: 0.0.0
         with:
           distribution: goreleaser
