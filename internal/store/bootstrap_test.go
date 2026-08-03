@@ -290,6 +290,8 @@ func TestIndependentStoresCompleteAndRotateRace(t *testing.T) {
 }
 
 func TestIndependentProcessesAllowExactlyOneBootstrapWinner(t *testing.T) {
+	const helperWaitTimeout = 30 * time.Second
+
 	databasePath := filepath.Join(t.TempDir(), "m-ui.db")
 	now := time.Date(2026, 8, 3, 0, 0, 0, 0, time.UTC)
 	seed := BootstrapSeed{
@@ -303,7 +305,15 @@ func TestIndependentProcessesAllowExactlyOneBootstrapWinner(t *testing.T) {
 	releasePath := filepath.Join(fixtureDirectory, "release")
 	commands := make([]*exec.Cmd, 0, 2)
 	outputs := make([]*bytes.Buffer, 0, 2)
-	readyPaths := make([]string, 0, 2)
+	done := make([]<-chan error, 0, 2)
+	t.Cleanup(func() {
+		_ = os.WriteFile(releasePath, []byte("release\n"), 0o600)
+		for _, command := range commands {
+			if command.Process != nil {
+				_ = command.Process.Kill()
+			}
+		}
+	})
 	for index := 0; index < 2; index++ {
 		readyPath := filepath.Join(fixtureDirectory, fmt.Sprintf("ready-%d", index))
 		output := new(bytes.Buffer)
@@ -321,27 +331,51 @@ func TestIndependentProcessesAllowExactlyOneBootstrapWinner(t *testing.T) {
 		if err := command.Start(); err != nil {
 			t.Fatal(err)
 		}
+		processDone := make(chan error, 1)
+		go func() {
+			processDone <- command.Wait()
+		}()
 		commands = append(commands, command)
 		outputs = append(outputs, output)
-		readyPaths = append(readyPaths, readyPath)
-	}
+		done = append(done, processDone)
 
-	deadline := time.Now().Add(15 * time.Second)
-	for {
-		ready := true
-		for _, path := range readyPaths {
-			if _, err := os.Stat(path); err != nil {
-				ready = false
-				break
+		deadline := time.NewTimer(helperWaitTimeout)
+		poll := time.NewTicker(10 * time.Millisecond)
+		ready := false
+		for !ready {
+			select {
+			case err := <-processDone:
+				deadline.Stop()
+				poll.Stop()
+				t.Fatalf(
+					"bootstrap helper %d exited before ready: %v, output = %s",
+					index,
+					err,
+					output.String(),
+				)
+			case <-deadline.C:
+				poll.Stop()
+				_ = command.Process.Kill()
+				err := <-processDone
+				t.Fatalf(
+					"bootstrap helper %d did not become ready: %v, output = %s",
+					index,
+					err,
+					output.String(),
+				)
+			case <-poll.C:
+				if _, err := os.Stat(readyPath); err == nil {
+					ready = true
+				}
 			}
 		}
-		if ready {
-			break
+		if !deadline.Stop() {
+			select {
+			case <-deadline.C:
+			default:
+			}
 		}
-		if time.Now().After(deadline) {
-			t.Fatalf("bootstrap helper processes did not become ready")
-		}
-		time.Sleep(10 * time.Millisecond)
+		poll.Stop()
 	}
 	if err := os.WriteFile(releasePath, []byte("release\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -350,7 +384,20 @@ func TestIndependentProcessesAllowExactlyOneBootstrapWinner(t *testing.T) {
 	winners := 0
 	losers := 0
 	for index, command := range commands {
-		if err := command.Wait(); err != nil {
+		var err error
+		select {
+		case err = <-done[index]:
+		case <-time.After(helperWaitTimeout):
+			_ = command.Process.Kill()
+			err = <-done[index]
+			t.Fatalf(
+				"bootstrap helper %d did not finish: %v, output = %s",
+				index,
+				err,
+				outputs[index].String(),
+			)
+		}
+		if err != nil {
 			t.Fatalf("bootstrap helper %d error = %v, output = %s", index, err, outputs[index].String())
 		}
 		result := strings.Fields(outputs[index].String())
@@ -402,7 +449,7 @@ func TestBootstrapCompletionProcessHelper(t *testing.T) {
 	if err := os.WriteFile(readyPath, []byte("ready\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	deadline := time.Now().Add(15 * time.Second)
+	deadline := time.Now().Add(90 * time.Second)
 	for {
 		if _, err := os.Stat(releasePath); err == nil {
 			break
