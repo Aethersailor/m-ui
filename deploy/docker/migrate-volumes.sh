@@ -2,6 +2,8 @@
 
 set -euo pipefail
 
+umask 077
+
 if [[ "$EUID" -ne 0 ]]; then
   echo "migrate-volumes.sh must run as root (invoke it with sudo)" >&2
   exit 1
