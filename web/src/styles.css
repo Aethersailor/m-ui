@@ -138,6 +138,10 @@ select {
   gap: 12px;
 }
 
+.drawer-version {
+  margin-top: 24px;
+}
+
 .drawer-brand {
   padding: 0 0 24px;
 }

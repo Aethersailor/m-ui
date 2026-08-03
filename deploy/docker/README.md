@@ -16,8 +16,8 @@ sudo docker compose up -d
 ```
 
 The formal Release Compose file pins its matching image version. The file on
-`master` follows the CI-verified `edge` image. Alpine users may replace `sudo`
-with `doas`.
+`master` follows the latest stable Release through the `latest` tag. Alpine
+users may replace `sudo` with `doas`.
 
 Compose and the one-shot initializer prepare this deterministic layout without
 touching the Compose file; the initializer rejects links and special files

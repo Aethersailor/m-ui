@@ -3,6 +3,8 @@
 set -euo pipefail
 
 image="${1:?usage: docker-smoke.sh IMAGE}"
+expected_version="${M_UI_EXPECTED_VERSION:-}"
+expected_revision="${M_UI_EXPECTED_REVISION:-}"
 name="m-ui-smoke-${RANDOM}-${RANDOM}"
 if [[ "$EUID" -eq 0 ]]; then
   root_command=()
@@ -37,6 +39,16 @@ do
     --format "{{index .Config.Labels \"${label}\"}}" "$image")"
   [[ -n "$value" && "$value" != "<no value>" ]]
 done
+if [[ -n "$expected_version" ]]; then
+  actual_version="$(docker image inspect --format \
+    '{{index .Config.Labels "org.opencontainers.image.version"}}' "$image")"
+  [[ "$actual_version" == "$expected_version" ]]
+fi
+if [[ -n "$expected_revision" ]]; then
+  actual_revision="$(docker image inspect --format \
+    '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$image")"
+  [[ "$actual_revision" == "$expected_revision" ]]
+fi
 
 if docker run --rm --user 0:0 --network none \
   --cap-drop ALL --cap-add CHOWN --cap-add DAC_OVERRIDE --cap-add FOWNER \
@@ -87,6 +99,11 @@ if [[ "$(docker inspect --format '{{.State.Health.Status}}' "$name")" != "health
 fi
 docker exec "$name" m-ui core status --json \
   --config /etc/m-ui/config.toml >/dev/null
+if [[ -n "$expected_version" ]]; then
+  curl --fail --silent --show-error \
+    http://127.0.0.1:2095/api/v1/health |
+    grep -Fq "\"version\":\"${expected_version}\""
+fi
 if docker exec "$name" test -e /usr/lib/m-ui/manage.sh; then
   echo "container unexpectedly contains the native lifecycle manager" >&2
   exit 1

@@ -7,6 +7,7 @@ import {
   NLayoutContent,
   NLayoutSider,
   NMenu,
+  NSpace,
   NTag,
   NText,
   type MenuOption,
@@ -16,12 +17,14 @@ import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 
 import { useAuthStore } from '@/stores/auth'
+import { useHealthStore } from '@/stores/health'
 import { useManagementStore } from '@/stores/management'
 import { usePreferencesStore } from '@/stores/preferences'
 
 const route = useRoute()
 const router = useRouter()
 const auth = useAuthStore()
+const health = useHealthStore()
 const management = useManagementStore()
 const preferences = usePreferencesStore()
 const { t } = useI18n()
@@ -31,6 +34,9 @@ const collapsed = ref(false)
 const activeKey = computed(() => String(route.meta.section ?? 'dashboard'))
 const panelTitle = computed(
   () => management.settings?.panel_title || t('product.name'),
+)
+const buildVersion = computed(
+  () => health.health?.build.version || 'dev',
 )
 
 const menuOptions = computed<MenuOption[]>(() => [
@@ -58,6 +64,7 @@ function menuLink(key: string, routeName: string, label: string): MenuOption {
 }
 
 onMounted(async () => {
+  const healthRequest = health.refresh()
   try {
     await management.loadShellSettings()
     if (management.settings) {
@@ -66,6 +73,7 @@ onMounted(async () => {
   } catch {
     // Individual pages expose actionable request failures.
   }
+  await healthRequest
 })
 
 async function signOut() {
@@ -103,7 +111,7 @@ async function signOut() {
         class="main-menu"
       />
       <div v-if="!collapsed" class="sidebar-foot">
-        <NTag size="small" :bordered="false" round>v0.1</NTag>
+        <NTag size="small" :bordered="false" round>{{ buildVersion }}</NTag>
         <NText depth="3">{{ auth.admin?.username }}</NText>
       </div>
     </NLayoutSider>
@@ -118,6 +126,10 @@ async function signOut() {
           </div>
         </div>
         <NMenu :value="activeKey" :options="menuOptions" />
+        <NSpace class="drawer-version" vertical>
+          <NTag size="small" :bordered="false" round>{{ buildVersion }}</NTag>
+          <NText depth="3">{{ auth.admin?.username }}</NText>
+        </NSpace>
       </NDrawerContent>
     </NDrawer>
 

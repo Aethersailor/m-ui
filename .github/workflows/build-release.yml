@@ -1,25 +1,39 @@
-name: Release
+name: Smart Build & Release
 
 on:
+  pull_request:
+  push:
+    branches:
+      - master
   workflow_dispatch:
     inputs:
-      version_mode:
-        description: Select an explicit version or calculate the next semantic version
+      mode:
+        description: Test only, build downloadable artifacts, or publish a release
         required: true
-        default: explicit
+        default: test
         type: choice
         options:
+          - test
+          - build
+          - release
+      version_mode:
+        description: Use the latest tag, an explicit version, or bump the latest tag
+        required: true
+        default: auto
+        type: choice
+        options:
+          - auto
           - explicit
           - patch
           - minor
           - major
       version:
-        description: Optional vX.Y.Z or X.Y.Z; required for explicit mode
+        description: vX.Y.Z or X.Y.Z when version mode is explicit
         required: false
         default: ''
         type: string
       target_ref:
-        description: Remote ref to release, defaulting to master
+        description: Remote branch, tag, or commit to test, build, or release
         required: true
         default: master
         type: string
@@ -29,8 +43,8 @@ on:
         default: false
         type: boolean
       confirm:
-        description: Type RELEASE to authorize tag, registry, and Release publication
-        required: true
+        description: Type RELEASE only when mode is release
+        required: false
         default: ''
         type: string
 
@@ -38,15 +52,20 @@ permissions:
   contents: read
 
 concurrency:
-  group: formal-release
-  cancel-in-progress: false
+  group: smart-build-${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'release' && 'release' || github.ref }}
+  cancel-in-progress: ${{ !(github.event_name == 'workflow_dispatch' && inputs.mode == 'release') }}
 
 jobs:
   validate:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     outputs:
+      mode: ${{ steps.guard.outputs.mode }}
       version: ${{ steps.guard.outputs.version }}
+      full_version: ${{ steps.guard.outputs.full_version }}
+      package_version: ${{ steps.guard.outputs.package_version }}
+      artifact_version: ${{ steps.guard.outputs.artifact_version }}
+      created: ${{ steps.guard.outputs.created }}
       target_sha: ${{ steps.guard.outputs.target_sha }}
       target_ref: ${{ steps.guard.outputs.target_ref }}
       prerelease: ${{ steps.guard.outputs.prerelease }}
@@ -56,30 +75,47 @@ jobs:
       - name: Check out exact target
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
-          ref: ${{ inputs.target_ref }}
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.target_ref || github.sha }}
           fetch-depth: 0
 
       - name: Resolve version and enforce remote target identity
         id: guard
         env:
+          EVENT_NAME: ${{ github.event_name }}
+          MODE_INPUT: ${{ inputs.mode }}
           VERSION_INPUT: ${{ inputs.version }}
           VERSION_MODE: ${{ inputs.version_mode }}
-          TARGET_REF: ${{ inputs.target_ref }}
+          TARGET_REF_INPUT: ${{ inputs.target_ref }}
           PRERELEASE: ${{ inputs.prerelease }}
           CONFIRM: ${{ inputs.confirm }}
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          test "$CONFIRM" = RELEASE
+          MODE="${MODE_INPUT:-test}"
+          TARGET_REF="${TARGET_REF_INPUT:-$GITHUB_SHA}"
+          VERSION_MODE="${VERSION_MODE:-auto}"
+          PRERELEASE="${PRERELEASE:-false}"
+          if [ "$EVENT_NAME" != workflow_dispatch ]; then
+            MODE=test
+            TARGET_REF="$GITHUB_SHA"
+            VERSION_MODE=auto
+            VERSION_INPUT=
+            PRERELEASE=false
+          fi
+          case "$MODE" in
+            test|build|release) ;;
+            *) echo "unsupported workflow mode: $MODE" >&2; exit 1 ;;
+          esac
           [[ "$TARGET_REF" =~ ^[A-Za-z0-9._/-]+$ ]]
-          git fetch --no-tags --prune origin "$TARGET_REF"
+          git fetch --force --tags origin
           TARGET_SHA="$(git rev-parse HEAD)"
           [[ "$TARGET_SHA" =~ ^[0-9a-f]{40}$ ]]
-          if [ "$TARGET_REF" = master ]; then
+          if [ "$EVENT_NAME" = workflow_dispatch ] && [ "$TARGET_REF" = master ]; then
+            git fetch --no-tags --prune origin master
             test "$(git rev-parse origin/master)" = "$TARGET_SHA"
           fi
           case "$VERSION_MODE" in
-            explicit|patch|minor|major) ;;
+            auto|explicit|patch|minor|major) ;;
             *) echo "unsupported version mode" >&2; exit 1 ;;
           esac
           normalize_version() {
@@ -88,53 +124,72 @@ jobs:
             [[ "$candidate" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
             printf 'v%s\n' "$candidate"
           }
+          latest="$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' |
+            awk '/^v[0-9]+\.[0-9]+\.[0-9]+$/' |
+            sort -V | tail -n 1)"
+          [ -n "$latest" ] || latest=v0.0.0
           if [ "$VERSION_MODE" = explicit ]; then
             test -n "$VERSION_INPUT"
             VERSION="$(normalize_version "$VERSION_INPUT")"
+          elif [ "$VERSION_MODE" = auto ] && [ "$MODE" != release ]; then
+            VERSION="$latest"
           else
-            latest="$(git ls-remote --tags origin 'refs/tags/v*' |
-              awk -F/ '$NF !~ /\^\{\}$/ && $NF ~ /^v[0-9]+\.[0-9]+\.[0-9]+$/ {print $NF}' |
-              sort -V | tail -n 1)"
-            if [ -z "$latest" ] && [ "$VERSION_MODE" = patch ]; then
-              VERSION=v0.1.0
-            else
-              [ -n "$latest" ] || latest=v0.1.0
-              IFS=. read -r major minor patch <<< "${latest#v}"
-              major=$((10#$major))
-              minor=$((10#$minor))
-              patch=$((10#$patch))
-              case "$VERSION_MODE" in
-                patch) patch=$((patch + 1)) ;;
-                minor) minor=$((minor + 1)); patch=0 ;;
-                major) major=$((major + 1)); minor=0; patch=0 ;;
-              esac
-              VERSION="v${major}.${minor}.${patch}"
+            IFS=. read -r major minor patch <<< "${latest#v}"
+            major=$((10#$major))
+            minor=$((10#$minor))
+            patch=$((10#$patch))
+            bump="$VERSION_MODE"
+            [ "$bump" != auto ] || bump=patch
+            case "$bump" in
+              patch) patch=$((patch + 1)) ;;
+              minor) minor=$((minor + 1)); patch=0 ;;
+              major) major=$((major + 1)); minor=0; patch=0 ;;
+            esac
+            VERSION="v${major}.${minor}.${patch}"
+          fi
+          SHA12="${TARGET_SHA:0:12}"
+          FULL_VERSION="${VERSION}+g${SHA12}"
+          PACKAGE_VERSION="${VERSION#v}+g${SHA12}"
+          CREATED="$(git show -s --format=%cI "$TARGET_SHA")"
+          if [ "$MODE" = release ]; then
+            test "$CONFIRM" = RELEASE
+            if git ls-remote --exit-code --tags origin "refs/tags/$VERSION"; then
+              echo "release tag already exists" >&2
+              exit 1
+            fi
+            if gh release view "$VERSION" >/dev/null 2>&1; then
+              echo "GitHub Release already exists" >&2
+              exit 1
             fi
           fi
-          if git ls-remote --exit-code --tags origin "refs/tags/$VERSION"
-          then
-            echo "release tag already exists" >&2
-            exit 1
-          fi
-          if gh release view "$VERSION" >/dev/null 2>&1
-          then
-            echo "GitHub Release already exists" >&2
-            exit 1
-          fi
           {
+            printf 'mode=%s\n' "$MODE"
             printf 'version=%s\n' "$VERSION"
+            printf 'full_version=%s\n' "$FULL_VERSION"
+            printf 'package_version=%s\n' "$PACKAGE_VERSION"
+            printf 'artifact_version=%s\n' "${VERSION#v}"
+            printf 'created=%s\n' "$CREATED"
             printf 'target_sha=%s\n' "$TARGET_SHA"
             printf 'target_ref=%s\n' "$TARGET_REF"
             printf 'prerelease=%s\n' "$PRERELEASE"
-            printf 'sha12=%s\n' "${TARGET_SHA:0:12}"
+            printf 'sha12=%s\n' "$SHA12"
           } >>"$GITHUB_OUTPUT"
+          {
+            echo '### Build identity'
+            echo "- mode: $MODE"
+            echo "- release tag: $VERSION"
+            echo "- complete version: $FULL_VERSION"
+            echo "- source: $TARGET_SHA"
+          } >>"$GITHUB_STEP_SUMMARY"
 
       - name: Lock official Mihomo release identity
+        if: steps.guard.outputs.mode != 'test'
         env:
           M_UI_GITHUB_TOKEN: ${{ github.token }}
         run: bash scripts/resolve-mihomo.sh --output packaging/bootstrap
 
       - name: Upload locked bootstrap identity
+        if: steps.guard.outputs.mode != 'test'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: release-identity-${{ steps.guard.outputs.sha12 }}
@@ -142,8 +197,186 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-  bootstrap:
+  verify:
     needs: validate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+
+    steps:
+      - name: Check out exact target
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ needs.validate.outputs.target_sha }}
+
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: 1.26.5
+          cache: true
+
+      - name: Set up Node.js
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 24.18.0
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install frontend dependencies
+        run: npm --prefix web ci
+
+      - name: Verify backend and frontend
+        run: |
+          go test ./...
+          go vet ./...
+          go test -race ./...
+          npm --prefix web run lint
+          npm --prefix web run typecheck
+          npm --prefix web run test
+          npm --prefix web run build
+
+      - name: Build and verify the complete dynamic version
+        env:
+          VERSION: ${{ needs.validate.outputs.full_version }}
+          COMMIT: ${{ needs.validate.outputs.target_sha }}
+          BUILD_DATE: ${{ needs.validate.outputs.created }}
+          DIRTY: false
+        run: |
+          make build
+          build_output="$(dist/m-ui version)"
+          grep -F "m-ui ${VERSION}" <<<"$build_output"
+          grep -F "commit=${COMMIT}" <<<"$build_output"
+          grep -F "date=${BUILD_DATE}" <<<"$build_output"
+
+      - name: Run locked real Mihomo smoke test
+        env:
+          M_UI_GITHUB_TOKEN: ${{ github.token }}
+        run: make smoke
+
+      - name: Test install lifecycle in an isolated root
+        run: bash scripts/manage-test.sh
+
+      - name: Validate Linux configuration files
+        run: |
+          sudo visudo -cf deploy/sudoers/m-ui
+          if ! getent passwd m-ui >/dev/null; then
+            sudo useradd --system --user-group --no-create-home m-ui
+          fi
+          if ! getent passwd mihomo >/dev/null; then
+            sudo useradd --system --user-group --no-create-home mihomo
+          fi
+          sudo install -m 0755 dist/m-ui /usr/bin/m-ui
+          sudo install -d -m 0755 \
+            /etc/mihomo /var/lib/mihomo /var/lib/m-ui/core/current
+          sudo install -m 0755 /bin/true /var/lib/m-ui/core/current/mihomo
+          systemd-analyze verify \
+            deploy/systemd/m-ui.service \
+            deploy/systemd/mihomo.service
+          sudo rm -f /usr/bin/m-ui /var/lib/m-ui/core/current/mihomo
+
+      - name: Verify Linux targets compile
+        env:
+          VERSION: ${{ needs.validate.outputs.full_version }}
+          COMMIT: ${{ needs.validate.outputs.target_sha }}
+          BUILD_DATE: ${{ needs.validate.outputs.created }}
+        run: |
+          ldflags="-X github.com/Aethersailor/m-ui/internal/version.version=${VERSION} \
+            -X github.com/Aethersailor/m-ui/internal/version.commit=${COMMIT} \
+            -X github.com/Aethersailor/m-ui/internal/version.date=${BUILD_DATE} \
+            -X github.com/Aethersailor/m-ui/internal/version.dirty=false"
+          for arch in amd64 arm64; do
+            GOOS=linux GOARCH="$arch" CGO_ENABLED=0 \
+              go build -tags webembed -trimpath -ldflags "$ldflags" \
+              -o "dist/m-ui-linux-$arch" ./cmd/m-ui
+          done
+
+  policy:
+    needs: validate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out exact target
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ needs.validate.outputs.target_sha }}
+
+      - name: Install verified policy tools
+        run: |
+          curl --fail --location --proto '=https' --proto-redir '=https' \
+            --output shellcheck.tar.xz \
+            https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.xz
+          echo "8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198  shellcheck.tar.xz" |
+            sha256sum --check
+          tar -xJf shellcheck.tar.xz
+          sudo install -m 0755 \
+            shellcheck-v0.11.0/shellcheck /usr/local/bin/shellcheck
+
+          curl --fail --location --proto '=https' --proto-redir '=https' \
+            --output actionlint.tar.gz \
+            https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz
+          echo "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8  actionlint.tar.gz" |
+            sha256sum --check
+          tar -xzf actionlint.tar.gz actionlint
+          sudo install -m 0755 actionlint /usr/local/bin/actionlint
+
+          curl --fail --location --proto '=https' --proto-redir '=https' \
+            --output hadolint \
+            https://github.com/hadolint/hadolint/releases/download/v2.14.0/hadolint-Linux-x86_64
+          echo "6bf226944684f56c84dd014e8b979d27425c0148f61b3bd99bcc6f39e9dc5a47  hadolint" |
+            sha256sum --check
+          chmod 0755 hadolint
+          sudo install -m 0755 hadolint /usr/local/bin/hadolint
+
+      - name: Validate shell, workflow, release config, and container definition
+        run: |
+          find scripts deploy -type f -name '*.sh' -print0 |
+            xargs -0 shellcheck
+          sh -n deploy/openrc/m-ui deploy/openrc/mihomo
+          actionlint
+          hadolint Dockerfile
+
+      - name: Check GoReleaser configuration
+        uses: goreleaser/goreleaser-action@4c6ab561adb47e50c45ef534e2155934e91c40c1 # v7.2.0
+        env:
+          M_UI_BUILD_VERSION: v0.0.0+g000000000000
+          M_UI_BUILD_COMMIT: 0000000000000000000000000000000000000000
+          M_UI_BUILD_DATE: 1970-01-01T00:00:00Z
+          M_UI_PACKAGE_VERSION: 0.0.0+g000000000000
+          M_UI_ARTIFACT_VERSION: 0.0.0
+        with:
+          distribution: goreleaser
+          version: v2.17.1
+          args: check
+
+  golangci-lint:
+    needs: validate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out exact target
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ needs.validate.outputs.target_sha }}
+
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: 1.26.5
+          cache: true
+
+      - name: Run golangci-lint
+        uses: golangci/golangci-lint-action@db9de0fc1a667e1a49d2291a1a042dff081d78f6 # v9
+        with:
+          version: v2.12.2
+
+  bootstrap:
+    if: needs.validate.outputs.mode != 'test'
+    needs:
+      - validate
+      - verify
+      - policy
+      - golangci-lint
     strategy:
       fail-fast: false
       matrix:
@@ -198,11 +431,6 @@ jobs:
           ref: ${{ needs.validate.outputs.target_sha }}
           fetch-depth: 0
 
-      - name: Create local release tag
-        env:
-          VERSION: ${{ needs.validate.outputs.version }}
-        run: git tag "$VERSION"
-
       - name: Download verified bootstraps
         uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
         with:
@@ -223,19 +451,10 @@ jobs:
           cache: npm
           cache-dependency-path: web/package-lock.json
 
-      - name: Run complete source verification
-        env:
-          M_UI_GITHUB_TOKEN: ${{ github.token }}
+      - name: Build frontend assets
         run: |
           npm --prefix web ci
-          npm --prefix web run lint
-          npm --prefix web run typecheck
-          npm --prefix web run test
           npm --prefix web run build
-          go test ./...
-          go vet ./...
-          go test -race ./...
-          make smoke
 
       - name: Install verified Syft
         run: |
@@ -251,21 +470,27 @@ jobs:
 
       - name: Build release archives, packages, checksums, and SBOMs
         uses: goreleaser/goreleaser-action@4c6ab561adb47e50c45ef534e2155934e91c40c1 # v7.2.0
+        env:
+          M_UI_BUILD_VERSION: ${{ needs.validate.outputs.full_version }}
+          M_UI_BUILD_COMMIT: ${{ needs.validate.outputs.target_sha }}
+          M_UI_BUILD_DATE: ${{ needs.validate.outputs.created }}
+          M_UI_PACKAGE_VERSION: ${{ needs.validate.outputs.package_version }}
+          M_UI_ARTIFACT_VERSION: ${{ needs.validate.outputs.artifact_version }}
         with:
           distribution: goreleaser
           version: v2.17.1
-          args: release --clean --skip=publish
+          args: release --snapshot --clean --skip=publish
 
       - name: Add lifecycle scripts and pinned Compose definition
         env:
           VERSION: ${{ needs.validate.outputs.version }}
         run: |
           cp scripts/manage.sh scripts/install.sh scripts/uninstall.sh dist/
-          sed "s/M_UI_IMAGE_TAG:-edge/M_UI_IMAGE_TAG:-${VERSION}/g" \
+          sed "s/M_UI_IMAGE_TAG:-latest/M_UI_IMAGE_TAG:-${VERSION}/g" \
             deploy/docker/compose.yml >dist/compose.yml
           grep -q "M_UI_IMAGE_TAG:-${VERSION}" dist/compose.yml
-          if grep -q 'M_UI_IMAGE_TAG:-edge' dist/compose.yml; then
-            echo "formal Release Compose still references edge" >&2
+          if grep -q 'M_UI_IMAGE_TAG:-latest' dist/compose.yml; then
+            echo "versioned Compose still references latest" >&2
             exit 1
           fi
           cp packaging/bootstrap/identity.json \
@@ -298,7 +523,7 @@ jobs:
       - name: Upload release assets
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: release-assets-${{ needs.validate.outputs.sha12 }}
+          name: m-ui-${{ needs.validate.outputs.full_version }}-native
           path: |
             dist/*.tar.gz
             dist/*.deb
@@ -359,15 +584,24 @@ jobs:
       - name: Build and smoke-test native image
         env:
           IMAGE: m-ui:${{ needs.validate.outputs.sha12 }}-${{ matrix.arch }}
+          EXPECTED_VERSION: ${{ needs.validate.outputs.full_version }}
+          EXPECTED_REVISION: ${{ needs.validate.outputs.target_sha }}
         run: |
-          docker build \
+          docker buildx build \
             --platform linux/${{ matrix.arch }} \
-            --build-arg VERSION=${{ needs.validate.outputs.version }} \
+            --build-arg VERSION="$EXPECTED_VERSION" \
             --build-arg REVISION=${{ needs.validate.outputs.target_sha }} \
-            --build-arg CREATED="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --build-arg CREATED=${{ needs.validate.outputs.created }} \
+            --cache-from type=gha,scope=m-ui-image-${{ matrix.arch }} \
+            --cache-to type=gha,mode=max,scope=m-ui-image-${{ matrix.arch }} \
+            --load \
             --tag "$IMAGE" .
-          bash scripts/docker-smoke.sh "$IMAGE"
+          M_UI_EXPECTED_VERSION="$EXPECTED_VERSION" \
+            M_UI_EXPECTED_REVISION="$EXPECTED_REVISION" \
+            bash scripts/docker-smoke.sh "$IMAGE"
           bash scripts/docker-compose-smoke.sh "$IMAGE"
+          docker run --rm --entrypoint /usr/bin/m-ui "$IMAGE" version |
+            grep -F "m-ui ${EXPECTED_VERSION} (commit=${EXPECTED_REVISION} "
           syft "$IMAGE" \
             -o spdx-json=m-ui-image-${{ matrix.arch }}.sbom.spdx.json
           docker save "$IMAGE" | gzip -1 >m-ui-image-${{ matrix.arch }}.tar.gz
@@ -378,7 +612,7 @@ jobs:
       - name: Upload native image
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: release-image-${{ needs.validate.outputs.sha12 }}-${{ matrix.arch }}
+          name: m-ui-${{ needs.validate.outputs.full_version }}-image-${{ matrix.arch }}
           path: |
             m-ui-image-${{ matrix.arch }}.tar.gz
             docker-SHA256SUMS
@@ -407,16 +641,17 @@ jobs:
       - name: Download release assets
         uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
         with:
-          name: release-assets-${{ needs.validate.outputs.sha12 }}
+          name: m-ui-${{ needs.validate.outputs.full_version }}-native
           path: release
 
       - name: Test native package lifecycle
         env:
           FORMAT: ${{ matrix.format }}
           IMAGE: ${{ matrix.image }}
+          EXPECTED_VERSION: ${{ needs.validate.outputs.full_version }}
         run: |
           docker run --rm \
-            -e FORMAT \
+            -e FORMAT -e EXPECTED_VERSION \
             -v "$PWD/release:/release:ro" \
             "$IMAGE" sh -euxc '
               package="$(find /release -maxdepth 1 \
@@ -432,6 +667,7 @@ jobs:
               fi
               test -x /usr/bin/m-ui
               test -x /var/lib/m-ui/core/current/mihomo
+              m-ui version | grep -F "m-ui ${EXPECTED_VERSION} "
               m-ui status
               $run_core /usr/bin/m-ui core status \
                 --json --config /etc/m-ui/config.toml
@@ -449,14 +685,14 @@ jobs:
             '
 
   publish:
-    if: inputs.confirm == 'RELEASE'
+    if: needs.validate.outputs.mode == 'release'
     needs:
       - validate
       - assets
       - image
       - package-test
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 35
     permissions:
       contents: write
       packages: write
@@ -470,25 +706,36 @@ jobs:
           ref: ${{ needs.validate.outputs.target_sha }}
           fetch-depth: 0
 
-      - name: Download release assets
+      - name: Download native release assets
         uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
         with:
-          name: release-assets-${{ needs.validate.outputs.sha12 }}
+          name: m-ui-${{ needs.validate.outputs.full_version }}-native
           path: release
 
-      - name: Download native images
+      - name: Download image evidence
         uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
         with:
-          pattern: release-image-${{ needs.validate.outputs.sha12 }}-*
+          pattern: m-ui-${{ needs.validate.outputs.full_version }}-image-*
           path: images
           merge-multiple: true
 
-      - name: Validate assets, publish candidate images, create tag, and draft Release
-        id: publish-images
+      - name: Download verified native bootstraps
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          pattern: release-bootstrap-${{ needs.validate.outputs.sha12 }}-*
+          path: packaging/bootstrap
+          merge-multiple: true
+
+      - name: Set up multi-architecture emulation
+        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Snapshot protected GHCR tags
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.validate.outputs.version }}
-          SHA12: ${{ needs.validate.outputs.sha12 }}
           TARGET_SHA: ${{ needs.validate.outputs.target_sha }}
           PRERELEASE: ${{ needs.validate.outputs.prerelease }}
         run: |
@@ -501,68 +748,108 @@ jobs:
             cd release
             sha256sum --check SHA256SUMS
           )
-          echo "$GH_TOKEN" |
-            docker login ghcr.io -u "${GITHUB_ACTOR}" --password-stdin
-          repository="ghcr.io/${GITHUB_REPOSITORY,,}"
-          candidate="release-candidate-${GITHUB_RUN_ID}"
-          for arch in amd64 arm64; do
-            gzip -dc "images/m-ui-image-${arch}.tar.gz" | docker load
-            source="m-ui:${SHA12}-${arch}"
-            docker tag "$source" "${repository}:${candidate}-${arch}"
-            docker push "${repository}:${candidate}-${arch}"
-          done
-          docker buildx imagetools create \
-            --tag "${repository}:${candidate}" \
-            "${repository}:${candidate}-amd64" \
-            "${repository}:${candidate}-arm64"
-          docker buildx imagetools inspect "${repository}:${candidate}" \
-            --raw >release/CANDIDATE_IMAGE_MANIFEST.json
-          jq -e '
-            [.manifests[].platform.architecture] |
-            sort == ["amd64", "arm64"]
-          ' release/CANDIDATE_IMAGE_MANIFEST.json
 
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git tag -a "$VERSION" "$TARGET_SHA" -m "m-ui $VERSION"
-          git push origin "refs/tags/$VERSION"
-          touch "$state_dir/tag-created"
+          owner="${GITHUB_REPOSITORY%%/*}"
+          package="${GITHUB_REPOSITORY#*/}"
+          owner_type="$(gh api "/users/${owner}" -q .type)"
+          case "$owner_type" in
+            User)
+              package_versions_endpoint="/users/${owner}/packages/container/${package}/versions"
+              ;;
+            Organization)
+              package_versions_endpoint="/orgs/${owner}/packages/container/${package}/versions"
+              ;;
+            *)
+              echo "::error::cannot resolve GitHub Packages owner type for ${owner}"
+              exit 1
+              ;;
+          esac
 
-          release_args=("$VERSION" release/* --draft --target "$TARGET_SHA" \
-            --title "m-ui $VERSION" --generate-notes)
-          if [ "$PRERELEASE" = true ]; then
-            release_args+=(--prerelease)
+          pages="$state_dir/formal-tag-package-versions.json"
+          flat="$state_dir/formal-tag-package-versions-flat.json"
+          gh api --paginate --slurp             "${package_versions_endpoint}?per_page=100" >"$pages"
+          jq -e             'if type != "array" or any(.[]; type != "array") then
+               error("invalid GitHub Packages pagination response")
+             else
+               add // []
+             end' "$pages" >"$flat"
+
+          snapshot="$state_dir/formal-tag-snapshot"
+          : >"$snapshot"
+          snapshot_tag() {
+            local tag="$1"
+            local records count digest
+            records="$(jq -c --arg tag "$tag"               'map(select((.metadata.container.tags // []) | index($tag) != null))'               "$flat")"
+            count="$(jq -r 'length' <<<"$records")"
+            case "$count" in
+              0)
+                printf '%s\t-\n' "$tag" >>"$snapshot"
+                ;;
+              1)
+                digest="$(jq -r '.[0].name // empty' <<<"$records")"
+                [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+                printf '%s\t%s\n' "$tag" "$digest" >>"$snapshot"
+                ;;
+              *)
+                echo "::error::formal tag ${tag} maps to ${count} package versions"
+                exit 1
+                ;;
+            esac
+          }
+
+          snapshot_tag "$VERSION"
+          if ! grep -qxF "$VERSION"$'\t-' "$snapshot"; then
+            echo "::error::release image tag already exists: $VERSION"
+            exit 1
           fi
-          gh release create "${release_args[@]}"
-          touch "$state_dir/release-created"
+          if [ "$PRERELEASE" != true ]; then
+            snapshot_tag latest
+          fi
+          touch "$state_dir/promotion-started"
 
-      - name: Prepare candidate manifest and attestation inputs
-        id: formal-images
+      - name: Publish the exact multi-architecture GHCR image
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.validate.outputs.version }}
-          SHA12: ${{ needs.validate.outputs.sha12 }}
+          FULL_VERSION: ${{ needs.validate.outputs.full_version }}
           TARGET_SHA: ${{ needs.validate.outputs.target_sha }}
+          CREATED: ${{ needs.validate.outputs.created }}
           PRERELEASE: ${{ needs.validate.outputs.prerelease }}
+          DOCKERHUB_IMAGE: ${{ vars.DOCKERHUB_IMAGE }}
+        run: |
+          set -euo pipefail
+          echo "$GH_TOKEN" |
+            docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          repository="ghcr.io/${GITHUB_REPOSITORY,,}"
+          tags=(--tag "${repository}:${VERSION}")
+          if [ "$PRERELEASE" != true ]; then
+            tags+=(--tag "${repository}:latest")
+          fi
+          docker buildx build             --platform linux/amd64,linux/arm64             --build-arg VERSION="$FULL_VERSION"             --build-arg REVISION="$TARGET_SHA"             --build-arg CREATED="$CREATED"             --cache-from type=gha,scope=m-ui-image-amd64             --cache-from type=gha,scope=m-ui-image-arm64             "${tags[@]}"             --push .
+          if [ -n "$DOCKERHUB_IMAGE" ]; then
+            echo "::notice::Docker Hub target ${DOCKERHUB_IMAGE} is reserved; GHCR-only publication remains active"
+          fi
+
+      - name: Verify image identity and prepare release evidence
+        id: formal-images
+        env:
+          VERSION: ${{ needs.validate.outputs.version }}
         run: |
           set -euo pipefail
           repository="ghcr.io/${GITHUB_REPOSITORY,,}"
-          candidate="release-candidate-${GITHUB_RUN_ID}"
-          docker buildx imagetools inspect "${repository}:${candidate}" \
-            --raw >release/IMAGE_MANIFEST.json
-          cp images/m-ui-image-*.sbom.spdx.json release/
+          docker buildx imagetools inspect "${repository}:${VERSION}"             --raw >release/IMAGE_MANIFEST.json
           jq -e '
             [.manifests[].platform.architecture] |
             sort == ["amd64", "arm64"]
           ' release/IMAGE_MANIFEST.json
+          cp images/m-ui-image-*.sbom.spdx.json release/
           (
             cd release
-            sha256sum IMAGE_MANIFEST.json \
-              m-ui-image-*.sbom.spdx.json >>SHA256SUMS
+            sha256sum IMAGE_MANIFEST.json               m-ui-image-*.sbom.spdx.json >>SHA256SUMS
             sha256sum --check SHA256SUMS
           )
-          digest="$(docker buildx imagetools inspect \
-            "${repository}:${candidate}" --format '{{ .Manifest.Digest }}')"
+          digest="$(docker buildx imagetools inspect             "${repository}:${VERSION}" --format '{{ .Manifest.Digest }}')"
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
           printf 'subject_name=%s\n' "$repository" >>"$GITHUB_OUTPUT"
           printf 'subject_digest=%s\n' "$digest" >>"$GITHUB_OUTPUT"
 
@@ -580,7 +867,6 @@ jobs:
             release/uninstall.sh
             release/compose.yml
             release/IMAGE_MANIFEST.json
-            release/m-ui-image-*.sbom.spdx.json
             release/MIHOMO_BOOTSTRAP_IDENTITY.json
 
       - name: Attest multi-architecture image
@@ -590,126 +876,37 @@ jobs:
           subject-digest: ${{ steps.formal-images.outputs.subject_digest }}
           push-to-registry: true
 
-      - name: Promote attested images and preserve prior tags
-        id: formal-promotion
+      - name: Create exact source tag and draft GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.validate.outputs.version }}
-          SHA12: ${{ needs.validate.outputs.sha12 }}
           TARGET_SHA: ${{ needs.validate.outputs.target_sha }}
           PRERELEASE: ${{ needs.validate.outputs.prerelease }}
         run: |
           set -euo pipefail
           state_dir="$RUNNER_TEMP/m-ui-release-state"
-          repository="ghcr.io/${GITHUB_REPOSITORY,,}"
-          candidate="release-candidate-${GITHUB_RUN_ID}"
-          version_without_v="${VERSION#v}"
-          IFS=. read -r major minor _ <<< "$version_without_v"
-          base_tags=("$VERSION" "$version_without_v" "${major}.${minor}" "$major")
-          all_tags=("${base_tags[@]}" "sha-${SHA12}")
-          if [ "$PRERELEASE" != true ]; then
-            all_tags+=(latest)
-          fi
-          snapshot="$state_dir/formal-tag-snapshot"
-          : >"$snapshot"
-          owner="${GITHUB_REPOSITORY%%/*}"
-          package="${GITHUB_REPOSITORY#*/}"
-          package_versions_endpoint=""
-          owner_type="$(gh api "/users/${owner}" -q .type)"
-          case "$owner_type" in
-            User)
-              package_versions_endpoint="/users/${owner}/packages/container/${package}/versions"
-              ;;
-            Organization)
-              package_versions_endpoint="/orgs/${owner}/packages/container/${package}/versions"
-              ;;
-            *)
-              echo "::error::cannot resolve GitHub Packages owner type for ${owner}"
-              exit 1
-              ;;
-          esac
-          package_versions_file="$state_dir/formal-tag-package-versions.json"
-          package_versions_flat="$state_dir/formal-tag-package-versions-flat.json"
-          gh api --paginate --slurp \
-            "${package_versions_endpoint}?per_page=100" \
-            >"$package_versions_file"
-          jq -e \
-            'if type != "array" or any(.[]; type != "array") then
-               error("invalid GitHub Packages pagination response")
-             else
-               add // []
-             end' \
-            "$package_versions_file" >"$package_versions_flat"
-          snapshot_tag() {
-            local tag="$1"
-            local records count digest
-            records="$(jq -c --arg tag "$tag" \
-              'map(select((.metadata.container.tags // []) | index($tag) != null))' \
-              "$package_versions_flat")"
-            count="$(jq -r 'length' <<<"$records")"
-            case "$count" in
-              0)
-                printf '%s\t-\n' "$tag" >>"$snapshot"
-                ;;
-              1)
-                digest="$(jq -r '.[0].name // empty' <<<"$records")"
-                if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
-                  echo "::error::formal tag ${tag} maps to an invalid package digest: ${digest}"
-                  return 1
-                fi
-                printf '%s\t%s\n' "$tag" "$digest" >>"$snapshot"
-                ;;
-              *)
-                echo "::error::formal tag ${tag} maps to ${count} GitHub Packages versions"
-                return 1
-                ;;
-            esac
-          }
-          for tag in "${all_tags[@]}"; do
-            snapshot_tag "$tag"
-            snapshot_tag "${tag}-amd64"
-            snapshot_tag "${tag}-arm64"
-          done
-          snapshot_expected_count=$(( ${#all_tags[@]} * 3 ))
-          snapshot_actual_count="$(wc -l <"$snapshot")"
-          test "$snapshot_actual_count" -eq "$snapshot_expected_count"
-          touch "$state_dir/promotion-started"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git tag -a "$VERSION" "$TARGET_SHA" -m "m-ui $VERSION"
+          git push origin "refs/tags/$VERSION"
+          touch "$state_dir/tag-created"
 
-          for arch in amd64 arm64; do
-            for tag in "${all_tags[@]}"; do
-              docker buildx imagetools create \
-                --tag "${repository}:${tag}-${arch}" \
-                "${repository}:${candidate}-${arch}"
-            done
-          done
-          for tag in "${all_tags[@]}"; do
-            docker buildx imagetools create \
-              --tag "${repository}:${tag}" \
-              "${repository}:${candidate}"
-          done
-          candidate_digest="$(docker buildx imagetools inspect \
-            "${repository}:${candidate}" --format '{{ .Manifest.Digest }}')"
-          promoted_digest="$(docker buildx imagetools inspect \
-            "${repository}:${VERSION}" --format '{{ .Manifest.Digest }}')"
-          test "$candidate_digest" = "$promoted_digest"
-          (
-            cd release
-            sha256sum --check SHA256SUMS
-          )
+          release_args=("$VERSION" release/* --draft --target "$TARGET_SHA"             --title "m-ui $VERSION" --generate-notes)
+          if [ "$PRERELEASE" = true ]; then
+            release_args+=(--prerelease)
+          fi
+          gh release create "${release_args[@]}"
+          touch "$state_dir/release-created"
 
       - name: Complete verified GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.validate.outputs.version }}
         run: |
-          gh release upload "$VERSION" \
-            release/SHA256SUMS release/IMAGE_MANIFEST.json \
-            release/m-ui-image-*.sbom.spdx.json \
-            --clobber
           gh release edit "$VERSION" --draft=false
           touch "$RUNNER_TEMP/m-ui-release-state/release-complete"
 
-      - name: Clean up candidate and failed formal release state
+      - name: Clean up failed release state
         if: ${{ always() }}
         env:
           GH_TOKEN: ${{ github.token }}
@@ -718,16 +915,10 @@ jobs:
         run: |
           set +e
           repository="ghcr.io/${GITHUB_REPOSITORY,,}"
-          candidate="release-candidate-${GITHUB_RUN_ID}"
           state_dir="$RUNNER_TEMP/m-ui-release-state"
 
           cleanup_status=success
           cleanup_summary=()
-          candidate_tags=(
-            "$candidate"
-            "$candidate-amd64"
-            "$candidate-arm64"
-          )
           declare -A deleted_version_ids=()
 
           note_cleanup() {
@@ -746,7 +937,7 @@ jobs:
               package_versions_endpoint="/orgs/${owner}/packages/container/${package}/versions"
               ;;
             *)
-              echo "::warning::cannot resolve GitHub Packages owner type for ${owner}; candidate tags will be retained"
+              echo "::warning::cannot resolve GitHub Packages owner type for ${owner}; automatic rollback is blocked"
               cleanup_status=blocked
               note_cleanup "owner type for ${owner} could not be resolved"
               ;;
@@ -886,32 +1077,51 @@ jobs:
             note_cleanup "failed promotion: formal tag restoration was not verified; failed-promotion deletion skipped"
             new_formal_tags=()
           fi
-          cleanup_allowed_tags=("${candidate_tags[@]}" "${new_formal_tags[@]}")
-          cleanup_package_tags "candidate cleanup" "${candidate_tags[@]}"
+          cleanup_allowed_tags=("${new_formal_tags[@]}")
           if [ "$formal_restore_verified" = true ] && [ "${#new_formal_tags[@]}" -gt 0 ]; then
             cleanup_package_tags "failed-promotion cleanup" "${new_formal_tags[@]}"
           fi
 
+          release_cleanup_safe=true
           if [ -f "$state_dir/release-created" ] &&
               [ ! -f "$state_dir/release-complete" ]; then
             draft="$(gh release view "$VERSION" --json isDraft -q .isDraft 2>/dev/null)"
             if [ "$draft" = true ]; then
-              gh release delete "$VERSION" --yes || true
+              if ! gh release delete "$VERSION" --yes; then
+                release_cleanup_safe=false
+                cleanup_status=blocked
+                note_cleanup "draft Release deletion failed"
+              fi
             else
               echo "::warning::formal release $VERSION is public; manual cleanup is required"
+              release_cleanup_safe=false
+              cleanup_status=blocked
+              note_cleanup "public Release was preserved"
             fi
           fi
           if [ -f "$state_dir/tag-created" ] &&
               [ ! -f "$state_dir/release-complete" ]; then
-            echo "::warning::manual cleanup required for refs/tags/$VERSION at $TARGET_SHA"
+            remote_target="$(git ls-remote origin "refs/tags/${VERSION}^{}" |
+              awk 'NR == 1 {print $1}')"
+            if [ "$release_cleanup_safe" = true ] &&
+                [ "$remote_target" = "$TARGET_SHA" ]; then
+              if git push origin ":refs/tags/$VERSION"; then
+                note_cleanup "rolled back refs/tags/$VERSION"
+              else
+                cleanup_status=blocked
+                note_cleanup "failed to roll back refs/tags/$VERSION"
+              fi
+            else
+              cleanup_status=blocked
+              note_cleanup "refs/tags/$VERSION identity was not safe to roll back"
+            fi
           fi
           {
             echo '### Release cleanup'
-            echo "- candidate tags: ${candidate_tags[*]}"
             if [ "$cleanup_status" = success ]; then
-              echo '- candidate cleanup status: success'
+              echo '- rollback cleanup status: success'
             else
-              echo '- candidate cleanup status: blocked or incomplete'
+              echo '- rollback cleanup status: blocked or incomplete'
             fi
             if [ "${#cleanup_summary[@]}" -gt 0 ]; then
               for note in "${cleanup_summary[@]}"; do
@@ -927,3 +1137,76 @@ jobs:
           if [ "$cleanup_status" != success ]; then
             echo '::warning::formal publication may be complete, but release cleanup was not fully completed safely; see the job summary'
           fi
+
+  complete:
+    if: ${{ always() }}
+    needs:
+      - validate
+      - verify
+      - policy
+      - golangci-lint
+      - bootstrap
+      - assets
+      - image
+      - package-test
+      - publish
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+
+    steps:
+      - name: Enforce the selected mode contract
+        env:
+          MODE: ${{ needs.validate.outputs.mode }}
+          VALIDATE: ${{ needs.validate.result }}
+          VERIFY: ${{ needs.verify.result }}
+          POLICY: ${{ needs.policy.result }}
+          GOLANGCI: ${{ needs.golangci-lint.result }}
+          BOOTSTRAP: ${{ needs.bootstrap.result }}
+          ASSETS: ${{ needs.assets.result }}
+          IMAGE: ${{ needs.image.result }}
+          PACKAGE_TEST: ${{ needs.package-test.result }}
+          PUBLISH: ${{ needs.publish.result }}
+        run: |
+          set -euo pipefail
+          test "$VALIDATE" = success
+          test "$VERIFY" = success
+          test "$POLICY" = success
+          test "$GOLANGCI" = success
+          case "$MODE" in
+            test)
+              test "$BOOTSTRAP" = skipped
+              test "$ASSETS" = skipped
+              test "$IMAGE" = skipped
+              test "$PACKAGE_TEST" = skipped
+              test "$PUBLISH" = skipped
+              ;;
+            build)
+              test "$BOOTSTRAP" = success
+              test "$ASSETS" = success
+              test "$IMAGE" = success
+              test "$PACKAGE_TEST" = success
+              test "$PUBLISH" = skipped
+              ;;
+            release)
+              test "$BOOTSTRAP" = success
+              test "$ASSETS" = success
+              test "$IMAGE" = success
+              test "$PACKAGE_TEST" = success
+              test "$PUBLISH" = success
+              ;;
+            *)
+              echo "unknown or unavailable workflow mode: $MODE" >&2
+              exit 1
+              ;;
+          esac
+          {
+            echo '### Smart workflow result'
+            echo "- mode: $MODE"
+            echo '- source verification: passed'
+            if [ "$MODE" != test ]; then
+              echo '- native assets and Docker images: passed'
+            fi
+            if [ "$MODE" = release ]; then
+              echo '- GitHub Release and GHCR publication: passed'
+            fi
+          } >>"$GITHUB_STEP_SUMMARY"

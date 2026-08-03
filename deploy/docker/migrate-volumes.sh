@@ -20,7 +20,7 @@ source_project=""
 target=""
 dry_run=0
 assume_yes=0
-validator_image="${M_UI_IMAGE:-ghcr.io/aethersailor/m-ui:${M_UI_IMAGE_TAG:-edge}}"
+validator_image="${M_UI_IMAGE:-ghcr.io/aethersailor/m-ui:${M_UI_IMAGE_TAG:-latest}}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in

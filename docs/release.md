@@ -1,60 +1,54 @@
 # Build and release policy
 
-## Snapshot Build
+m-ui has one GitHub Actions workflow:
+`.github/workflows/build-release.yml` (`Smart Build & Release`). The same
+workflow owns source verification, native packages, Docker images, workflow
+artifacts, GHCR publication, and GitHub Releases.
 
-Every pull request, branch push, and manual dispatch runs `Snapshot Build`.
-The workflow:
+## Modes
 
-1. records the exact m-ui commit and locks one official stable Mihomo release
-   identity;
-2. downloads and verifies the exact amd64-compatible and arm64 assets on native
-   architecture runners;
-3. executes each bootstrap with `-v` and validates the pinned golden
-   configuration with `-t -f`;
-4. builds m-ui Linux amd64/arm64 archives, deb and apk packages;
-5. emits SHA-256 checksums and SPDX JSON SBOMs;
-6. installs/removes/reinstalls the native packages in supported distro
-   containers while checking data persistence;
-7. builds, starts, health-checks, restarts and inspects non-root native OCI
-   images on both architectures.
+Pull requests and pushes to `master` automatically run `test`. A manual
+dispatch selects one mode:
 
-Snapshot artifacts are retained for 14 days. Feature-branch runs never create a
-Tag, GitHub Release, or GHCR tag. A push to `master` may update only the
-documented `edge` and commit-addressed snapshot image tags.
+- `test`: run backend and frontend tests, vet, race detection, linters, policy
+  checks, the pinned real Mihomo validation, install-script tests, embedded Web
+  build, Linux cross-compilation, and dynamic-version assertions.
+- `build`: run everything in `test`, then build and test amd64/arm64 tar,
+  deb, apk, SBOM, checksum, Mihomo bootstrap, and Docker-image artifacts.
+  Artifacts are uploaded to the workflow run; no registry tag, Git tag, or
+  GitHub Release is created.
+- `release`: run the complete `build` graph, attest the exact artifacts,
+  publish GHCR, create the annotated source tag and draft Release, and expose
+  the Release only after every identity check succeeds.
 
-## Formal Release
+The final `complete` job checks that required jobs succeeded and that jobs
+which must not run in the selected mode were skipped.
 
-Formal publishing is never triggered by a tag push. An operator must manually
-dispatch `Release` with `version_mode` (`explicit`, `patch`, `minor`, or
-`major`), an optional `version`, `target_ref` (default `master`), a
-`prerelease` boolean, and the exact confirmation string `RELEASE`.
+## Dynamic version identity
 
-`explicit` accepts `vX.Y.Z` or `X.Y.Z`. The other modes inspect the latest
-strict `vX.Y.Z` tag and perform correct patch/minor/major carry; if no tag
-exists, patch starts at `v0.1.0`. The workflow fetches the selected remote ref,
-records its exact commit, refuses an existing tag or Release, and requires
-`master` to equal the fetched `origin/master` SHA. A prerelease never updates
-`latest`.
+Every run resolves one strict base tag `vX.Y.Z` and the exact target commit.
+The complete product version is:
 
-Publishing is the final job and is reachable only after all native builds,
-tests, package lifecycle checks and container smoke tests succeed. It validates
-all assets and image digests, pushes immutable candidate architecture tags,
-creates an annotated tag and draft GitHub Release, then publishes the formal
-GHCR multi-architecture labels, provenance attestations and the verified draft.
+```text
+vX.Y.Z+g<12-character-commit-id>
+```
 
-Cleanup uses the GitHub Packages versions API rather than an unsupported
-`docker buildx imagetools rm` command. Before deleting a package version, the
-workflow enumerates every tag attached to that version. It deletes a version
-only when all of its tags are run-scoped candidate or newly-created failed-
-promotion tags; if a formal tag shares the version, deletion is refused and the
-job summary records the retained candidate tag. The cleanup status and every
-residual tag are therefore explicit and auditable. If the package API does not
-grant the workflow admin access, no package version is deleted and the summary
-marks cleanup as blocked. Before promotion, the workflow also snapshots formal
-tag ownership through the same paginated API and stops without promotion when a
-tag lookup is ambiguous or fails. A failed promotion must verify every formal
-tag restore before any failed-promotion package version deletion is considered.
-The release contains:
+For non-release runs, `auto` uses the latest strict semantic-version tag. For
+release runs, `auto` increments the patch version; explicit, patch, minor, and
+major modes are also available. A release refuses an existing Git tag, GitHub
+Release, or GHCR version tag.
+
+The complete version is injected into the Go binary, package metadata, Web UI
+(via the health API), health JSON, and OCI image version label. The full
+40-character commit is injected separately into the binary and OCI revision
+label. The build date is the source commit timestamp, so rerunning the same
+source identity does not invent different version metadata. Release filenames
+retain the base semantic version so `install.sh` and `manage.sh` can resolve
+assets deterministically from the GitHub Release tag.
+
+## Artifact matrix
+
+`build` and `release` produce:
 
 ```text
 m-ui_<version>_linux_amd64.tar.gz
@@ -68,19 +62,60 @@ SHA256SUMS
 manage.sh
 install.sh
 uninstall.sh
+compose.yml
 MIHOMO_BOOTSTRAP_IDENTITY.json
-IMAGE_MANIFEST.json
+m-ui-image-amd64.tar.gz
+m-ui-image-arm64.tar.gz
+m-ui-image-amd64.sbom.spdx.json
+m-ui-image-arm64.sbom.spdx.json
 ```
 
-Do not manually replace one architecture or rebuild an asset outside the
-workflow. If a release candidate changes, use a new commit and rerun the entire
-graph so packages, SBOMs, checksums, images and provenance identify the same
-source. This task does not dispatch the formal workflow or create a Tag,
-Release, or formal GHCR version label.
+A Release additionally includes `IMAGE_MANIFEST.json` and provenance
+attestations. Both native architectures execute the locked Mihomo bootstrap and
+validate the golden configuration. Native packages are installed, removed, and
+reinstalled in supported distribution containers. Each architecture image is
+built on a native runner, run as a non-root service, health checked, restarted,
+version checked, and exported. The final multi-architecture publication reuses
+those BuildKit caches.
+
+## Registry policy
+
+GHCR retains only these public image tags:
+
+- the exact release tag, for example `v0.2.0`;
+- `latest` for the newest stable release.
+
+A prerelease publishes only its exact version tag. Push and `build` runs never
+publish `edge`, commit, architecture, major, minor, candidate, or other
+registry tags. The source Compose file defaults to `latest`; the Compose file
+inside a GitHub Release is pinned to that Release's exact version tag.
+
+The multi-architecture image is pushed directly with its final tags, so no
+temporary registry tags are required. Before publication, the workflow
+enumerates GHCR package versions through the paginated GitHub Packages API and
+snapshots every tag it will change. On failure it restores prior digests and
+deletes only newly-created package versions whose complete tag set is proven
+safe. Ambiguous API data fails closed.
+
+Docker Hub is deliberately disabled today. The workflow reserves
+`vars.DOCKERHUB_IMAGE` as the future registry target at the same Buildx tag
+boundary; adding credentials and parity rollback does not require another
+compile workflow.
+
+## Dispatching
+
+A formal release is manual and requires `mode=release`, a version strategy,
+the exact target ref, optional prerelease selection, and the confirmation value
+`RELEASE`. Selecting `release` is the only path with write permissions in
+the job that mutates tags, packages, attestations, or Releases.
+
+Do not replace one architecture or rebuild a single asset outside the workflow.
+If source changes, rerun the whole graph with the new commit so packages,
+checksums, SBOMs, images, attestations, and the Release all identify one source.
 
 ## Local validation
 
-Before pushing a release candidate:
+Run the applicable checks before pushing:
 
 ```sh
 go test ./...
@@ -97,6 +132,5 @@ actionlint
 goreleaser check
 ```
 
-Race, package lifecycle, native ARM, real Mihomo and Docker evidence must come
-from Linux-capable local execution or the exact final-SHA GitHub Actions jobs;
-a cross-compile alone is not runtime evidence.
+Race, package lifecycle, native ARM, real Mihomo, and Docker runtime evidence
+must come from Linux-capable execution or the exact final-SHA Actions run.

@@ -1,6 +1,6 @@
 services:
   data-init:
-    image: "${M_UI_IMAGE:-ghcr.io/aethersailor/m-ui}:${M_UI_IMAGE_TAG:-edge}"
+    image: "${M_UI_IMAGE:-ghcr.io/aethersailor/m-ui}:${M_UI_IMAGE_TAG:-latest}"
     container_name: m-ui-data-init
     user: "0:0"
     restart: "no"
@@ -25,7 +25,7 @@ services:
           create_host_path: false
 
   m-ui:
-    image: "${M_UI_IMAGE:-ghcr.io/aethersailor/m-ui}:${M_UI_IMAGE_TAG:-edge}"
+    image: "${M_UI_IMAGE:-ghcr.io/aethersailor/m-ui}:${M_UI_IMAGE_TAG:-latest}"
     container_name: m-ui
     restart: unless-stopped
     depends_on:

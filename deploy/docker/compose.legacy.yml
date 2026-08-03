@@ -1,6 +1,6 @@
 services:
   m-ui:
-    image: ghcr.io/aethersailor/m-ui:${M_UI_IMAGE_TAG:-edge}
+    image: ghcr.io/aethersailor/m-ui:${M_UI_IMAGE_TAG:-latest}
     container_name: m-ui
     restart: unless-stopped
     network_mode: host

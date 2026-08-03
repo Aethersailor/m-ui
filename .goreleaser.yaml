@@ -20,9 +20,9 @@ builds:
     ldflags:
       - >-
         -s -w
-        -X github.com/Aethersailor/m-ui/internal/version.version={{ .Version }}
-        -X github.com/Aethersailor/m-ui/internal/version.commit={{ .ShortCommit }}
-        -X github.com/Aethersailor/m-ui/internal/version.date={{ .Date }}
+        -X github.com/Aethersailor/m-ui/internal/version.version={{ .Env.M_UI_BUILD_VERSION }}
+        -X github.com/Aethersailor/m-ui/internal/version.commit={{ .Env.M_UI_BUILD_COMMIT }}
+        -X github.com/Aethersailor/m-ui/internal/version.date={{ .Env.M_UI_BUILD_DATE }}
         -X github.com/Aethersailor/m-ui/internal/version.dirty=false
 
 archives:
@@ -31,7 +31,7 @@ archives:
       - m-ui
     formats:
       - tar.gz
-    name_template: "m-ui_{{ .Version }}_linux_{{ .Arch }}"
+    name_template: "m-ui_{{ .Env.M_UI_ARTIFACT_VERSION }}_linux_{{ .Arch }}"
     files:
       - src: README.md
       - src: LICENSE
@@ -56,7 +56,7 @@ nfpms:
     ids:
       - m-ui
     package_name: m-ui
-    file_name_template: "m-ui_{{ .Version }}_linux_{{ .Arch }}"
+    file_name_template: "m-ui_{{ .Env.M_UI_ARTIFACT_VERSION }}_linux_{{ .Arch }}"
     vendor: Aethersailor
     homepage: https://github.com/Aethersailor/m-ui
     maintainer: Aethersailor
@@ -176,7 +176,7 @@ sboms:
       - "{{ .ArtifactName }}.sbom.spdx.json"
 
 snapshot:
-  version_template: "0.1.0-snapshot-{{ .ShortCommit }}"
+  version_template: "{{ .Env.M_UI_PACKAGE_VERSION }}"
 
 changelog:
   disable: true

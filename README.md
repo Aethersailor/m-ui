@@ -216,7 +216,7 @@ Docker Secret 或额外准备脚本。
 
 如需其他持久化目录，在启动命令前设置 `M_UI_DATA_DIR=/srv/m-ui`；该目录必须
 预先存在。正式 Release 的 Compose 会固定对应版本镜像；`master` 中的 Compose
-默认跟随通过快照构建验证的 `edge` 镜像。
+默认跟随最新稳定 Release 的 `latest` 镜像。
 
 查看健康状态：
 
@@ -261,7 +261,7 @@ sudo docker compose -f /opt/m-ui/compose.yml exec m-ui m-ui admin setup-link
 
 #### 更新与数据
 
-更新到最新通过快照构建的 `edge` 版本：
+更新到最新稳定 Release：
 
 ```sh
 cd /opt/m-ui
