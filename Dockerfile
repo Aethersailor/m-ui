@@ -74,6 +74,8 @@ USER 10001:10001
 WORKDIR /data
 EXPOSE 2095
 ENTRYPOINT ["/sbin/tini", "--", "/usr/lib/m-ui/entrypoint.sh"]
+# The health probe intentionally needs shell pipelines to validate both core states.
+# hadolint ignore=DL3025
 HEALTHCHECK --interval=15s --timeout=5s --start-period=20s --retries=4 \
   CMD status="$(/usr/bin/m-ui core status --json --config /etc/m-ui/config.toml)" \
     && printf '%s' "$status" | grep -Eq '"process_active"[[:space:]]*:[[:space:]]*true' \
