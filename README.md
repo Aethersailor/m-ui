@@ -20,8 +20,8 @@
   <a href="https://github.com/Aethersailor/m-ui/actions/workflows/build-release.yml">
     <img src="https://github.com/Aethersailor/m-ui/actions/workflows/build-release.yml/badge.svg?branch=master" alt="Build">
   </a>
-  <a href="https://github.com/Aethersailor/m-ui/actions/workflows/codeql.yml">
-    <img src="https://github.com/Aethersailor/m-ui/actions/workflows/codeql.yml/badge.svg?branch=master" alt="CodeQL">
+  <a href="https://github.com/Aethersailor/m-ui/security/code-scanning">
+    <img src="https://github.com/Aethersailor/m-ui/actions/workflows/github-code-scanning/codeql/badge.svg?branch=master" alt="CodeQL">
   </a>
   <img src="https://img.shields.io/badge/platform-Linux-FCC624?logo=linux&logoColor=black" alt="Linux">
   <img src="https://img.shields.io/badge/arch-amd64%20%7C%20arm64-555555" alt="amd64 and arm64">

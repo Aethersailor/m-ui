@@ -1,0 +1,47 @@
+version: 2
+
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: daily
+      time: "02:00"
+      timezone: Asia/Shanghai
+    open-pull-requests-limit: 20
+    rebase-strategy: auto
+    commit-message:
+      prefix: ci
+
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: daily
+      time: "02:15"
+      timezone: Asia/Shanghai
+    open-pull-requests-limit: 20
+    rebase-strategy: auto
+    commit-message:
+      prefix: build(go)
+
+  - package-ecosystem: npm
+    directory: /web
+    schedule:
+      interval: daily
+      time: "02:30"
+      timezone: Asia/Shanghai
+    open-pull-requests-limit: 20
+    rebase-strategy: auto
+    versioning-strategy: increase
+    commit-message:
+      prefix: build(web)
+
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: daily
+      time: "02:45"
+      timezone: Asia/Shanghai
+    open-pull-requests-limit: 20
+    rebase-strategy: auto
+    commit-message:
+      prefix: build(docker)
