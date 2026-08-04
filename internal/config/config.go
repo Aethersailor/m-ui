@@ -74,7 +74,7 @@ type Mihomo struct {
 func Default() Config {
 	return Config{
 		Server: Server{
-			ListenAddress:     "127.0.0.1",
+			ListenAddress:     "0.0.0.0",
 			Port:              2095,
 			ReadHeaderTimeout: "5s",
 			ShutdownTimeout:   "10s",
@@ -114,7 +114,7 @@ func Default() Config {
 
 // Load overlays one TOML file on safe defaults. An empty path uses the default
 // system location and tolerates a missing file so a fresh binary can expose its
-// loopback health endpoint. An explicitly supplied path must exist.
+// default panel endpoint. An explicitly supplied path must exist.
 func Load(path string) (Config, error) {
 	cfg := Default()
 	explicit := path != ""

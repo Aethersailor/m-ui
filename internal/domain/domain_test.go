@@ -140,6 +140,18 @@ func TestEndpointValidationSupportsWildcardIPv4AndIPv6ButKeepsConnectLoopbackOnl
 	}
 }
 
+func TestNormalizeLegacyDefaultsPanelToAllIPv4Interfaces(t *testing.T) {
+	t.Parallel()
+
+	state, err := (DesiredState{}).NormalizeLegacy()
+	if err != nil {
+		t.Fatalf("NormalizeLegacy() error = %v", err)
+	}
+	if got, want := state.PanelUIBind, (Endpoint{Host: "0.0.0.0", Port: 2095}); got != want {
+		t.Fatalf("panel UI bind = %#v, want %#v", got, want)
+	}
+}
+
 func TestSplitLegacyControllerEndpointPreservesAddressFamily(t *testing.T) {
 	t.Parallel()
 	tests := []struct {

@@ -333,7 +333,7 @@ write_initial_configuration() {
         controller_secret="$(od -An -N32 -tx1 /dev/urandom | tr -d ' \n')"
         cat >"$config_path" <<EOF
 [server]
-listen_address = "127.0.0.1"
+listen_address = "0.0.0.0"
 port = 2095
 read_header_timeout = "5s"
 shutdown_timeout = "10s"

@@ -122,6 +122,8 @@ docker_root exec "$name" sh -c '
 docker_root exec "$name" grep -Fq \
   'database_path = "/data/var/lib/m-ui/m-ui.db"' /data/etc/m-ui/config.toml
 docker_root exec "$name" grep -Fq \
+  'listen_address = "0.0.0.0"' /data/etc/m-ui/config.toml
+docker_root exec "$name" grep -Fq \
   'config_path = "/data/etc/mihomo/config.yaml"' /data/etc/m-ui/config.toml
 for path in \
   etc/m-ui/config.toml \

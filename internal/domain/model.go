@@ -74,7 +74,7 @@ func SplitLegacyControllerEndpoint(endpoint Endpoint) (Endpoint, Endpoint, error
 // legacy value that can be safely split by SplitLegacyControllerEndpoint.
 func (state DesiredState) NormalizeLegacy() (DesiredState, error) {
 	if state.PanelUIBind.Port == 0 && state.PanelUIBind.Host == "" {
-		state.PanelUIBind = Endpoint{Host: "127.0.0.1", Port: 2095}
+		state.PanelUIBind = Endpoint{Host: "0.0.0.0", Port: 2095}
 	}
 	var err error
 	var legacyBind, legacyConnect Endpoint

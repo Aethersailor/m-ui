@@ -1,7 +1,9 @@
 # Safe panel access
 
-m-ui listens on `127.0.0.1:2095` by default. The simplest remote access method
-is an SSH tunnel:
+m-ui listens on `0.0.0.0:2095` by default so a new installation is immediately
+reachable at `http://SERVER_IP:2095/`. This also exposes the full management API
+wherever that port is reachable. An SSH tunnel remains available after changing
+the panel bind to `127.0.0.1` in System settings:
 
 ```sh
 ssh -L 2095:127.0.0.1:2095 user@server
@@ -12,8 +14,8 @@ Open `http://127.0.0.1:2095/` locally.
 ## HTTPS prerequisites
 
 Before using a reverse proxy, set the panel UI bind endpoint to loopback in the
-System settings page (the installation file also defaults to loopback), and
-edit `/etc/m-ui/config.toml` only for bootstrap defaults:
+System settings page, and edit `/etc/m-ui/config.toml` only for bootstrap
+defaults:
 
 ```toml
 [security]

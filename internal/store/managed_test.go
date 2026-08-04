@@ -299,7 +299,7 @@ func TestEndpointSettingsTrackPendingAndLastAppliedSnapshot(t *testing.T) {
 		PanelTitle:         "m-ui",
 		UILanguage:         "en-US",
 		PublicHost:         "node.example.com",
-		PanelListenAddress: "127.0.0.1",
+		PanelListenAddress: "0.0.0.0",
 		PanelListenPort:    2095,
 		MihomoBinaryPath:   "/usr/local/bin/mihomo",
 		MihomoConfigDir:    "/etc/mihomo",
@@ -375,7 +375,7 @@ func TestEndpointSettingsTrackPendingAndLastAppliedSnapshot(t *testing.T) {
 	// Returning to the last applied snapshot resolves the pending change even
 	// though the active desired state had already moved to the new candidate.
 	state.AsOf = state.AsOf.Add(time.Minute)
-	state.PanelUIBind = domain.Endpoint{Host: "127.0.0.1", Port: 2095}
+	state.PanelUIBind = domain.Endpoint{Host: "0.0.0.0", Port: 2095}
 	state.MihomoExternalControllerBind = domain.Endpoint{Host: "127.0.0.1", Port: 9090}
 	state.MihomoControllerConnect = domain.Endpoint{Host: "127.0.0.1", Port: 9090}
 	state.ExternalControllerCORSOrigins = nil

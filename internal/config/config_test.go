@@ -49,6 +49,18 @@ func TestValidateAcceptsAutomaticPanelLanguage(t *testing.T) {
 	}
 }
 
+func TestDefaultPanelListensOnAllIPv4Interfaces(t *testing.T) {
+	t.Parallel()
+
+	cfg := Default()
+	if got, want := cfg.Server.ListenAddress, "0.0.0.0"; got != want {
+		t.Fatalf("default server listen address = %q, want %q", got, want)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("default configuration rejected: %v", err)
+	}
+}
+
 func TestLoadRejectsInvalidConfiguration(t *testing.T) {
 	t.Parallel()
 

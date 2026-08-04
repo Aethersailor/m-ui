@@ -17,6 +17,12 @@
   <a href="https://github.com/Aethersailor/m-ui/pkgs/container/m-ui">
     <img src="https://img.shields.io/badge/container-GHCR-2496ED?logo=docker&logoColor=white" alt="GHCR">
   </a>
+  <a href="https://github.com/Aethersailor/m-ui/actions/workflows/build-release.yml">
+    <img src="https://github.com/Aethersailor/m-ui/actions/workflows/build-release.yml/badge.svg?branch=master" alt="Build">
+  </a>
+  <a href="https://github.com/Aethersailor/m-ui/actions/workflows/codeql.yml">
+    <img src="https://github.com/Aethersailor/m-ui/actions/workflows/codeql.yml/badge.svg?branch=master" alt="CodeQL">
+  </a>
   <img src="https://img.shields.io/badge/platform-Linux-FCC624?logo=linux&logoColor=black" alt="Linux">
   <img src="https://img.shields.io/badge/arch-amd64%20%7C%20arm64-555555" alt="amd64 and arm64">
 </p>
@@ -71,9 +77,9 @@ m-ui 的正式 Release 同时提供原生安装包、压缩包和多架构容器
 无论采用哪种部署方式，均无需另外安装 Mihomo。
 
 > [!NOTE]
-> m-ui 默认监听 `127.0.0.1:2095`，Mihomo Controller 默认监听 `127.0.0.1:9090`。
+> m-ui 面板默认监听 `0.0.0.0:2095`，可直接通过服务器 IP 访问；Mihomo Controller 仍默认监听 `127.0.0.1:9090`。
 >
-> 两个入口用途不同，并且默认都不会直接暴露到公网。
+> 面板入口同时承载完整的 `/api/v1` 管理 API。m-ui 不会替用户配置防火墙、HTTPS、VPN 或访问控制；公网部署前应自行完成这些保护，也可以在 Web 系统设置中把面板改回 `127.0.0.1`。
 
 ### 方式一：原生部署
 
@@ -104,12 +110,20 @@ curl -fsSL https://github.com/Aethersailor/m-ui/releases/latest/download/install
 setup link；打开它，在 Web 页面中创建管理员账号和密码即可。
 
 该链接的能力位于 URL fragment 中，不会进入 HTTP 请求、访问日志或
-Referer。首次设置推荐使用 SSH 隧道；`m-ui admin reset-password` 仅用于
+Referer。`m-ui admin reset-password` 仅用于
 已有管理员的本机恢复，不能创建首个管理员。
 
 #### 访问面板
 
-推荐通过 SSH 隧道首次访问：
+直接在浏览器访问（请把 `SERVER_IP` 替换为服务器地址）：
+
+```text
+http://SERVER_IP:2095/
+```
+
+如果安装器输出的 setup link 使用 `127.0.0.1`，保留其完整
+`/setup#token=...` 路径并把主机名替换为服务器地址即可。也可以选择通过
+SSH 隧道访问：
 
 ```sh
 ssh -L 2095:127.0.0.1:2095 user@server
@@ -126,7 +140,10 @@ http://127.0.0.1:2095/
 
 使用刚刚在首次设置页面中创建的管理员账号登录。
 
-长期使用域名访问时，应配置独立的 HTTPS 反向代理，并保持 m-ui 继续监听回环地址。具体示例见：
+> [!WARNING]
+> 默认的 `0.0.0.0:2095` 会在所有 IPv4 接口暴露面板和管理 API。若端口可从公网到达，请自行配置 HTTPS、VPN、防火墙或访问控制。
+
+长期使用域名访问时，应配置独立的 HTTPS 反向代理，并在 Web 系统设置中把面板入口改为回环地址。具体示例见：
 
 - [反向代理配置](docs/reverse-proxy.md)
 - [安全模型](docs/security.md)
@@ -238,30 +255,24 @@ sudo docker compose -f /opt/m-ui/compose.yml logs --tail=100 -f m-ui
 
 #### 访问面板
 
-Docker Compose 使用 host network，但 m-ui 仍默认只监听宿主机回环地址：
+Docker Compose 使用 host network，m-ui 默认监听宿主机所有 IPv4 接口：
 
 ```text
-127.0.0.1:2095
+0.0.0.0:2095
 ```
 
-通过 SSH 隧道访问：
-
-```sh
-ssh -L 2095:127.0.0.1:2095 user@server
-```
-
-然后运行 setup link 命令并打开它：
+直接打开 `http://SERVER_IP:2095/`。生成一次性 setup link：
 
 ```sh
 sudo docker compose -f /opt/m-ui/compose.yml exec m-ui m-ui admin setup-link
 ```
 
-在本地浏览器打开命令输出的 `/setup#token=...` 链接，在 Web 页面中创建管理员。
+保留命令输出的 `/setup#token=...` 路径，把 `127.0.0.1` 替换为服务器地址后在 Web 页面中创建管理员。需要限制到本机时，可在 Web 系统设置中改为 `127.0.0.1` 并重启容器。
 
 > [!WARNING]
 > Compose 使用 `network_mode: host`，以便面板动态创建的 Mihomo Listener 直接绑定宿主机端口。
 >
-> 这意味着 Docker 不会为这些端口提供独立的端口映射和隔离，必须自行配置宿主机防火墙。
+> 这意味着 Docker 不会为面板和 Listener 端口提供独立的端口映射和隔离，必须自行配置 HTTPS、VPN、访问控制和宿主机防火墙。
 
 #### 更新与数据
 

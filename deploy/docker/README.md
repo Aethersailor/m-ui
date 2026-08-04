@@ -40,19 +40,21 @@ symbolic links or special files.
 
 ## First administrator and settings
 
-The panel initially listens on host loopback `127.0.0.1:2095`. Establish an SSH
-tunnel, then print the durable one-time setup link:
+The panel initially listens on every host IPv4 interface at `0.0.0.0:2095`.
+Open `http://SERVER_IP:2095/`, then print the durable one-time setup link:
 
 ```sh
-ssh -N -L 2095:127.0.0.1:2095 user@server
 sudo docker compose -f /opt/m-ui/compose.yml exec m-ui m-ui admin setup-link
 ```
 
-Open the link locally and create the administrator in the Web page. Panel bind,
+If the command prints a loopback URL, preserve its `/setup#token=...` path and
+replace only the host with the server address. Create the administrator in the
+Web page. Panel bind,
 Public Host, Mihomo Controller endpoints and CORS, core channel, automatic
 updates, and the check interval are managed from the Web system settings. Safe
-first-start defaults are loopback listeners, release channel, automatic updates
-off, and a 24-hour check interval. Endpoint changes which report a restart
+first-start defaults keep the Mihomo Controller loopback-only; the panel is
+reachable on all IPv4 interfaces, the core uses the release channel, automatic
+updates are off, and the check interval is 24 hours. Endpoint changes which report a restart
 requirement are applied with:
 
 ```sh
@@ -83,8 +85,10 @@ To use another persistence directory, edit the single volume source in
 mode `0700`. Do not use a symlink or shared system directory.
 
 Host networking is required because Web-created Mihomo Listeners may bind
-arbitrary host ports. Protect those ports with the host firewall; m-ui does not
-change firewall, SSH, reverse-proxy, or Cloudflare settings.
+arbitrary host ports. The default panel bind also exposes the panel and complete
+management API on port 2095. Protect those ports with HTTPS, a VPN, access
+control, and the host firewall, or change the panel bind to `127.0.0.1` in Web
+settings. m-ui does not change firewall, SSH, reverse-proxy, or Cloudflare settings.
 
 Back up `/opt/m-ui/data` as one stopped consistency set. In particular,
 `var/lib/m-ui/master.key` and `var/lib/m-ui/m-ui.db` must remain together.

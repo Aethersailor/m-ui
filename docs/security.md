@@ -133,9 +133,10 @@ private keys, Controller secrets, or sharing links.
 
 The installer never opens firewall ports or changes SSH, reverse-proxy, or
 Cloudflare configuration. Listener ports are a deliberate administrator
-choice. The panel UI remains at `127.0.0.1:2095` and the Mihomo
+choice. The panel UI defaults to `0.0.0.0:2095`, while the Mihomo
 `external-controller` remains at `127.0.0.1:9090` until the administrator
-changes them in System settings. The m-ui-to-Mihomo connection target remains
+changes it in System settings. The panel bind can be changed to loopback from
+the same page. The m-ui-to-Mihomo connection target remains
 loopback-only and is never allowed to be an arbitrary remote host.
 
 Endpoint changes are stored in SQLite and the generated YAML is validated, but

@@ -71,7 +71,7 @@ const settingsForm = reactive<Settings>({
   public_host: 'localhost',
 })
 const endpointForm = reactive<EndpointSettings>({
-  panel_ui_bind: { host: '127.0.0.1', port: 2095 },
+  panel_ui_bind: { host: '0.0.0.0', port: 2095 },
   mihomo_external_controller_bind: { host: '127.0.0.1', port: 9090 },
   mihomo_controller_connect: { host: '127.0.0.1', port: 9090 },
   external_controller_cors_origins: [],

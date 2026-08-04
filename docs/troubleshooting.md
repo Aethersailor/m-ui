@@ -27,7 +27,7 @@ sudo journalctl -u m-ui -b --no-pager
 ```
 
 Common causes are a missing or overly broad `master.key`, an unwritable SQLite
-directory, invalid TOML, or a port conflict on `127.0.0.1:2095`.
+directory, invalid TOML, or a port conflict on `0.0.0.0:2095`.
 
 Required modes:
 

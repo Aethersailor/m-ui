@@ -16,7 +16,7 @@ deterministic compiled artifact owned exclusively by m-ui.
 ```text
 administrator browser
         |
-        | HTTP on 127.0.0.1:2095 by default
+        | HTTP on 0.0.0.0:2095 by default
         v
 m-ui single binary (user m-ui)
   |-- embedded Vue application
@@ -168,9 +168,10 @@ observability, never user billing data.
   and Alpine 3.20+ with OpenRC, on Linux amd64 and arm64.
 - OCI images are non-root Linux amd64/arm64 images with a direct Mihomo
   supervisor and persistent configuration/data volumes.
-- The panel UI defaults to `127.0.0.1:2095`. Its bind host/port is a separate
+- The panel UI defaults to `0.0.0.0:2095`. Its bind host/port is a separate
   managed endpoint and may be changed to an IPv4/IPv6 bind address from the
   System settings page; the m-ui service must be restarted before it is active.
+  Operators are responsible for HTTPS, VPN, access control, and firewall policy.
 - Mihomo's `external-controller` dashboard API is a different endpoint from
   m-ui's `/api/v1`. It defaults to `127.0.0.1:9090`; its bind host/port and
   exact CORS origins are managed separately, published into YAML, and require
