@@ -34,6 +34,12 @@ updates:
     versioning-strategy: increase
     commit-message:
       prefix: build(web)
+    # TypeScript 7 is outside typescript-eslint 8.66's supported peer range.
+    # Dependabot should resume proposing compatible 6.x updates automatically.
+    ignore:
+      - dependency-name: typescript
+        update-types:
+          - version-update:semver-major
 
   - package-ecosystem: docker
     directory: /
