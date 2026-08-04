@@ -120,6 +120,10 @@ func accessLog(logger *slog.Logger) func(http.Handler) http.Handler {
 		return http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 			started := time.Now()
 			next.ServeHTTP(response, request)
+			path := request.URL.EscapedPath()
+			if path == "" {
+				path = "/"
+			}
 			logger.Info(
 				"HTTP request",
 				"request_id",
@@ -127,7 +131,7 @@ func accessLog(logger *slog.Logger) func(http.Handler) http.Handler {
 				"method",
 				request.Method,
 				"path",
-				request.URL.Path,
+				path,
 				"duration_ms",
 				time.Since(started).Milliseconds(),
 			)

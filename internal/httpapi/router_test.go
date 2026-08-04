@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"bytes"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -56,6 +57,27 @@ func TestHealth(t *testing.T) {
 	}
 	if body.Time.IsZero() {
 		t.Fatal("health time is zero")
+	}
+}
+
+func TestAccessLogKeepsEncodedControlCharactersOnOneLine(t *testing.T) {
+	t.Parallel()
+
+	var output bytes.Buffer
+	handler := New(Options{
+		Logger: slog.New(slog.NewTextHandler(&output, nil)),
+	})
+	request := httptest.NewRequest(http.MethodGet, "/safe%0aINJECTED", nil)
+	response := httptest.NewRecorder()
+
+	handler.ServeHTTP(response, request)
+
+	logLine := output.String()
+	if strings.Count(logLine, "\n") != 1 {
+		t.Fatalf("access log spans multiple lines: %q", logLine)
+	}
+	if !strings.Contains(logLine, "path=/safe%0aINJECTED") {
+		t.Fatalf("access log did not preserve an escaped path: %q", logLine)
 	}
 }
 
