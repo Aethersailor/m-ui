@@ -76,8 +76,8 @@ func TestAccessLogKeepsEncodedControlCharactersOnOneLine(t *testing.T) {
 	if strings.Count(logLine, "\n") != 1 {
 		t.Fatalf("access log spans multiple lines: %q", logLine)
 	}
-	if !strings.Contains(logLine, "path=/safe%0aINJECTED") {
-		t.Fatalf("access log did not preserve an escaped path: %q", logLine)
+	if !strings.Contains(logLine, "path=/safeINJECTED") {
+		t.Fatalf("access log did not remove the encoded line break: %q", logLine)
 	}
 }
 

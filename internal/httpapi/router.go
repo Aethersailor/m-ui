@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -120,7 +121,8 @@ func accessLog(logger *slog.Logger) func(http.Handler) http.Handler {
 		return http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 			started := time.Now()
 			next.ServeHTTP(response, request)
-			path := request.URL.EscapedPath()
+			path := strings.ReplaceAll(request.URL.Path, "\r", "")
+			path = strings.ReplaceAll(path, "\n", "")
 			if path == "" {
 				path = "/"
 			}
