@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 
-FROM node:24.18.0-alpine3.24 AS web-builder
+FROM node:24.19.0-alpine3.24 AS web-builder
 WORKDIR /src
 COPY web/package.json web/package-lock.json ./web/
 RUN npm --prefix web ci
@@ -9,6 +9,7 @@ RUN npm --prefix web run build
 
 FROM golang:1.26.5-alpine3.24 AS go-builder
 ARG VERSION=dev
+ARG COMMIT=unknown
 ARG REVISION=unknown
 ARG CREATED=unknown
 WORKDIR /src
@@ -20,12 +21,12 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
     -tags webembed -trimpath \
     -ldflags="-s -w \
       -X github.com/Aethersailor/m-ui/internal/version.version=${VERSION} \
-      -X github.com/Aethersailor/m-ui/internal/version.commit=${REVISION} \
+      -X github.com/Aethersailor/m-ui/internal/version.commit=${COMMIT} \
       -X github.com/Aethersailor/m-ui/internal/version.date=${CREATED} \
       -X github.com/Aethersailor/m-ui/internal/version.dirty=false" \
     -o /out/m-ui ./cmd/m-ui
 
-FROM alpine:3.22.1
+FROM alpine:3.24.1
 ARG TARGETARCH
 ARG VERSION=dev
 ARG REVISION=unknown

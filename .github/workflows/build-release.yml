@@ -69,11 +69,11 @@ jobs:
       target_sha: ${{ steps.guard.outputs.target_sha }}
       target_ref: ${{ steps.guard.outputs.target_ref }}
       prerelease: ${{ steps.guard.outputs.prerelease }}
-      sha12: ${{ steps.guard.outputs.sha12 }}
+      sha8: ${{ steps.guard.outputs.sha8 }}
 
     steps:
       - name: Check out exact target
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.target_ref || github.sha }}
           fetch-depth: 0
@@ -147,9 +147,9 @@ jobs:
             esac
             VERSION="v${major}.${minor}.${patch}"
           fi
-          SHA12="${TARGET_SHA:0:12}"
-          FULL_VERSION="${VERSION}.g${SHA12}"
-          PACKAGE_VERSION="${VERSION#v}.g${SHA12}"
+          SHA8="${TARGET_SHA:0:8}"
+          FULL_VERSION="${VERSION}.g${SHA8}"
+          PACKAGE_VERSION="${VERSION#v}.g${SHA8}"
           CREATED="$(git show -s --format=%cI "$TARGET_SHA")"
           if [ "$MODE" = release ]; then
             test "$CONFIRM" = RELEASE
@@ -172,7 +172,7 @@ jobs:
             printf 'target_sha=%s\n' "$TARGET_SHA"
             printf 'target_ref=%s\n' "$TARGET_REF"
             printf 'prerelease=%s\n' "$PRERELEASE"
-            printf 'sha12=%s\n' "$SHA12"
+            printf 'sha8=%s\n' "$SHA8"
           } >>"$GITHUB_OUTPUT"
           {
             echo '### Build identity'
@@ -192,7 +192,7 @@ jobs:
         if: steps.guard.outputs.mode != 'test'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: release-identity-${{ steps.guard.outputs.sha12 }}
+          name: release-identity-${{ steps.guard.outputs.sha8 }}
           path: packaging/bootstrap/identity.json
           if-no-files-found: error
           retention-days: 7
@@ -204,20 +204,20 @@ jobs:
 
     steps:
       - name: Check out exact target
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.validate.outputs.target_sha }}
 
       - name: Set up Go
-        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: 1.26.5
           cache: true
 
       - name: Set up Node.js
-        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 24.18.0
+          node-version: 24.19.0
           cache: npm
           cache-dependency-path: web/package-lock.json
 
@@ -233,11 +233,12 @@ jobs:
           npm --prefix web run typecheck
           npm --prefix web run test
           npm --prefix web run build
+          npm --prefix web audit --audit-level=high
 
       - name: Build and verify the complete dynamic version
         env:
           VERSION: ${{ needs.validate.outputs.full_version }}
-          COMMIT: ${{ needs.validate.outputs.target_sha }}
+          COMMIT: ${{ needs.validate.outputs.sha8 }}
           BUILD_DATE: ${{ needs.validate.outputs.created }}
           DIRTY: false
         run: |
@@ -276,7 +277,7 @@ jobs:
       - name: Verify Linux targets compile
         env:
           VERSION: ${{ needs.validate.outputs.full_version }}
-          COMMIT: ${{ needs.validate.outputs.target_sha }}
+          COMMIT: ${{ needs.validate.outputs.sha8 }}
           BUILD_DATE: ${{ needs.validate.outputs.created }}
         run: |
           ldflags="-X github.com/Aethersailor/m-ui/internal/version.version=${VERSION} \
@@ -296,7 +297,7 @@ jobs:
 
     steps:
       - name: Check out exact target
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.validate.outputs.target_sha }}
 
@@ -321,8 +322,8 @@ jobs:
 
           curl --fail --location --proto '=https' --proto-redir '=https' \
             --output hadolint \
-            https://github.com/hadolint/hadolint/releases/download/v2.14.0/hadolint-Linux-x86_64
-          echo "6bf226944684f56c84dd014e8b979d27425c0148f61b3bd99bcc6f39e9dc5a47  hadolint" |
+            https://github.com/hadolint/hadolint/releases/download/v2.15.1/hadolint-Linux-x86_64
+          echo "c7187db94eeeeca956519a6af171adc31453941a1e777961f6e680f697c8c507  hadolint" |
             sha256sum --check
           chmod 0755 hadolint
           sudo install -m 0755 hadolint /usr/local/bin/hadolint
@@ -336,12 +337,12 @@ jobs:
           hadolint Dockerfile
 
       - name: Check GoReleaser configuration
-        uses: goreleaser/goreleaser-action@4c6ab561adb47e50c45ef534e2155934e91c40c1 # v7.2.0
+        uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         env:
-          M_UI_BUILD_VERSION: v0.0.0.g000000000000
-          M_UI_BUILD_COMMIT: 0000000000000000000000000000000000000000
+          M_UI_BUILD_VERSION: v0.0.0.g00000000
+          M_UI_BUILD_COMMIT: 00000000
           M_UI_BUILD_DATE: 1970-01-01T00:00:00Z
-          M_UI_PACKAGE_VERSION: 0.0.0.g000000000000
+          M_UI_PACKAGE_VERSION: 0.0.0.g00000000
           M_UI_ARTIFACT_VERSION: 0.0.0
         with:
           distribution: goreleaser
@@ -355,18 +356,18 @@ jobs:
 
     steps:
       - name: Check out exact target
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.validate.outputs.target_sha }}
 
       - name: Set up Go
-        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: 1.26.5
           cache: true
 
       - name: Run golangci-lint
-        uses: golangci/golangci-lint-action@db9de0fc1a667e1a49d2291a1a042dff081d78f6 # v9
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
           version: v2.12.2
 
@@ -390,14 +391,14 @@ jobs:
 
     steps:
       - name: Check out exact target
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.validate.outputs.target_sha }}
 
       - name: Download locked bootstrap identity
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: release-identity-${{ needs.validate.outputs.sha12 }}
+          name: release-identity-${{ needs.validate.outputs.sha8 }}
           path: packaging/bootstrap
 
       - name: Verify and run the locked native Mihomo bootstrap
@@ -412,7 +413,7 @@ jobs:
       - name: Upload verified native bootstrap
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: release-bootstrap-${{ needs.validate.outputs.sha12 }}-${{ matrix.arch }}
+          name: release-bootstrap-${{ needs.validate.outputs.sha8 }}-${{ matrix.arch }}
           path: packaging/bootstrap
           if-no-files-found: error
           retention-days: 7
@@ -426,7 +427,7 @@ jobs:
 
     steps:
       - name: Check out exact target
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.validate.outputs.target_sha }}
           fetch-depth: 0
@@ -434,20 +435,20 @@ jobs:
       - name: Download verified bootstraps
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          pattern: release-bootstrap-${{ needs.validate.outputs.sha12 }}-*
+          pattern: release-bootstrap-${{ needs.validate.outputs.sha8 }}-*
           path: packaging/bootstrap
           merge-multiple: true
 
       - name: Set up Go
-        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: 1.26.5
           cache: true
 
       - name: Set up Node.js
-        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 24.18.0
+          node-version: 24.19.0
           cache: npm
           cache-dependency-path: web/package-lock.json
 
@@ -462,17 +463,17 @@ jobs:
           mkdir -p "$syft_dir"
           curl --fail --location --proto '=https' --proto-redir '=https' \
             --output "$syft_dir/syft.tar.gz" \
-            https://github.com/anchore/syft/releases/download/v1.44.0/syft_1.44.0_linux_amd64.tar.gz
-          echo "0e91737aee2b5baf1d255b959630194a302335d848ff97bb07921eb6205b5f5a  $syft_dir/syft.tar.gz" |
+            https://github.com/anchore/syft/releases/download/v1.50.0/syft_1.50.0_linux_amd64.tar.gz
+          echo "bf7b29ff57f06da30918266a0e1c2885a8f99784798d1bdb1628886aa015d788  $syft_dir/syft.tar.gz" |
             sha256sum --check
           tar -xzf "$syft_dir/syft.tar.gz" -C "$syft_dir" syft
           sudo install -m 0755 "$syft_dir/syft" /usr/local/bin/syft
 
       - name: Build release archives, packages, checksums, and SBOMs
-        uses: goreleaser/goreleaser-action@4c6ab561adb47e50c45ef534e2155934e91c40c1 # v7.2.0
+        uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         env:
           M_UI_BUILD_VERSION: ${{ needs.validate.outputs.full_version }}
-          M_UI_BUILD_COMMIT: ${{ needs.validate.outputs.target_sha }}
+          M_UI_BUILD_COMMIT: ${{ needs.validate.outputs.sha8 }}
           M_UI_BUILD_DATE: ${{ needs.validate.outputs.created }}
           M_UI_PACKAGE_VERSION: ${{ needs.validate.outputs.package_version }}
           M_UI_ARTIFACT_VERSION: ${{ needs.validate.outputs.artifact_version }}
@@ -501,6 +502,14 @@ jobs:
                  -o -name 'install.sh' -o -name 'uninstall.sh' \
                  -o -name 'compose.yml' \
                  -o -name 'MIHOMO_BOOTSTRAP_IDENTITY.json' \) \
+              -printf '%f\t%s\n' | sort >ARTIFACT_SIZES.txt
+            find . -maxdepth 1 -type f \
+              \( -name '*.tar.gz' -o -name '*.deb' -o -name '*.apk' \
+                 -o -name '*.sbom.spdx.json' -o -name 'manage.sh' \
+                 -o -name 'install.sh' -o -name 'uninstall.sh' \
+                 -o -name 'compose.yml' \
+                 -o -name 'MIHOMO_BOOTSTRAP_IDENTITY.json' \
+                 -o -name 'ARTIFACT_SIZES.txt' \) \
               -printf '%f\n' | sort |
               xargs sha256sum >SHA256SUMS
           )
@@ -513,6 +522,7 @@ jobs:
           test "$(find dist -maxdepth 1 -name '*.deb' | wc -l)" -eq 2
           test "$(find dist -maxdepth 1 -name '*.apk' | wc -l)" -eq 2
           test -s dist/SHA256SUMS
+          test -s dist/ARTIFACT_SIZES.txt
           test -s dist/compose.yml
           test "$(find dist -maxdepth 1 -name '*.sbom.spdx.json' | wc -l)" -ge 6
           (
@@ -529,6 +539,15 @@ jobs:
             test "$deb_version" = "$EXPECTED_PACKAGE_VERSION"
             test "$apk_version" = "$EXPECTED_PACKAGE_VERSION"
           done
+          for artifact in dist/*.tar.gz dist/*.deb dist/*.apk; do
+            test "$(stat -c '%s' "$artifact")" -le 33554432
+          done
+          {
+            echo '### Native release artifact sizes'
+            echo '```text'
+            cat dist/ARTIFACT_SIZES.txt
+            echo '```'
+          } >>"$GITHUB_STEP_SUMMARY"
 
       - name: Upload release assets
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -539,6 +558,7 @@ jobs:
             dist/*.deb
             dist/*.apk
             dist/SHA256SUMS
+            dist/ARTIFACT_SIZES.txt
             dist/*.sbom.spdx.json
             dist/manage.sh
             dist/install.sh
@@ -558,23 +578,23 @@ jobs:
         include:
           - arch: amd64
             runner: ubuntu-24.04
-            syft_sha: 0e91737aee2b5baf1d255b959630194a302335d848ff97bb07921eb6205b5f5a
+            syft_sha: bf7b29ff57f06da30918266a0e1c2885a8f99784798d1bdb1628886aa015d788
           - arch: arm64
             runner: ubuntu-24.04-arm
-            syft_sha: 6f6cdcdc695721d91ce756e3b5bc3e3416599c464101f5e32e9c3f33054ee6d9
+            syft_sha: 887c57cbcc2d0e8c5c110a4571a3fc7150058b24d74f993ee4663516e5c8ce86
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 35
 
     steps:
       - name: Check out exact target
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.validate.outputs.target_sha }}
 
       - name: Download verified native bootstrap
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: release-bootstrap-${{ needs.validate.outputs.sha12 }}-${{ matrix.arch }}
+          name: release-bootstrap-${{ needs.validate.outputs.sha8 }}-${{ matrix.arch }}
           path: packaging/bootstrap
 
       - name: Set up Docker Buildx
@@ -586,15 +606,16 @@ jobs:
           mkdir -p "$syft_dir"
           curl --fail --location --proto '=https' --proto-redir '=https' \
             --output "$syft_dir/syft.tar.gz" \
-            "https://github.com/anchore/syft/releases/download/v1.44.0/syft_1.44.0_linux_${{ matrix.arch }}.tar.gz"
+            "https://github.com/anchore/syft/releases/download/v1.50.0/syft_1.50.0_linux_${{ matrix.arch }}.tar.gz"
           echo "${{ matrix.syft_sha }}  $syft_dir/syft.tar.gz" | sha256sum --check
           tar -xzf "$syft_dir/syft.tar.gz" -C "$syft_dir" syft
           sudo install -m 0755 "$syft_dir/syft" /usr/local/bin/syft
 
       - name: Build and smoke-test native image
         env:
-          IMAGE: m-ui:${{ needs.validate.outputs.sha12 }}-${{ matrix.arch }}
+          IMAGE: m-ui:${{ needs.validate.outputs.sha8 }}-${{ matrix.arch }}
           EXPECTED_VERSION: ${{ needs.validate.outputs.full_version }}
+          EXPECTED_COMMIT: ${{ needs.validate.outputs.sha8 }}
           EXPECTED_REVISION: ${{ needs.validate.outputs.target_sha }}
         run: |
           sudo test -d /opt
@@ -604,6 +625,7 @@ jobs:
           docker buildx build \
             --platform linux/${{ matrix.arch }} \
             --build-arg VERSION="$EXPECTED_VERSION" \
+            --build-arg COMMIT="$EXPECTED_COMMIT" \
             --build-arg REVISION=${{ needs.validate.outputs.target_sha }} \
             --build-arg CREATED=${{ needs.validate.outputs.created }} \
             --cache-from type=gha,scope=m-ui-image-${{ matrix.arch }} \
@@ -615,13 +637,19 @@ jobs:
             bash scripts/docker-smoke.sh "$IMAGE"
           bash scripts/docker-compose-smoke.sh "$IMAGE"
           docker run --rm --entrypoint /usr/bin/m-ui "$IMAGE" version |
-            grep -F "m-ui ${EXPECTED_VERSION} (commit=${EXPECTED_REVISION} "
+            grep -F "m-ui ${EXPECTED_VERSION} (commit=${EXPECTED_COMMIT} "
           syft "$IMAGE" \
             -o spdx-json=m-ui-image-${{ matrix.arch }}.sbom.spdx.json
-          docker save "$IMAGE" | gzip -1 >m-ui-image-${{ matrix.arch }}.tar.gz
+          docker save "$IMAGE" | gzip -9 >m-ui-image-${{ matrix.arch }}.tar.gz
+          gzip --test m-ui-image-${{ matrix.arch }}.tar.gz
+          test "$(stat -c '%s' m-ui-image-${{ matrix.arch }}.tar.gz)" -le 67108864
           sha256sum m-ui-image-${{ matrix.arch }}.tar.gz \
             m-ui-image-${{ matrix.arch }}.sbom.spdx.json \
             >docker-SHA256SUMS
+          {
+            echo "### linux/${{ matrix.arch }} image artifact size"
+            stat -c '%n %s bytes' m-ui-image-${{ matrix.arch }}.tar.gz
+          } >>"$GITHUB_STEP_SUMMARY"
 
       - name: Upload native image
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -715,7 +743,7 @@ jobs:
 
     steps:
       - name: Check out the verified target
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.validate.outputs.target_sha }}
           fetch-depth: 0
@@ -736,7 +764,7 @@ jobs:
       - name: Download verified native bootstraps
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          pattern: release-bootstrap-${{ needs.validate.outputs.sha12 }}-*
+          pattern: release-bootstrap-${{ needs.validate.outputs.sha8 }}-*
           path: packaging/bootstrap
           merge-multiple: true
 
@@ -757,7 +785,8 @@ jobs:
           state_dir="$RUNNER_TEMP/m-ui-release-state"
           rm -rf "$state_dir"
           mkdir -p "$state_dir"
-          printf 'version=%s\ntarget_sha=%s\n' "$VERSION" "$TARGET_SHA" >"$state_dir/metadata"
+          printf 'version=%s\ntarget_sha=%s\n' \
+            "$VERSION" "$TARGET_SHA" >"$state_dir/metadata"
           (
             cd release
             sha256sum --check SHA256SUMS
@@ -781,8 +810,9 @@ jobs:
 
           pages="$state_dir/formal-tag-package-versions.json"
           flat="$state_dir/formal-tag-package-versions-flat.json"
-          gh api --paginate --slurp             "${package_versions_endpoint}?per_page=100" >"$pages"
-          jq -e             'if type != "array" or any(.[]; type != "array") then
+          gh api --paginate --slurp \
+            "${package_versions_endpoint}?per_page=100" >"$pages"
+          jq -e 'if type != "array" or any(.[]; type != "array") then
                error("invalid GitHub Packages pagination response")
              else
                add // []
@@ -793,7 +823,11 @@ jobs:
           snapshot_tag() {
             local tag="$1"
             local records count digest
-            records="$(jq -c --arg tag "$tag"               'map(select((.metadata.container.tags // []) | index($tag) != null))'               "$flat")"
+            records="$(
+              jq -c --arg tag "$tag" \
+                'map(select((.metadata.container.tags // []) | index($tag) != null))' \
+                "$flat"
+            )"
             count="$(jq -r 'length' <<<"$records")"
             case "$count" in
               0)
@@ -839,7 +873,16 @@ jobs:
           if [ "$PRERELEASE" != true ]; then
             tags+=(--tag "${repository}:latest")
           fi
-          docker buildx build             --platform linux/amd64,linux/arm64             --build-arg VERSION="$FULL_VERSION"             --build-arg REVISION="$TARGET_SHA"             --build-arg CREATED="$CREATED"             --cache-from type=gha,scope=m-ui-image-amd64             --cache-from type=gha,scope=m-ui-image-arm64             "${tags[@]}"             --push .
+          docker buildx build \
+            --platform linux/amd64,linux/arm64 \
+            --build-arg VERSION="$FULL_VERSION" \
+            --build-arg COMMIT="${TARGET_SHA:0:8}" \
+            --build-arg REVISION="$TARGET_SHA" \
+            --build-arg CREATED="$CREATED" \
+            --cache-from type=gha,scope=m-ui-image-amd64 \
+            --cache-from type=gha,scope=m-ui-image-arm64 \
+            "${tags[@]}" \
+            --push .
           if [ -n "$DOCKERHUB_IMAGE" ]; then
             echo "::notice::Docker Hub target ${DOCKERHUB_IMAGE} is reserved; GHCR-only publication remains active"
           fi
@@ -851,7 +894,8 @@ jobs:
         run: |
           set -euo pipefail
           repository="ghcr.io/${GITHUB_REPOSITORY,,}"
-          docker buildx imagetools inspect "${repository}:${VERSION}"             --raw >release/IMAGE_MANIFEST.json
+          docker buildx imagetools inspect "${repository}:${VERSION}" \
+            --raw >release/IMAGE_MANIFEST.json
           jq -e '
             [.manifests[].platform.architecture] |
             sort == ["amd64", "arm64"]
@@ -859,22 +903,27 @@ jobs:
           cp images/m-ui-image-*.sbom.spdx.json release/
           (
             cd release
-            sha256sum IMAGE_MANIFEST.json               m-ui-image-*.sbom.spdx.json >>SHA256SUMS
+            sha256sum IMAGE_MANIFEST.json \
+              m-ui-image-*.sbom.spdx.json >>SHA256SUMS
             sha256sum --check SHA256SUMS
           )
-          digest="$(docker buildx imagetools inspect             "${repository}:${VERSION}" --format '{{ .Manifest.Digest }}')"
+          digest="$(
+            docker buildx imagetools inspect "${repository}:${VERSION}" \
+              --format '{{ .Manifest.Digest }}'
+          )"
           [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
           printf 'subject_name=%s\n' "$repository" >>"$GITHUB_OUTPUT"
           printf 'subject_digest=%s\n' "$digest" >>"$GITHUB_OUTPUT"
 
       - name: Attest release assets
-        uses: actions/attest-build-provenance@43d14bc2b83dec42d39ecae14e916627a18bb661 # v3
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
         with:
           subject-path: |
             release/*.tar.gz
             release/*.deb
             release/*.apk
             release/SHA256SUMS
+            release/ARTIFACT_SIZES.txt
             release/*.sbom.spdx.json
             release/manage.sh
             release/install.sh
@@ -884,7 +933,7 @@ jobs:
             release/MIHOMO_BOOTSTRAP_IDENTITY.json
 
       - name: Attest multi-architecture image
-        uses: actions/attest-build-provenance@43d14bc2b83dec42d39ecae14e916627a18bb661 # v3
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
         with:
           subject-name: ${{ steps.formal-images.outputs.subject_name }}
           subject-digest: ${{ steps.formal-images.outputs.subject_digest }}
@@ -905,7 +954,14 @@ jobs:
           git push origin "refs/tags/$VERSION"
           touch "$state_dir/tag-created"
 
-          release_args=("$VERSION" release/* --draft --target "$TARGET_SHA"             --title "m-ui $VERSION" --generate-notes)
+          release_args=(
+            "$VERSION"
+            release/*
+            --draft
+            --target "$TARGET_SHA"
+            --title "m-ui $VERSION"
+            --generate-notes
+          )
           if [ "$PRERELEASE" = true ]; then
             release_args+=(--prerelease)
           fi
@@ -1004,7 +1060,9 @@ jobs:
                 '.metadata.container.tags // [] | map(. as $tag | select(($allowed | index($tag)) == null)) | .[]?' \
                 <<<"$tag_record")"
               if [ -n "$non_allowed" ]; then
-                echo "::warning::${label}: retaining ${target_tag}; package version ${version_id} also has non-target tags: ${non_allowed//$'\n'/, }"
+                echo "::warning::${label}: retaining ${target_tag};" \
+                  "package version ${version_id} also has non-target tags:" \
+                  "${non_allowed//$'\n'/, }"
                 cleanup_status=blocked
                 note_cleanup "${label}: ${target_tag} shares package version ${version_id} with non-target tags ${tags_json}"
                 continue

@@ -3,10 +3,11 @@ NPM ?= npm
 OUTPUT_DIR ?= dist
 BINARY ?= $(OUTPUT_DIR)/m-ui
 VERSION ?= dev
-COMMIT ?= $(shell git rev-parse --short=12 HEAD 2>/dev/null || echo unknown)
+COMMIT ?= $(shell git rev-parse --short=8 HEAD 2>/dev/null || echo unknown)
 BUILD_DATE ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 DIRTY ?= $(shell test -z "$$(git status --porcelain 2>/dev/null)" && echo false || echo true)
-LDFLAGS := -X github.com/Aethersailor/m-ui/internal/version.version=$(VERSION) \
+LDFLAGS := -s -w \
+	-X github.com/Aethersailor/m-ui/internal/version.version=$(VERSION) \
 	-X github.com/Aethersailor/m-ui/internal/version.commit=$(COMMIT) \
 	-X github.com/Aethersailor/m-ui/internal/version.date=$(BUILD_DATE) \
 	-X github.com/Aethersailor/m-ui/internal/version.dirty=$(DIRTY)

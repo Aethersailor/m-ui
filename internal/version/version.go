@@ -1,6 +1,11 @@
 package version
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
+
+const commitDisplayLength = 8
 
 var (
 	version = "dev"
@@ -21,10 +26,22 @@ type Info struct {
 func Current() Info {
 	return Info{
 		Version: version,
-		Commit:  commit,
+		Commit:  displayCommit(commit),
 		Date:    date,
 		Dirty:   dirty == "true",
 	}
+}
+
+func displayCommit(value string) string {
+	if len(value) <= commitDisplayLength {
+		return value
+	}
+	for _, character := range value {
+		if !strings.ContainsRune("0123456789abcdefABCDEF", character) {
+			return value
+		}
+	}
+	return value[:commitDisplayLength]
 }
 
 func (i Info) String() string {
