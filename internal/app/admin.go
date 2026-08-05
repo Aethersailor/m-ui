@@ -27,6 +27,18 @@ func ResetAdminPassword(
 	if err != nil {
 		return false, err
 	}
+	return ResetAdminPasswordValue(ctx, cfg, username, password)
+}
+
+func ResetAdminPasswordValue(
+	ctx context.Context,
+	cfg config.Config,
+	username string,
+	password string,
+) (bool, error) {
+	if err := auth.ValidatePassword(password); err != nil {
+		return false, fmt.Errorf("validate administrator password: %w", err)
+	}
 	database, err := store.Open(ctx, cfg.Storage.DatabasePath)
 	if err != nil {
 		return false, fmt.Errorf("open store: %w", err)

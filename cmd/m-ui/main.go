@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -16,6 +17,7 @@ import (
 	"github.com/Aethersailor/m-ui/internal/app"
 	"github.com/Aethersailor/m-ui/internal/config"
 	"github.com/Aethersailor/m-ui/internal/version"
+	"golang.org/x/term"
 )
 
 const usage = `m-ui manages one dedicated Mihomo service.
@@ -27,19 +29,11 @@ Usage:
   m-ui update|reinstall|uninstall|purge [options]
   m-ui doctor [panel|database] [--config /etc/m-ui/config.toml]
   m-ui admin setup-link [--rotate] [--base-url URL] [--config /etc/m-ui/config.toml]
-  m-ui admin rotate-setup-token [--config /etc/m-ui/config.toml]
-  m-ui admin reset-password --password-file <path> [--username admin]
-  m-ui config validate [--config /etc/m-ui/config.toml]
-  m-ui config rollback --config /etc/m-ui/config.toml <revision-id>
-  m-ui runtime apply-mihomo-start --config /etc/m-ui/config.toml
-  m-ui runtime restart-mihomo --config /etc/m-ui/config.toml
-  m-ui runtime finalize-mihomo-start --config /etc/m-ui/config.toml
-  m-ui runtime wait-ready
+  m-ui admin reset-password [--password-file PATH] [--username admin]
   m-ui core status [--json] [--config /etc/m-ui/config.toml]
   m-ui core check [--json] [--config /etc/m-ui/config.toml]
   m-ui core update [--json] [--config /etc/m-ui/config.toml]
   m-ui core rollback [--json] [--config /etc/m-ui/config.toml]
-  m-ui core bootstrap [--binary PATH] [--manifest PATH] [--json]
 `
 
 const runtimeCommandTimeout = 120 * time.Second
@@ -430,19 +424,20 @@ func runAdmin(args []string) error {
 		if *rotateSetupToken || *baseURL != "" {
 			return errors.New("reset-password does not accept --rotate or --base-url")
 		}
-		if *passwordFile == "" {
-			return errors.New("--password-file is required")
-		}
 	default:
 		fmt.Fprint(os.Stderr, usage)
 		return fmt.Errorf("unknown admin command %q", command)
 	}
-	created, err := app.ResetAdminPassword(
-		ctx,
-		cfg,
-		*username,
-		*passwordFile,
-	)
+	var created bool
+	if *passwordFile != "" {
+		created, err = app.ResetAdminPassword(ctx, cfg, *username, *passwordFile)
+	} else {
+		password, passwordErr := readConfirmedPassword(os.Stdin, os.Stderr)
+		if passwordErr != nil {
+			return passwordErr
+		}
+		created, err = app.ResetAdminPasswordValue(ctx, cfg, *username, password)
+	}
 	if err != nil {
 		return err
 	}
@@ -452,6 +447,39 @@ func runAdmin(args []string) error {
 		fmt.Println("Administrator password updated and sessions revoked.")
 	}
 	return nil
+}
+
+func readConfirmedPassword(input *os.File, output io.Writer) (string, error) {
+	fd := int(input.Fd())
+	if !term.IsTerminal(fd) {
+		return "", errors.New(
+			"interactive password reset requires a terminal; use --password-file for automation",
+		)
+	}
+	return promptForPassword(fd, output, term.ReadPassword)
+}
+
+func promptForPassword(
+	fd int,
+	output io.Writer,
+	readPassword func(int) ([]byte, error),
+) (string, error) {
+	fmt.Fprint(output, "New administrator password: ")
+	first, err := readPassword(fd)
+	fmt.Fprintln(output)
+	if err != nil {
+		return "", fmt.Errorf("read administrator password: %w", err)
+	}
+	fmt.Fprint(output, "Confirm administrator password: ")
+	second, err := readPassword(fd)
+	fmt.Fprintln(output)
+	if err != nil {
+		return "", fmt.Errorf("confirm administrator password: %w", err)
+	}
+	if string(first) != string(second) {
+		return "", errors.New("administrator passwords do not match")
+	}
+	return string(first), nil
 }
 
 func runServer(args []string) error {

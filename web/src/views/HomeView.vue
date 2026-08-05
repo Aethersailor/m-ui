@@ -148,16 +148,6 @@ onBeforeUnmount(() => {
         <NCard class="revision-card" :bordered="false">
           <dl class="detail-grid compact-details">
             <div>
-              <dt>{{ t('dashboard.revision') }}</dt>
-              <dd>
-                {{
-                  management.activeRevision
-                    ? `#${management.activeRevision.revision_number}`
-                    : '—'
-                }}
-              </dd>
-            </div>
-            <div>
               <dt>{{ t('dashboard.lastPublished') }}</dt>
               <dd>
                 {{

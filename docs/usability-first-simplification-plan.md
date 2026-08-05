@@ -170,26 +170,19 @@ API 日常管理。
 
 ### 5.3 配置发布状态机
 
-保留“数据库是期望状态、YAML 是构建产物”，但把失败模型收敛为两个 generation：
+实施前对 `Publisher.publishLocked`、启动协调、提交结果不确定时的校验、文件恢复和端点应用
+边界做了完整调用链审计。原先计划增加独立 `desired_generation`/`applied_generation`，但这会
+先持久化尚未生效的业务状态，制造第二套长期分叉状态，也会削弱当前单事务的回滚保证，
+因此不实施。
 
-- `desired_generation`：数据库中最新期望状态；
-- `applied_generation`：Mihomo 当前确认加载的状态。
+保留当前发布内核：业务变更在同一个 SQLite 写事务内生成候选状态，真实运行
+`mihomo -t`，同文件系统原子发布，reload/重启并健康检查；只有整条链成功才激活 Revision
+并提交业务状态。运行时失败恢复原 YAML 和原结构化状态；提交结果不确定时以持久化事实
+重新核对，启动时验证数据库、Revision 快照、归档 YAML 和活动 YAML 的一致性。
 
-新流程：
-
-1. 根据候选业务状态生成 YAML；
-2. 运行真实 `mihomo -t`，失败则完全不写数据库；
-3. 提交期望状态和新的 desired generation；
-4. 原子发布、reload 并健康检查；
-5. 成功后更新 applied generation；
-6. 运行时失败则恢复最后可用 YAML，保留“待重试”状态和脱敏错误。
-
-启动时自动重试 `desired != applied`，失败也必须让管理面板启动。删除全局永久
-`degraded` 写入锁；用户可以修正期望状态、重试应用或恢复最后可用版本。
-
-Revision 只保存成功应用的结构化快照。失败进入操作日志，不创建 failed Revision；回滚是
-把一个旧成功快照作为新的 desired generation 重新验证和发布，不再维护
-pending/failed/rolled_back 多状态历史。
+`degraded` 只用于无法证明活动配置完整性、或自动补偿本身失败的事故场景，不能用于普通
+校验失败、reload 失败或核心更新失败。正常 UI 不暴露该内部状态名，只显示“配置需要恢复”
+和可执行的恢复提示。Revision 历史只放在高级审计入口，Dashboard 不显示编号或 SHA。
 
 ### 5.4 端点设置
 
@@ -203,8 +196,9 @@ pending/failed/rolled_back 多状态历史。
 Controller bind/connect/CORS 放入“高级设置”，默认折叠并附带用途说明。保存后由后端计算
 需要应用的动作，UI 只显示一个“应用并重启”按钮；不要求用户手工判断重启顺序。
 
-评估删除 `endpoint_settings_pending` 与 `endpoint_settings_last_applied` 两张专用表，统一并入
-desired/applied generation。不得继续存在两套相互独立的 pending 状态机。
+端点设置跨越两个不同进程边界：面板 bind 只能在 m-ui 重启后生效，Controller bind/CORS
+只能在 Mihomo 重启后生效。因此保留专用的 pending/last-applied 事实记录，不把它错误并入
+配置发布事务。普通用户只看到默认折叠的高级入口和需要执行的动作。
 
 ### 5.5 Mihomo 核心管理
 
@@ -311,15 +305,15 @@ Compose 继续保持一个长期服务和一个数据挂载。初始化脚本可
 - 备份/恢复说明；
 - 交互式管理员密码恢复。
 
-`core bootstrap`、runtime finalize、apply-mihomo-start 等内部命令从顶层帮助中隐藏到
-`m-ui internal`，避免把部署实现当成用户 API。
+`core bootstrap`、runtime finalize、apply-mihomo-start 等内部命令从顶层帮助中隐藏；为兼容
+已有 systemd/OpenRC/Docker 脚本暂时保留原命令路由，不把部署实现继续宣传成用户 API。
 
 ## 8. 兼容与迁移
 
 - 已有管理员、Session、Listener、用户、密钥和分享链接不得改变；
 - 已消费的旧 bootstrap 不得重新开放；未完成 bootstrap 可继续使用原 token；
-- 原 endpoint pending 状态迁移到统一 desired/applied generation；
-- 只迁移成功 Revision，失败记录保留为只读审计或在备份后清理；
+- 原 endpoint pending/last-applied 状态原样保留，避免升级时误报已应用；
+- Revision 和事故状态原样保留，继续作为启动完整性核对与只读审计证据；
 - 当前受管核心继续运行；现有 `release`/`alpha`、自动更新和检查周期设置原样迁移，升级、
   重装及容器重建不得改写；
 - 升级前创建 SQLite、master key、YAML、Revision 和 core manifest 的一致性备份；
@@ -357,13 +351,14 @@ Compose 继续保持一个长期服务和一个数据挂载。初始化脚本可
 
 ### Phase 4：发布与恢复状态机瘦身
 
-- 引入统一 desired/applied generation；
-- 删除全局 degraded 写锁和失败 Revision 状态；
-- 合并 endpoint pending 状态；
-- 提供重试、恢复上一个版本和诊断操作；
-- 迁移现有数据库并验证掉电/重启场景。
+- 审计完整发布、失败补偿、提交结果不确定和启动恢复调用链；
+- 保留单事务发布、完整性校验与仅限事故场景的写保护；
+- 普通 UI 隐藏 degraded、Revision 编号、SHA 和 endpoint pending 等内部术语；
+- 配置历史与端点设置移入高级区域，默认折叠；
+- 保留恢复上一个版本和诊断能力，并继续验证掉电/重启场景。
 
-验收：所有注入故障下，要么新配置成功生效，要么旧配置继续工作；面板始终可用于修复。
+验收：所有注入故障下，要么新配置成功生效，要么旧配置继续工作；只有无法证明数据与活动
+配置一致性的事故才进入写保护，普通发布失败不会永久锁死系统。
 
 ### Phase 5：核心管理和高级 UI 清理
 
@@ -396,7 +391,7 @@ Compose 继续保持一个长期服务和一个数据挂载。初始化脚本可
 - onboarding 任一步失败不留下半成品；
 - 配置验证失败不改变数据库或运行 YAML；
 - reload/健康检查失败保持最后可用配置，并允许网页重试或修正；
-- 服务在 desired/applied 不一致时重启并自动恢复；
+- 服务启动时发现数据库、Revision 快照、归档 YAML 或活动 YAML 不一致时安全恢复或明确阻止写入；
 - 当前正式版数据库无损升级；
 - 容器重建、主机重启和 m-ui 更新后管理员、节点、用户、密钥与分享信息保持不变。
 - `release`/`alpha`、自动更新和检查周期在 m-ui 更新、重装、容器重建及主机重启后保持；
@@ -410,9 +405,9 @@ Compose 继续保持一个长期服务和一个数据挂载。初始化脚本可
 - 用户无需理解项目内部安全模型即可安全完成首次设置；
 - 默认部署文档中的每一步都由真实端到端测试覆盖；
 - 首个可用节点在一次向导操作中创建并验证；
-- 正常 UI 不暴露 loopback、Controller connect、generation、degraded 或 Revision SHA；
+- 正常 UI 不暴露 loopback、Controller connect、generation、degraded、Revision 编号或 SHA；
 - 可恢复故障不会永久锁死配置写入；
 - 安全底线对用户无感，不再增加额外终端、隧道、文件或确认步骤；
 - 用户选择的核心通道和自动更新策略是跨 m-ui 生命周期持久化的产品状态；
-- 代码库删除的状态、分支、API 和测试多于为简化新增的部分；
+- 不为追求表面上的代码量减少而替换已经通过故障注入验证的原子发布与恢复边界；
 - 最终发布产物在真实主机上完成从安装到客户端导入的完整验证。

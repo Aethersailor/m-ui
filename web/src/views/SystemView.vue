@@ -3,6 +3,8 @@ import {
   NAlert,
   NButton,
   NCard,
+  NCollapse,
+  NCollapseItem,
   NDescriptions,
   NDescriptionsItem,
   NEmpty,
@@ -392,11 +394,12 @@ async function submitPassword() {
               <AppearancePreferences class="section-gap" />
             </NCard>
 
-            <NCard
-              :title="t('system.endpointSettings')"
-              size="small"
-              class="section-gap"
-            >
+            <NCollapse class="section-gap">
+              <NCollapseItem
+                name="advanced-endpoints"
+                :title="t('system.endpointSettings')"
+              >
+                <NCard size="small">
               <NAlert type="warning" :bordered="false" class="section-gap">
                 {{ t('system.endpointSecurityHint') }}
               </NAlert>
@@ -498,7 +501,9 @@ async function submitPassword() {
                   </NButton>
                 </NSpace>
               </NForm>
-            </NCard>
+                </NCard>
+              </NCollapseItem>
+            </NCollapse>
           </NTabPane>
 
           <NTabPane name="runtime" :tab="t('system.runtime')">
