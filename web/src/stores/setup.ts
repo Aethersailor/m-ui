@@ -15,6 +15,13 @@ export const useSetupStore = defineStore('setup', {
     complete: (state) => state.status?.state === 'complete',
   },
   actions: {
+    markComplete() {
+      if (this.status) {
+        this.status = { ...this.status, state: 'complete' }
+      }
+      this.initialized = true
+      this.errorCode = ''
+    },
     async initialize() {
       if (this.initialized || this.loading) {
         return

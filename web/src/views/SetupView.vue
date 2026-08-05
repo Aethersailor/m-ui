@@ -63,6 +63,7 @@ async function submit() {
   try {
     const response = await completeSetup(username.value, password.value)
     auth.acceptCredentials(response)
+    setup.markComplete()
     password.value = ''
     confirmation.value = ''
     await router.replace({ name: 'onboarding' })
