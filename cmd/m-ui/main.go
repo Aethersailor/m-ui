@@ -464,15 +464,23 @@ func promptForPassword(
 	output io.Writer,
 	readPassword func(int) ([]byte, error),
 ) (string, error) {
-	fmt.Fprint(output, "New administrator password: ")
+	if _, err := fmt.Fprint(output, "New administrator password: "); err != nil {
+		return "", fmt.Errorf("write administrator password prompt: %w", err)
+	}
 	first, err := readPassword(fd)
-	fmt.Fprintln(output)
+	if _, outputErr := fmt.Fprintln(output); outputErr != nil && err == nil {
+		return "", fmt.Errorf("finish administrator password prompt: %w", outputErr)
+	}
 	if err != nil {
 		return "", fmt.Errorf("read administrator password: %w", err)
 	}
-	fmt.Fprint(output, "Confirm administrator password: ")
+	if _, err := fmt.Fprint(output, "Confirm administrator password: "); err != nil {
+		return "", fmt.Errorf("write administrator confirmation prompt: %w", err)
+	}
 	second, err := readPassword(fd)
-	fmt.Fprintln(output)
+	if _, outputErr := fmt.Fprintln(output); outputErr != nil && err == nil {
+		return "", fmt.Errorf("finish administrator confirmation prompt: %w", outputErr)
+	}
 	if err != nil {
 		return "", fmt.Errorf("confirm administrator password: %w", err)
 	}

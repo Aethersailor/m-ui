@@ -10,6 +10,12 @@ import (
 	"time"
 )
 
+type failingWriter struct{}
+
+func (failingWriter) Write([]byte) (int, error) {
+	return 0, errors.New("terminal output closed")
+}
+
 func TestPromptForPasswordConfirmsWithoutEchoingValue(t *testing.T) {
 	answers := [][]byte{[]byte("correct horse battery staple"), []byte("correct horse battery staple")}
 	var calls int
@@ -56,6 +62,20 @@ func TestPromptForPasswordRejectsMismatchAndReadFailure(t *testing.T) {
 				t.Fatal("promptForPassword() error = nil")
 			}
 		})
+	}
+}
+
+func TestPromptForPasswordStopsWhenPromptCannotBeWritten(t *testing.T) {
+	read := false
+	_, err := promptForPassword(0, failingWriter{}, func(int) ([]byte, error) {
+		read = true
+		return []byte("must not be read"), nil
+	})
+	if err == nil {
+		t.Fatal("promptForPassword() error = nil")
+	}
+	if read {
+		t.Fatal("password was read after the prompt output failed")
 	}
 }
 
