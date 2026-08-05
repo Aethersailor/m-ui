@@ -8,6 +8,7 @@ import (
 	"time"
 
 	coremanagement "github.com/Aethersailor/m-ui/internal/core"
+	"github.com/Aethersailor/m-ui/internal/operation"
 )
 
 func TestCoreSchedulerUsesFakeClockWakeAndStops(t *testing.T) {
@@ -66,6 +67,31 @@ func TestCoreSchedulerBoundsFailureBackoffWithoutSleeping(t *testing.T) {
 	clock.advanceWant(t, 2*time.Minute)
 	<-manager.updates
 	clock.advanceWant(t, 2*time.Minute)
+}
+
+func TestCoreSchedulerRetriesBusyOperationPromptlyWithoutBackoff(t *testing.T) {
+	t.Parallel()
+	manager := &fakeCoreUpdateManager{
+		due:       true,
+		updateErr: operation.ErrBusy,
+		updates:   make(chan struct{}, 2),
+		checks:    make(chan struct{}, 2),
+	}
+	clock := newFakeSchedulerClock(time.Unix(100, 0))
+	scheduler, err := NewCore(manager, CoreOptions{
+		Clock:        clock,
+		PollInterval: time.Minute,
+		MaxBackoff:   2 * time.Minute,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go scheduler.Run(ctx)
+	<-manager.updates
+	clock.advanceWant(t, coreBusyRetryInterval)
+	<-manager.updates
 }
 
 type fakeCoreUpdateManager struct {

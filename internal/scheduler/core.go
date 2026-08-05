@@ -2,12 +2,16 @@ package scheduler
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"time"
 
 	coremanagement "github.com/Aethersailor/m-ui/internal/core"
+	"github.com/Aethersailor/m-ui/internal/operation"
 	"github.com/Aethersailor/m-ui/internal/redact"
 )
+
+const coreBusyRetryInterval = time.Second
 
 type CoreUpdateManager interface {
 	Due(context.Context, time.Time) (bool, error)
@@ -79,7 +83,13 @@ func (scheduler *Core) Run(ctx context.Context) {
 			_, _, err = scheduler.manager.Update(ctx, "")
 		}
 		wait := scheduler.pollInterval
-		if err != nil {
+		if errors.Is(err, operation.ErrBusy) {
+			// Startup reconciliation and another Web mutation may briefly own the
+			// shared runtime transaction. This is expected contention, not an
+			// upstream failure; retry promptly without exponential backoff noise.
+			backoff = 0
+			wait = coreBusyRetryInterval
+		} else if err != nil {
 			if backoff == 0 {
 				backoff = scheduler.pollInterval
 			} else {
