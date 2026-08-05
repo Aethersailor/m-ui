@@ -201,7 +201,6 @@ func (s *Service) SetupStatus(ctx context.Context) (SetupStatus, error) {
 
 func (s *Service) CompleteSetup(
 	ctx context.Context,
-	rawToken string,
 	username string,
 	password string,
 	sourceIP string,
@@ -214,24 +213,12 @@ func (s *Service) CompleteSetup(
 	if retry := s.setupLimiter.RetryAfter(key); retry > 0 {
 		return Credentials{}, &RateLimitError{RetryAfter: retry}
 	}
-	if err := validateBootstrapToken(rawToken); err != nil {
-		s.setupLimiter.Failure(key)
-		return Credentials{}, ErrInvalidBootstrapToken
-	}
 	state, err := s.bootstrap.BootstrapState(ctx)
 	if errors.Is(err, store.ErrNotFound) || (err == nil && !state.Required) {
 		return Credentials{}, ErrBootstrapCompleted
 	}
 	if err != nil {
 		return Credentials{}, err
-	}
-	actualHash := HashToken(rawToken)
-	if subtle.ConstantTimeCompare(
-		[]byte(actualHash),
-		[]byte(state.TokenHash),
-	) != 1 {
-		s.setupLimiter.Failure(key)
-		return Credentials{}, ErrInvalidBootstrapToken
 	}
 	select {
 	case s.setupSlots <- struct{}{}:
@@ -292,7 +279,7 @@ func (s *Service) CompleteSetup(
 	}
 	if err := s.bootstrap.CompleteBootstrap(
 		ctx,
-		actualHash,
+		state.TokenHash,
 		store.BootstrapCompletion{
 			Admin:   admin,
 			Session: session,
@@ -311,7 +298,7 @@ func (s *Service) CompleteSetup(
 	); errors.Is(err, store.ErrBootstrapCompleted) {
 		return Credentials{}, ErrBootstrapCompleted
 	} else if errors.Is(err, store.ErrInvalidBootstrapToken) {
-		return Credentials{}, ErrInvalidBootstrapToken
+		return Credentials{}, ErrBootstrapCompleted
 	} else if err != nil {
 		return Credentials{}, err
 	}

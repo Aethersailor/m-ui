@@ -80,17 +80,8 @@ func seedAdministrator(t *testing.T, database *store.Store, service *auth.Servic
 	); err != nil {
 		t.Fatal(err)
 	}
-	state, err := database.BootstrapState(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	token, err := auth.ReadBootstrapToken(state, sealer)
-	if err != nil {
-		t.Fatal(err)
-	}
 	if _, err := service.CompleteSetup(
 		context.Background(),
-		token,
 		"admin",
 		"initial-test-password",
 		"127.0.0.1",

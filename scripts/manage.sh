@@ -820,18 +820,8 @@ if ! start_services; then
     fail "services failed health checks and previous program files were restored"
 fi
 
-setup_message="Administrator setup is already complete or can be recovered with: m-ui admin setup-link"
-if [ "$database_was_present" -eq 0 ]; then
-    setup_url="$(setup_base_url)"
-    setup_link="$(run_as_m_ui "$(target /usr/bin/m-ui)" admin setup-link \
-        --base-url "$setup_url" \
-        --config "$(target /etc/m-ui/config.toml)" 2>/dev/null || true)"
-    case "$setup_link" in
-        http://*/setup\#token=*)
-            setup_message="Open this one-time link to create the administrator in the Web UI: $setup_link"
-            ;;
-    esac
-fi
+setup_url="$(setup_base_url)"
+setup_message="Open $setup_url in a browser to create the administrator or sign in."
 
 printf '%s\n' \
     "m-ui $command_name completed." \

@@ -13,7 +13,7 @@ import (
 	"github.com/Aethersailor/m-ui/internal/store"
 )
 
-func newBootstrapTestService(t *testing.T) (*store.Store, *Service, string) {
+func newBootstrapTestService(t *testing.T) (*store.Store, *Service) {
 	t.Helper()
 	database, err := store.Open(context.Background(), ":memory:")
 	if err != nil {
@@ -50,22 +50,13 @@ func newBootstrapTestService(t *testing.T) (*store.Store, *Service, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	state, err := database.BootstrapState(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	token, err := ReadBootstrapToken(state, sealer)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return database, service, token
+	return database, service
 }
 
 func TestCompleteSetupCreatesSessionAndDisablesBootstrap(t *testing.T) {
-	database, service, token := newBootstrapTestService(t)
+	database, service := newBootstrapTestService(t)
 	credentials, err := service.CompleteSetup(
 		context.Background(),
-		token,
 		"admin",
 		"synthetic-bootstrap-password",
 		"127.0.0.1",
@@ -86,7 +77,6 @@ func TestCompleteSetupCreatesSessionAndDisablesBootstrap(t *testing.T) {
 	}
 	if _, err := service.CompleteSetup(
 		context.Background(),
-		token,
 		"other-admin",
 		"another-synthetic-password",
 		"127.0.0.1",
@@ -115,7 +105,7 @@ func TestCompleteSetupCreatesSessionAndDisablesBootstrap(t *testing.T) {
 }
 
 func TestResetPasswordDoesNotCreateFirstAdministrator(t *testing.T) {
-	_, service, _ := newBootstrapTestService(t)
+	_, service := newBootstrapTestService(t)
 	if _, _, err := service.ResetPassword(
 		context.Background(),
 		"admin",
@@ -126,7 +116,7 @@ func TestResetPasswordDoesNotCreateFirstAdministrator(t *testing.T) {
 }
 
 func TestConcurrentSetupAllowsExactlyOneWinner(t *testing.T) {
-	database, service, token := newBootstrapTestService(t)
+	database, service := newBootstrapTestService(t)
 	type result struct {
 		credentials Credentials
 		err         error
@@ -140,7 +130,6 @@ func TestConcurrentSetupAllowsExactlyOneWinner(t *testing.T) {
 			}
 			credentials, err := service.CompleteSetup(
 				context.Background(),
-				token,
 				"admin",
 				"synthetic-concurrent-password",
 				sourceIP,
@@ -176,10 +165,9 @@ func TestConcurrentSetupAllowsExactlyOneWinner(t *testing.T) {
 }
 
 func TestResetPasswordRollsBackWhenAuditInsertionFails(t *testing.T) {
-	database, service, token := newBootstrapTestService(t)
+	database, service := newBootstrapTestService(t)
 	if _, err := service.CompleteSetup(
 		context.Background(),
-		token,
 		"admin",
 		"synthetic-bootstrap-password",
 		"127.0.0.1",

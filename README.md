@@ -106,12 +106,12 @@ curl -fsSL https://github.com/Aethersailor/m-ui/releases/latest/download/install
 - 启动 m-ui 与 Mihomo；
 - 执行服务、Controller 和配置健康检查。
 
-全新安装不会生成、打印或要求管理员密码。安装完成后终端会直接显示一次性
-setup link；打开它，在 Web 页面中创建管理员账号和密码即可。
+全新安装不会生成、打印或要求管理员密码。安装完成后直接打开
+`http://SERVER_IP:2095/`，在网页中创建管理员账号和密码即可，不需要再登录 SSH、执行
+容器命令或粘贴设置码。首次创建以单个原子事务完成，成功后初始化入口永久关闭。
 
-该链接的能力位于 URL fragment 中，不会进入 HTTP 请求、访问日志或
-Referer。`m-ui admin reset-password` 仅用于
-已有管理员的本机恢复，不能创建首个管理员。
+`m-ui admin reset-password` 仅用于已有管理员的本机恢复，不能创建首个管理员。请在将
+全新面板暴露给不受信任的网络前完成初始化。
 
 #### 访问面板
 
@@ -121,10 +121,8 @@ Referer。`m-ui admin reset-password` 仅用于
 http://SERVER_IP:2095/
 ```
 
-请直接打开安装器输出的 `/setup#token=...` 链接，在页面中创建管理员。
-一次性 token 仍是唯一授权条件，但首次设置不再强制用户建立 SSH 隧道；
-链接只能使用一次，且 token 位于 URL fragment 中，不会发送到服务器日志。
-首次设置完成后，页面会自动进入节点创建向导。
+页面检测到尚无管理员时会直接显示创建表单，不需要 setup link、token 或服务器命令。
+首次设置完成后，页面会自动进入节点创建向导，之后 `/setup` 不再允许重复初始化。
 
 使用刚刚在首次设置页面中创建的管理员账号登录。
 
@@ -253,13 +251,8 @@ Docker Compose 使用 host network，m-ui 默认监听宿主机所有 IPv4 接�
 0.0.0.0:2095
 ```
 
-直接打开 `http://SERVER_IP:2095/`。生成一次性 setup link：
-
-```sh
-sudo docker compose -f /opt/m-ui/compose.yml exec m-ui m-ui admin setup-link
-```
-
-保留命令输出的 `/setup#token=...` 路径，把 `127.0.0.1` 替换为服务器地址后在 Web 页面中创建管理员。需要限制到本机时，可在 Web 系统设置中改为 `127.0.0.1` 并重启容器。
+直接打开 `http://SERVER_IP:2095/`，网页会在没有管理员时自动进入首次设置。无需 SSH、
+setup link 或设置码。需要限制到本机时，可在 Web 系统设置中改为 `127.0.0.1` 并重启容器。
 
 > [!WARNING]
 > Compose 使用 `network_mode: host`，以便面板动态创建的 Mihomo Listener 直接绑定宿主机端口。

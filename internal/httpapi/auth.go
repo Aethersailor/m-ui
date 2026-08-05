@@ -21,11 +21,10 @@ import (
 )
 
 const (
-	sessionCookieName    = "m_ui_session"
-	csrfCookieName       = "m_ui_csrf"
-	csrfHeaderName       = "X-CSRF-Token"
-	setupTokenHeaderName = "X-M-UI-Setup-Token"
-	maxJSONBody          = 64 << 10
+	sessionCookieName = "m_ui_session"
+	csrfCookieName    = "m_ui_csrf"
+	csrfHeaderName    = "X-CSRF-Token"
+	maxJSONBody       = 64 << 10
 )
 
 type authContextKey struct{}
@@ -186,20 +185,8 @@ func (h authHandler) completeSetup(
 		)
 		return
 	}
-	setupTokens := request.Header.Values(setupTokenHeaderName)
-	if len(setupTokens) != 1 || strings.TrimSpace(setupTokens[0]) == "" {
-		writeAPIError(
-			response,
-			request,
-			http.StatusForbidden,
-			"SETUP_AUTHORIZATION_FAILED",
-			"The setup capability is invalid or expired.",
-		)
-		return
-	}
 	credentials, err := h.service.CompleteSetup(
 		request.Context(),
-		setupTokens[0],
 		input.Username,
 		input.Password,
 		remoteIP(request.RemoteAddr),
@@ -219,14 +206,6 @@ func (h authHandler) completeSetup(
 			http.StatusTooManyRequests,
 			"SETUP_RATE_LIMITED",
 			"Setup is temporarily rate limited. Try again later.",
-		)
-	case errors.Is(err, auth.ErrInvalidBootstrapToken):
-		writeAPIError(
-			response,
-			request,
-			http.StatusForbidden,
-			"SETUP_AUTHORIZATION_FAILED",
-			"The setup capability is invalid or expired.",
 		)
 	case errors.Is(err, auth.ErrBootstrapCompleted):
 		writeAPIError(

@@ -24,8 +24,10 @@ fi
 grep -q 'releases/latest/download/install-docker.sh' \
   "$repository_root/README.md" "$repository_root/deploy/docker/README.md"
 sh -n "$repository_root/scripts/install-docker.sh"
-grep -q 'm-ui admin setup-link --base-url' \
-  "$repository_root/scripts/install-docker.sh"
+if grep -q 'm-ui admin setup-link' "$repository_root/scripts/install-docker.sh"; then
+  echo "Docker installer still requires an SSH setup-link command" >&2
+  exit 1
+fi
 sh -n "$repository_root/deploy/docker/prepare-data-root.sh"
 
 make_archive() {

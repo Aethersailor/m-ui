@@ -28,7 +28,6 @@ Usage:
   m-ui status
   m-ui update|reinstall|uninstall|purge [options]
   m-ui doctor [panel|database] [--config /etc/m-ui/config.toml]
-  m-ui admin setup-link [--rotate] [--base-url URL] [--config /etc/m-ui/config.toml]
   m-ui admin reset-password [--password-file PATH] [--username admin]
   m-ui core status [--json] [--config /etc/m-ui/config.toml]
   m-ui core check [--json] [--config /etc/m-ui/config.toml]

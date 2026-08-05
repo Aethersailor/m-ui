@@ -11,15 +11,8 @@ import (
 	muicrypto "github.com/Aethersailor/m-ui/internal/crypto"
 )
 
-func TestSetupLinkUsesOneTimeFragmentCapability(t *testing.T) {
-	root := t.TempDir()
-	masterKeyPath := filepath.Join(root, "master.key")
-	if _, err := muicrypto.GenerateMasterKey(masterKeyPath); err != nil {
-		t.Fatal(err)
-	}
+func TestSetupLinkPointsDirectlyToBrowserSetup(t *testing.T) {
 	cfg := config.Default()
-	cfg.Storage.DatabasePath = filepath.Join(root, "m-ui.db")
-	cfg.Storage.MasterKeyPath = masterKeyPath
 	first, err := SetupLink(context.Background(), cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -28,22 +21,22 @@ func TestSetupLinkUsesOneTimeFragmentCapability(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if parsed.RawQuery != "" || parsed.Path != "/setup" || !strings.HasPrefix(parsed.Fragment, "token=") {
-		t.Fatalf("unsafe setup link: %q", first)
+	if parsed.RawQuery != "" || parsed.Path != "/setup" || parsed.Fragment != "" {
+		t.Fatalf("setup URL contains unexpected state: %q", first)
 	}
 	second, err := SetupLink(context.Background(), cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if first != second {
-		t.Fatal("setup-link regenerated the capability on restart")
+		t.Fatal("setup URL changed between calls")
 	}
 	rotated, err := RotateSetupLink(context.Background(), cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rotated == first {
-		t.Fatal("rotating setup token did not change the link")
+	if rotated != first {
+		t.Fatal("legacy rotate changed the browser setup URL")
 	}
 	public, err := SetupLinkForBaseURL(
 		context.Background(),
@@ -58,7 +51,7 @@ func TestSetupLinkUsesOneTimeFragmentCapability(t *testing.T) {
 		t.Fatal(err)
 	}
 	if publicURL.Scheme != "https" || publicURL.Host != "panel.example.com" ||
-		publicURL.Path != "/base/setup" || !strings.HasPrefix(publicURL.Fragment, "token=") {
+		publicURL.Path != "/base/setup" || publicURL.Fragment != "" {
 		t.Fatalf("public setup link = %q", public)
 	}
 	if _, err := SetupLinkForBaseURL(

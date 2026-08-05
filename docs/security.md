@@ -4,7 +4,8 @@
 
 m-ui v0.1 is an administrator-only control plane for one local Mihomo
 instance. It is not designed as a public multi-tenant service. The panel UI
-and Mihomo `external-controller` dashboard API listen on loopback by default.
+listens on all IPv4 interfaces by default while the Mihomo `external-controller`
+dashboard API remains loopback-only.
 They are separate listeners: m-ui's `/api/v1` is not the Mihomo dashboard API.
 Expose either one only through an SSH tunnel, VPN, or carefully configured
 HTTPS reverse proxy.
@@ -24,22 +25,17 @@ the single transaction coordinator.
   before serving the panel through HTTPS.
 - Password changes and administrative resets revoke existing sessions.
 
-First-run administrator creation is a separate bootstrap capability, not a
-password delivery mechanism. A fresh database receives a cryptographically
-random one-time capability whose hash and master-key-sealed ciphertext are
-stored in SQLite. `m-ui admin setup-link` decrypts it only for a local operator
-and places it in a URL fragment. The setup page consumes the fragment in
-memory and removes it from the address bar before submitting the JSON request.
-
-The setup transaction rechecks the empty-administrator state and capability
-under `BEGIN IMMEDIATE`, then creates the administrator, first session, success
-audit, and consumed state atomically. A second concurrent request cannot
-replace the first password. `admin reset-password` is recovery only and
+On a fresh instance, opening the panel directly displays the administrator
+form. The setup POST must be a same-origin browser request and is rate limited.
+Under `BEGIN IMMEDIATE`, the transaction rechecks that no administrator exists,
+then creates the administrator, first session, success audit, and consumed
+bootstrap state atomically. A second concurrent request cannot replace the
+first password or reopen setup. `admin reset-password` is recovery only and
 rejects an empty administrator table.
 
-Plaintext remote setup is rejected. The supported first-run path is an SSH
-tunnel to the loopback panel; a reverse proxy must not be treated as local
-operator authentication merely because its backend connection is loopback.
+Because the first successful browser becomes the administrator, initialize a
+fresh instance before exposing the panel to an untrusted network. HTTPS, VPN,
+reverse-proxy access control, and firewall policy remain deployment concerns.
 
 The application has one administrator in v0.1. RBAC and delegated accounts are
 deliberately out of scope.
@@ -62,7 +58,6 @@ monitoring labels:
 
 - passwords and session/CSRF tokens;
 - `master.key`;
-- unused setup links and bootstrap capabilities;
 - Controller secrets;
 - REALITY private keys;
 - full UUIDs and full sharing links.

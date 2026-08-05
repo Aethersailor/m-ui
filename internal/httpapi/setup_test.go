@@ -19,7 +19,6 @@ import (
 type setupTestEnvironment struct {
 	handler http.Handler
 	store   *store.Store
-	token   string
 }
 
 func newSetupTestEnvironment(t *testing.T) setupTestEnvironment {
@@ -59,25 +58,16 @@ func newSetupTestEnvironment(t *testing.T) setupTestEnvironment {
 	if err != nil {
 		t.Fatal(err)
 	}
-	state, err := database.BootstrapState(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	token, err := auth.ReadBootstrapToken(state, sealer)
-	if err != nil {
-		t.Fatal(err)
-	}
 	return setupTestEnvironment{
 		handler: New(Options{
 			Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 			Auth:   service,
 		}),
 		store: database,
-		token: token,
 	}
 }
 
-func TestSetupStatusDoesNotExposeCapability(t *testing.T) {
+func TestSetupStatusReportsBrowserSetupState(t *testing.T) {
 	environment := newSetupTestEnvironment(t)
 	request := httptest.NewRequest(
 		http.MethodGet,
@@ -96,19 +86,18 @@ func TestSetupStatusDoesNotExposeCapability(t *testing.T) {
 	if body == "" || !bytes.Contains([]byte(body), []byte(`"state":"required"`)) {
 		t.Fatalf("unexpected setup status body: %s", body)
 	}
-	if bytes.Contains([]byte(body), []byte(environment.token)) || bytes.Contains([]byte(body), []byte("token_hash")) {
-		t.Fatalf("setup status exposed capability: %s", body)
+	if bytes.Contains([]byte(body), []byte("token_hash")) || bytes.Contains([]byte(body), []byte("token_ciphertext")) {
+		t.Fatalf("setup status exposed internal state: %s", body)
 	}
 }
 
-func TestSetupAcceptsRemoteSameOriginWithCapability(t *testing.T) {
+func TestSetupAcceptsRemoteSameOriginBrowser(t *testing.T) {
 	environment := newSetupTestEnvironment(t)
 	response := performSetupRequest(
 		t,
 		environment.handler,
 		"http://192.0.2.20:2095/api/v1/setup/complete",
 		"192.0.2.10:40000",
-		environment.token,
 		"http://192.0.2.20:2095",
 	)
 	if response.Code != http.StatusCreated {
@@ -123,7 +112,6 @@ func TestSetupCreatesSessionAndRequiresOrigin(t *testing.T) {
 		environment.handler,
 		"http://127.0.0.1:2095/api/v1/setup/complete",
 		"127.0.0.1:40000",
-		environment.token,
 		"",
 	)
 	if missingOrigin.Code != http.StatusForbidden {
@@ -134,7 +122,6 @@ func TestSetupCreatesSessionAndRequiresOrigin(t *testing.T) {
 		environment.handler,
 		"http://127.0.0.1:2095/api/v1/setup/complete",
 		"127.0.0.1:40000",
-		environment.token,
 		"http://evil.test:2095",
 	)
 	if crossOrigin.Code != http.StatusForbidden {
@@ -146,7 +133,6 @@ func TestSetupCreatesSessionAndRequiresOrigin(t *testing.T) {
 		environment.handler,
 		"http://127.0.0.1:2095/api/v1/setup/complete",
 		"127.0.0.1:40000",
-		environment.token,
 		"http://127.0.0.1:2095",
 	)
 	if response.Code != http.StatusCreated {
@@ -179,7 +165,6 @@ func performSetupRequest(
 	handler http.Handler,
 	targetURL string,
 	remoteAddress string,
-	token string,
 	origin string,
 ) *httptest.ResponseRecorder {
 	t.Helper()
@@ -191,7 +176,6 @@ func performSetupRequest(
 	)
 	request.RemoteAddr = remoteAddress
 	request.Header.Set("Content-Type", "application/json")
-	request.Header.Set(setupTokenHeaderName, token)
 	if origin != "" {
 		request.Header.Set("Origin", origin)
 	}

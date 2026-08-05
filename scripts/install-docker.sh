@@ -124,18 +124,6 @@ if [ -z "$base_url" ]; then
     esac
 fi
 
-setup_link="$(docker compose -f "$deployment_directory/compose.yml" exec -T m-ui \
-    m-ui admin setup-link --base-url "$base_url" 2>/dev/null || true)"
-case "$setup_link" in
-    http://*/setup\#token=*|https://*/setup\#token=*)
-        printf '%s\n' \
-            "m-ui $version is healthy." \
-            "Open this one-time link to create the administrator:" \
-            "$setup_link"
-        ;;
-    *)
-        printf '%s\n' \
-            "m-ui $version is healthy." \
-            "Open $base_url (administrator setup is already complete)."
-        ;;
-esac
+printf '%s\n' \
+    "m-ui $version is healthy." \
+    "Open $base_url in a browser to create the administrator or sign in."

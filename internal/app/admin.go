@@ -9,11 +9,9 @@ import (
 	"os"
 	"runtime"
 	"strings"
-	"time"
 
 	"github.com/Aethersailor/m-ui/internal/auth"
 	"github.com/Aethersailor/m-ui/internal/config"
-	muicrypto "github.com/Aethersailor/m-ui/internal/crypto"
 	"github.com/Aethersailor/m-ui/internal/store"
 )
 
@@ -63,78 +61,31 @@ func ResetAdminPasswordValue(
 	return created, nil
 }
 
-func SetupLink(ctx context.Context, cfg config.Config) (string, error) {
-	return SetupLinkForBaseURL(ctx, cfg, "")
+func SetupLink(_ context.Context, cfg config.Config) (string, error) {
+	return setupURL(cfg, "")
 }
 
 func SetupLinkForBaseURL(
-	ctx context.Context,
+	_ context.Context,
 	cfg config.Config,
 	baseURL string,
 ) (string, error) {
-	database, sealer, err := openBootstrapPlane(ctx, cfg)
-	if err != nil {
-		return "", err
-	}
-	defer func() { _ = database.Close() }()
-	if err := auth.EnsureBootstrap(ctx, database, sealer, nil, time.Now); err != nil {
-		return "", fmt.Errorf("initialize administrator bootstrap: %w", err)
-	}
-	state, err := database.BootstrapState(ctx)
-	if err != nil {
-		return "", fmt.Errorf("read administrator bootstrap state: %w", err)
-	}
-	token, err := auth.ReadBootstrapToken(state, sealer)
-	if err != nil {
-		return "", err
-	}
-	return setupURL(cfg, token, baseURL)
+	return setupURL(cfg, baseURL)
 }
 
-func RotateSetupLink(ctx context.Context, cfg config.Config) (string, error) {
-	return RotateSetupLinkForBaseURL(ctx, cfg, "")
+func RotateSetupLink(_ context.Context, cfg config.Config) (string, error) {
+	return setupURL(cfg, "")
 }
 
 func RotateSetupLinkForBaseURL(
-	ctx context.Context,
+	_ context.Context,
 	cfg config.Config,
 	baseURL string,
 ) (string, error) {
-	database, sealer, err := openBootstrapPlane(ctx, cfg)
-	if err != nil {
-		return "", err
-	}
-	defer func() { _ = database.Close() }()
-	if err := auth.EnsureBootstrap(ctx, database, sealer, nil, time.Now); err != nil {
-		return "", fmt.Errorf("initialize administrator bootstrap: %w", err)
-	}
-	token, err := auth.RotateBootstrapToken(ctx, database, sealer, nil, time.Now)
-	if err != nil {
-		return "", fmt.Errorf("rotate administrator bootstrap token: %w", err)
-	}
-	return setupURL(cfg, token, baseURL)
+	return setupURL(cfg, baseURL)
 }
 
-func openBootstrapPlane(
-	ctx context.Context,
-	cfg config.Config,
-) (*store.Store, *muicrypto.Sealer, error) {
-	masterKey, err := muicrypto.LoadMasterKey(cfg.Storage.MasterKeyPath)
-	if err != nil {
-		return nil, nil, fmt.Errorf("load master key: %w", err)
-	}
-	sealer, err := muicrypto.NewSealer(masterKey)
-	if err != nil {
-		return nil, nil, fmt.Errorf("initialize field encryption: %w", err)
-	}
-	database, err := store.Open(ctx, cfg.Storage.DatabasePath)
-	if err != nil {
-		return nil, nil, fmt.Errorf("open store: %w", err)
-	}
-	return database, sealer, nil
-}
-
-func setupURL(cfg config.Config, token string, baseURL string) (string, error) {
+func setupURL(cfg config.Config, baseURL string) (string, error) {
 	if baseURL != "" {
 		parsed, err := url.Parse(baseURL)
 		if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") ||
@@ -144,7 +95,6 @@ func setupURL(cfg config.Config, token string, baseURL string) (string, error) {
 		}
 		parsed.Path = strings.TrimRight(parsed.Path, "/") + "/setup"
 		parsed.RawPath = ""
-		parsed.Fragment = "token=" + token
 		return parsed.String(), nil
 	}
 	host := cfg.Server.ListenAddress
@@ -152,10 +102,9 @@ func setupURL(cfg config.Config, token string, baseURL string) (string, error) {
 		host = "127.0.0.1"
 	}
 	return (&url.URL{
-		Scheme:   "http",
-		Host:     net.JoinHostPort(host, fmt.Sprint(cfg.Server.Port)),
-		Path:     "/setup",
-		Fragment: "token=" + token,
+		Scheme: "http",
+		Host:   net.JoinHostPort(host, fmt.Sprint(cfg.Server.Port)),
+		Path:   "/setup",
 	}).String(), nil
 }
 

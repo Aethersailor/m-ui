@@ -475,4 +475,4 @@ printf '%s\n' \
     "Services are not enabled automatically." \
     "Run: systemctl enable --now mihomo.service m-ui.service" \
     "or: rc-update add mihomo default && rc-update add m-ui default" \
-    "After starting m-ui, run: m-ui admin setup-link"
+    "After starting m-ui, open http://SERVER_IP:2095/ in a browser."

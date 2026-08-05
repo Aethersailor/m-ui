@@ -23,7 +23,6 @@ export function getSetupStatus(): Promise<SetupStatus> {
 }
 
 export function completeSetup(
-  token: string,
   username: string,
   password: string,
 ): Promise<SetupResponse> {
@@ -31,7 +30,6 @@ export function completeSetup(
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'X-M-UI-Setup-Token': token,
     },
     body: JSON.stringify({ username, password }),
   })

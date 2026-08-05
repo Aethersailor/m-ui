@@ -181,14 +181,9 @@ docker_root exec "$name" /var/lib/m-ui/core/current/mihomo \
 docker_root exec "$name" grep -q \
   '^external-controller: 127.0.0.1:9090$' /etc/mihomo/config.yaml
 
-setup_link="$(docker_root exec "$name" m-ui admin setup-link \
-  --config /etc/m-ui/config.toml)"
-setup_token="${setup_link##*#token=}"
-[[ "$setup_link" == *"#token="* && -n "$setup_token" ]]
 setup_response="$(curl --fail --silent --show-error \
   -H 'Origin: http://127.0.0.1:2095' \
   -H 'Content-Type: application/json' \
-  -H "X-M-UI-Setup-Token: $setup_token" \
   -c "$client_directory/cookies.txt" \
   -d '{"username":"admin","password":"Synthetic-Smoke-Password-2026!"}' \
   http://127.0.0.1:2095/api/v1/setup/complete)"

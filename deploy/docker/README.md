@@ -14,8 +14,8 @@ curl -fsSL https://github.com/Aethersailor/m-ui/releases/latest/download/install
 ```
 
 The installer verifies the Release checksum, prepares the non-root data
-directory, starts the canonical Compose service, waits for health, and prints a
-one-time setup link using the detected server address. Pass
+directory, starts the canonical Compose service, waits for health, and prints
+the panel address. Pass
 `--base-url https://m-ui.example.com` when a public HTTPS name is already in
 use.
 
@@ -43,16 +43,10 @@ symbolic links or special files.
 ## First administrator and settings
 
 The panel initially listens on every host IPv4 interface at `0.0.0.0:2095`.
-The installer prints the durable one-time setup link. To print it again:
-
-```sh
-sudo docker compose -f /opt/m-ui/compose.yml exec m-ui \
-  m-ui admin setup-link --base-url http://SERVER_IP:2095
-```
-
-Create the administrator directly in the Web page; no SSH tunnel is required.
-The one-time capability remains the only setup authorization and is carried in
-the URL fragment, so it is not sent in HTTP requests or access logs. Panel bind,
+Open `http://SERVER_IP:2095/` and create the administrator directly in the Web
+page. No SSH tunnel, setup command, link, or pasted code is required. The first
+successful setup transaction closes initialization permanently, so initialize a
+fresh instance before exposing the panel to an untrusted network. Panel bind,
 Public Host, Mihomo Controller endpoints and CORS, core channel, automatic
 updates, and the check interval are managed from the Web system settings. Safe
 first-start defaults keep the Mihomo Controller loopback-only; the panel is

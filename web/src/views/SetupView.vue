@@ -8,14 +8,13 @@ import {
   NInput,
   NText,
 } from 'naive-ui'
-import { computed, onMounted, ref } from 'vue'
+import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 
 import { completeSetup } from '@/api/setup'
 
 import AppearancePreferences from '@/components/AppearancePreferences.vue'
-import { acceptSetupTokenInput, getSetupToken } from '@/setup-token'
 import { useAuthStore } from '@/stores/auth'
 import { useSetupStore } from '@/stores/setup'
 
@@ -23,8 +22,6 @@ const { t } = useI18n()
 const router = useRouter()
 const auth = useAuthStore()
 const setup = useSetupStore()
-const token = ref('')
-const tokenInput = ref('')
 const username = ref('admin')
 const password = ref('')
 const confirmation = ref('')
@@ -37,9 +34,6 @@ const errorMessage = computed(() => {
   }
   if (formError.value === 'SETUP_ALREADY_COMPLETED') {
     return t('setup.completed')
-  }
-  if (formError.value === 'SETUP_AUTHORIZATION_FAILED') {
-    return t('setup.authorizationFailed')
   }
   if (formError.value === 'SETUP_RATE_LIMITED') {
     return t('setup.rateLimited')
@@ -56,36 +50,18 @@ const errorMessage = computed(() => {
   return ''
 })
 const canSubmit = computed(
-  () => Boolean(token.value && username.value && password.value && confirmation.value),
+  () => Boolean(username.value && password.value && confirmation.value),
 )
-
-onMounted(() => {
-  token.value = getSetupToken()
-})
-
-function acceptToken() {
-  formError.value = ''
-  if (!acceptSetupTokenInput(tokenInput.value)) {
-    formError.value = 'SETUP_AUTHORIZATION_FAILED'
-    return
-  }
-  token.value = getSetupToken()
-  tokenInput.value = ''
-}
 
 async function submit() {
   formError.value = ''
-  if (!token.value) {
-    formError.value = 'MISSING_TOKEN'
-    return
-  }
   if (password.value !== confirmation.value) {
     formError.value = 'PASSWORD_MISMATCH'
     return
   }
   loading.value = true
   try {
-    const response = await completeSetup(token.value, username.value, password.value)
+    const response = await completeSetup(username.value, password.value)
     auth.acceptCredentials(response)
     password.value = ''
     confirmation.value = ''
@@ -129,39 +105,7 @@ async function submit() {
           class="login-alert"
           role="alert"
         />
-        <template v-if="!token">
-          <NAlert
-            type="info"
-            :title="t('setup.tokenMissing')"
-            class="login-alert"
-            role="status"
-          />
-          <NText depth="3" class="setup-hint">
-            {{ t('setup.tokenCommandHint') }}
-          </NText>
-          <pre class="code-panel setup-command">m-ui admin setup-link --base-url http://SERVER_IP:2095</pre>
-          <pre class="code-panel setup-command">docker compose exec m-ui m-ui admin setup-link --base-url http://SERVER_IP:2095</pre>
-          <NForm size="large" @submit.prevent="acceptToken">
-            <NFormItem :label="t('setup.tokenInput')">
-              <NInput
-                v-model:value="tokenInput"
-                :placeholder="t('setup.tokenInputPlaceholder')"
-                autocomplete="off"
-                autofocus
-              />
-            </NFormItem>
-            <NButton
-              type="primary"
-              attr-type="submit"
-              block
-              size="large"
-              :disabled="!tokenInput.trim()"
-            >
-              {{ t('setup.continue') }}
-            </NButton>
-          </NForm>
-        </template>
-        <NForm v-else size="large" @submit.prevent="submit">
+        <NForm size="large" @submit.prevent="submit">
           <NFormItem :label="t('auth.username')">
             <NInput
               v-model:value="username"
@@ -201,8 +145,8 @@ async function submit() {
             {{ t('setup.submit') }}
           </NButton>
         </NForm>
-        <NText depth="3" class="setup-hint setup-token-hint">
-          {{ t('setup.tokenHint') }}
+        <NText depth="3" class="setup-hint setup-first-visitor-hint">
+          {{ t('setup.firstVisitorHint') }}
         </NText>
         <AppearancePreferences compact class="login-appearance" />
       </NCard>
