@@ -2,10 +2,7 @@ package app
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"net"
-	"net/url"
 	"os"
 	"runtime"
 	"strings"
@@ -59,53 +56,6 @@ func ResetAdminPasswordValue(
 		return false, fmt.Errorf("reset administrator password: %w", err)
 	}
 	return created, nil
-}
-
-func SetupLink(_ context.Context, cfg config.Config) (string, error) {
-	return setupURL(cfg, "")
-}
-
-func SetupLinkForBaseURL(
-	_ context.Context,
-	cfg config.Config,
-	baseURL string,
-) (string, error) {
-	return setupURL(cfg, baseURL)
-}
-
-func RotateSetupLink(_ context.Context, cfg config.Config) (string, error) {
-	return setupURL(cfg, "")
-}
-
-func RotateSetupLinkForBaseURL(
-	_ context.Context,
-	cfg config.Config,
-	baseURL string,
-) (string, error) {
-	return setupURL(cfg, baseURL)
-}
-
-func setupURL(cfg config.Config, baseURL string) (string, error) {
-	if baseURL != "" {
-		parsed, err := url.Parse(baseURL)
-		if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") ||
-			parsed.Host == "" || parsed.User != nil || parsed.Opaque != "" ||
-			parsed.RawQuery != "" || parsed.Fragment != "" {
-			return "", errors.New("base URL must be an absolute HTTP or HTTPS URL")
-		}
-		parsed.Path = strings.TrimRight(parsed.Path, "/") + "/setup"
-		parsed.RawPath = ""
-		return parsed.String(), nil
-	}
-	host := cfg.Server.ListenAddress
-	if ip := net.ParseIP(host); ip == nil || !ip.IsLoopback() {
-		host = "127.0.0.1"
-	}
-	return (&url.URL{
-		Scheme: "http",
-		Host:   net.JoinHostPort(host, fmt.Sprint(cfg.Server.Port)),
-		Path:   "/setup",
-	}).String(), nil
 }
 
 func readPasswordFile(path string) (string, error) {

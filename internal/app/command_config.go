@@ -22,6 +22,7 @@ func initialSettings(cfg config.Config) store.InitialSettings {
 		PanelTitle:                       cfg.Panel.Title,
 		UILanguage:                       cfg.Panel.UILanguage,
 		PublicHost:                       cfg.Panel.PublicHost,
+		CookieSecure:                     cfg.Security.CookieSecure,
 		PanelListenAddress:               cfg.Server.ListenAddress,
 		PanelListenPort:                  cfg.Server.Port,
 		MihomoExternalControllerBindHost: externalController.Host,

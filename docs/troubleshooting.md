@@ -1,5 +1,10 @@
 # Troubleshooting
 
+Normal health, runtime logs, core operations and configuration rollback are
+available in the Web panel. The host commands below are disaster diagnostics
+for an unavailable panel or a broken deployment; they are not part of routine
+m-ui administration.
+
 ## Collect a safe status snapshot
 
 ```sh

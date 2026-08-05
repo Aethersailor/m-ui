@@ -28,6 +28,22 @@ if grep -q 'm-ui admin setup-link' "$repository_root/scripts/install-docker.sh";
   echo "Docker installer still requires an SSH setup-link command" >&2
   exit 1
 fi
+if grep -RniE \
+  'ssh[[:space:]]+-|docker[[:space:]]+compose[[:space:]]+exec|m-ui[[:space:]]+admin|setup-link|rotate-setup-token' \
+  "$repository_root/web/src"; then
+  echo "Web product flow exposes a server-shell operation" >&2
+  exit 1
+fi
+if grep -nE 'setup-link|rotate-setup-token' \
+  "$repository_root/cmd/m-ui/main.go" \
+  "$repository_root/internal/app/admin.go"; then
+  echo "removed setup-link command remains callable" >&2
+  exit 1
+fi
+grep -q '^Restart=on-failure$' "$repository_root/deploy/systemd/m-ui.service"
+grep -q '^supervisor="supervise-daemon"$' "$repository_root/deploy/openrc/m-ui"
+grep -q '^respawn_max=0$' "$repository_root/deploy/openrc/m-ui"
+grep -q '^    restart: always$' "$repository_root/deploy/docker/compose.yml"
 sh -n "$repository_root/deploy/docker/prepare-data-root.sh"
 
 make_archive() {

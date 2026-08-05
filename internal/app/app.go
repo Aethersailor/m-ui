@@ -27,6 +27,8 @@ import (
 	"github.com/Aethersailor/m-ui/internal/version"
 )
 
+var ErrRestartRequested = errors.New("application restart requested")
+
 func Run(ctx context.Context, cfg config.Config, build version.Info) error {
 	logger, err := newLogger(cfg.Logging)
 	if err != nil {
@@ -356,6 +358,7 @@ func Run(ctx context.Context, cfg config.Config, build version.Info) error {
 			return err
 		}
 	}
+	restartRequested := make(chan struct{}, 1)
 	server := &http.Server{
 		Addr: domain.Endpoint{
 			Host: runtimeSettings.PanelListenAddress,
@@ -367,7 +370,13 @@ func Run(ctx context.Context, cfg config.Config, build version.Info) error {
 			Auth:            authService,
 			Management:      manager,
 			LanguageDefault: manager.UILanguage,
-			CookieSecure:    cfg.Security.CookieSecure,
+			CookieSecure:    runtimeSettings.CookieSecure,
+			RequestRestart: func() {
+				select {
+				case restartRequested <- struct{}{}:
+				default:
+				}
+			},
 		}),
 		ReadHeaderTimeout: readHeaderTimeout,
 		ReadTimeout:       30 * time.Second,
@@ -443,6 +452,7 @@ func Run(ctx context.Context, cfg config.Config, build version.Info) error {
 		errCh <- server.Serve(listener)
 	}()
 
+	restarting := false
 	select {
 	case serveErr := <-errCh:
 		if errors.Is(serveErr, http.ErrServerClosed) {
@@ -451,12 +461,18 @@ func Run(ctx context.Context, cfg config.Config, build version.Info) error {
 		return fmt.Errorf("serve HTTP: %w", serveErr)
 	case <-ctx.Done():
 		logger.Info("shutting down m-ui server")
+	case <-restartRequested:
+		restarting = true
+		logger.Info("restarting m-ui server by authenticated Web request")
 	}
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		return fmt.Errorf("shut down HTTP server: %w", err)
+	}
+	if restarting {
+		return ErrRestartRequested
 	}
 	return nil
 }

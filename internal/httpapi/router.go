@@ -24,6 +24,7 @@ type Options struct {
 	Management      *service.Manager
 	LanguageDefault func(context.Context) (string, error)
 	CookieSecure    bool
+	RequestRestart  func()
 }
 
 type healthResponse struct {
@@ -66,7 +67,11 @@ func New(options Options) http.Handler {
 				mountManagementRoutes(
 					api,
 					authentication,
-					managementHandler{manager: options.Management},
+					managementHandler{
+						manager:        options.Management,
+						cookieSecure:   options.CookieSecure,
+						requestRestart: options.RequestRestart,
+					},
 				)
 			}
 		}

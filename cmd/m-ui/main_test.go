@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -98,6 +99,7 @@ func TestNormalHelpHidesDeploymentInternals(t *testing.T) {
 		"runtime finalize-mihomo-start",
 		"runtime apply-mihomo-start",
 		"core bootstrap",
+		"setup-link",
 		"rotate-setup-token",
 	} {
 		if bytes.Contains([]byte(usage), []byte(internalCommand)) {
@@ -106,6 +108,15 @@ func TestNormalHelpHidesDeploymentInternals(t *testing.T) {
 	}
 	if !bytes.Contains([]byte(usage), []byte("admin reset-password [--password-file PATH]")) {
 		t.Fatal("normal help does not advertise interactive password recovery")
+	}
+}
+
+func TestRemovedSetupCommandsCannotBeInvoked(t *testing.T) {
+	for _, command := range []string{"setup-link", "rotate-setup-token"} {
+		err := runAdmin([]string{command})
+		if err == nil || !strings.Contains(err.Error(), "unknown admin command") {
+			t.Fatalf("runAdmin(%q) error = %v", command, err)
+		}
 	}
 }
 

@@ -367,9 +367,13 @@ func runConfig(args []string) error {
 func runAdmin(args []string) error {
 	if len(args) == 0 {
 		fmt.Fprint(os.Stderr, usage)
-		return errors.New("admin requires setup-link, rotate-setup-token, or reset-password")
+		return errors.New("admin requires reset-password")
 	}
 	command := args[0]
+	if command != "reset-password" {
+		fmt.Fprint(os.Stderr, usage)
+		return fmt.Errorf("unknown admin command %q", command)
+	}
 	flags := flag.NewFlagSet("admin "+command, flag.ContinueOnError)
 	flags.SetOutput(os.Stderr)
 	configPath := flags.String("config", "", "path to the m-ui TOML configuration")
@@ -379,8 +383,6 @@ func runAdmin(args []string) error {
 		"",
 		"path to a file containing the new password",
 	)
-	rotateSetupToken := flags.Bool("rotate", false, "rotate the unused setup token")
-	baseURL := flags.String("base-url", "", "public HTTP or HTTPS base URL for the setup link")
 	if err := flags.Parse(args[1:]); err != nil {
 		return err
 	}
@@ -393,40 +395,6 @@ func runAdmin(args []string) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	switch command {
-	case "setup-link":
-		if *passwordFile != "" || *username != "admin" {
-			return errors.New("setup-link accepts only --config, --rotate, and --base-url")
-		}
-		var link string
-		if *rotateSetupToken {
-			link, err = app.RotateSetupLinkForBaseURL(ctx, cfg, *baseURL)
-		} else {
-			link, err = app.SetupLinkForBaseURL(ctx, cfg, *baseURL)
-		}
-		if err != nil {
-			return err
-		}
-		fmt.Println(link)
-		return nil
-	case "rotate-setup-token":
-		if *passwordFile != "" || *username != "admin" || *rotateSetupToken {
-			return errors.New("rotate-setup-token accepts only --config and --base-url")
-		}
-		link, err := app.RotateSetupLinkForBaseURL(ctx, cfg, *baseURL)
-		if err != nil {
-			return err
-		}
-		fmt.Println(link)
-		return nil
-	case "reset-password":
-		if *rotateSetupToken || *baseURL != "" {
-			return errors.New("reset-password does not accept --rotate or --base-url")
-		}
-	default:
-		fmt.Fprint(os.Stderr, usage)
-		return fmt.Errorf("unknown admin command %q", command)
-	}
 	var created bool
 	if *passwordFile != "" {
 		created, err = app.ResetAdminPassword(ctx, cfg, *username, *passwordFile)

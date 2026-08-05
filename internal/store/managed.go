@@ -21,6 +21,7 @@ const (
 	settingPublicHost         = "public_host"
 	settingPanelTitle         = "panel_title"
 	settingUILanguage         = "ui_language"
+	settingCookieSecure       = "cookie_secure"
 	settingPanelAddress       = "panel_listen_address"
 	settingPanelPort          = "panel_listen_port"
 	settingExternalBindHost   = "mihomo_external_controller_bind_host"
@@ -56,6 +57,7 @@ type InitialSettings struct {
 	PanelTitle                       string
 	UILanguage                       string
 	PublicHost                       string
+	CookieSecure                     bool
 	PanelListenAddress               string
 	PanelListenPort                  uint16
 	MihomoExternalControllerBindHost string
@@ -248,6 +250,7 @@ func (managed *ManagedStore) EnsureInitialSettings(
 		{settingPanelTitle, settings.PanelTitle},
 		{settingUILanguage, settings.UILanguage},
 		{settingPublicHost, settings.PublicHost},
+		{settingCookieSecure, strconv.FormatBool(settings.CookieSecure)},
 	}
 	for _, item := range displayDefaults {
 		if _, err := transaction.ExecContext(
@@ -471,6 +474,10 @@ func (managed *ManagedStore) Settings(ctx context.Context) (RuntimeSettings, err
 	if err != nil || historyLimit < 1 {
 		return RuntimeSettings{}, errors.New("stored revision history limit is invalid")
 	}
+	cookieSecure, err := strconv.ParseBool(values[settingCookieSecure])
+	if err != nil {
+		return RuntimeSettings{}, errors.New("stored cookie security setting is invalid")
+	}
 	var trustedProxies []string
 	if err := json.Unmarshal([]byte(values[settingTrustedProxies]), &trustedProxies); err != nil {
 		return RuntimeSettings{}, errors.New("stored trusted proxy list is invalid")
@@ -487,6 +494,7 @@ func (managed *ManagedStore) Settings(ctx context.Context) (RuntimeSettings, err
 			PanelTitle:                       values[settingPanelTitle],
 			UILanguage:                       values[settingUILanguage],
 			PublicHost:                       values[settingPublicHost],
+			CookieSecure:                     cookieSecure,
 			PanelListenAddress:               endpoints.PanelUIBind.Host,
 			PanelListenPort:                  endpoints.PanelUIBind.Port,
 			MihomoExternalControllerBindHost: endpoints.MihomoExternalControllerBind.Host,
@@ -1047,6 +1055,7 @@ func (transaction *ManagedTx) DesiredState(
 		AsOf:                          asOf.UTC(),
 		PanelTitle:                    settings[settingPanelTitle],
 		UILanguage:                    settings[settingUILanguage],
+		CookieSecure:                  settings[settingCookieSecure] == "true",
 		PanelUIBind:                   domain.Endpoint{Host: settings[settingPanelAddress], Port: parseStoredPort(settings[settingPanelPort])},
 		MihomoExternalControllerBind:  domain.Endpoint{Host: settings[settingExternalBindHost], Port: parseStoredPort(settings[settingExternalBindPort])},
 		MihomoControllerConnect:       domain.Endpoint{Host: settings[settingConnectHost], Port: parseStoredPort(settings[settingConnectPort])},
@@ -1192,6 +1201,7 @@ func (transaction *ManagedTx) ReplaceDesiredState(
 		{settingPanelTitle, panelTitle},
 		{settingUILanguage, uiLanguage},
 		{settingPublicHost, state.PublicHost},
+		{settingCookieSecure, strconv.FormatBool(state.CookieSecure)},
 		{settingPanelAddress, state.PanelUIBind.Host},
 		{settingPanelPort, strconv.Itoa(int(state.PanelUIBind.Port))},
 		{settingExternalBindHost, state.MihomoExternalControllerBind.Host},
@@ -1641,10 +1651,11 @@ func (transaction *ManagedTx) settings(ctx context.Context) (map[string]string, 
 	rows, err := transaction.conn.QueryContext(
 		ctx,
 		`SELECT key, value FROM settings
-		  WHERE key IN (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		  WHERE key IN (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		settingPanelTitle,
 		settingUILanguage,
 		settingPublicHost,
+		settingCookieSecure,
 		settingPanelAddress,
 		settingPanelPort,
 		settingExternalBindHost,
@@ -1662,7 +1673,7 @@ func (transaction *ManagedTx) settings(ctx context.Context) (map[string]string, 
 	defer func() {
 		_ = rows.Close()
 	}()
-	settings := make(map[string]string, 13)
+	settings := make(map[string]string, 14)
 	for rows.Next() {
 		var key, value string
 		if err := rows.Scan(&key, &value); err != nil {
@@ -1674,6 +1685,7 @@ func (transaction *ManagedTx) settings(ctx context.Context) (map[string]string, 
 		settingPanelTitle,
 		settingUILanguage,
 		settingPublicHost,
+		settingCookieSecure,
 		settingPanelAddress,
 		settingPanelPort,
 		settingControllerSecret,

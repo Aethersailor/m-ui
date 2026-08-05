@@ -20,7 +20,9 @@ import (
 const revealConfigConfirmation = "reveal-current-config"
 
 type managementHandler struct {
-	manager *service.Manager
+	manager        *service.Manager
+	cookieSecure   bool
+	requestRestart func()
 }
 
 type listenerRequest struct {
@@ -161,20 +163,27 @@ type rollbackResponse struct {
 }
 
 type settingsRequest struct {
-	PanelTitle string `json:"panel_title"`
-	UILanguage string `json:"ui_language"`
-	PublicHost string `json:"public_host"`
+	PanelTitle   string `json:"panel_title"`
+	UILanguage   string `json:"ui_language"`
+	PublicHost   string `json:"public_host"`
+	CookieSecure bool   `json:"cookie_secure"`
 }
 
 type settingsResponse struct {
-	PanelTitle string `json:"panel_title"`
-	UILanguage string `json:"ui_language"`
-	PublicHost string `json:"public_host"`
+	PanelTitle         string `json:"panel_title"`
+	UILanguage         string `json:"ui_language"`
+	PublicHost         string `json:"public_host"`
+	CookieSecure       bool   `json:"cookie_secure"`
+	RequiresMUIRestart bool   `json:"requires_mui_restart"`
 }
 
 type settingsMutationResponse struct {
 	Settings settingsResponse `json:"settings"`
 	Revision revisionResponse `json:"revision"`
+}
+
+type applicationRestartResponse struct {
+	Restarting bool `json:"restarting"`
 }
 
 type endpointResponse struct {
@@ -344,6 +353,7 @@ func mountManagementRoutes(
 			)
 
 			mutations.Put("/settings", handler.updateSettings)
+			mutations.Post("/system/restart", handler.restartApplication)
 			mutations.Put("/settings/endpoints", handler.updateEndpointSettings)
 			mutations.Post("/settings/test-core", handler.testCore)
 			mutations.Post(
@@ -1032,9 +1042,11 @@ func (handler managementHandler) getSettings(
 		return
 	}
 	writePrivateJSON(response, http.StatusOK, settingsResponse{
-		PanelTitle: settings.PanelTitle,
-		UILanguage: settings.UILanguage,
-		PublicHost: settings.PublicHost,
+		PanelTitle:         settings.PanelTitle,
+		UILanguage:         settings.UILanguage,
+		PublicHost:         settings.PublicHost,
+		CookieSecure:       settings.CookieSecure,
+		RequiresMUIRestart: settings.CookieSecure != handler.cookieSecure,
 	})
 }
 
@@ -1051,9 +1063,10 @@ func (handler managementHandler) updateSettings(
 		request.Context(),
 		currentAuthSession(request.Context()).Admin.ID,
 		service.EditableSettings{
-			PanelTitle: input.PanelTitle,
-			UILanguage: input.UILanguage,
-			PublicHost: input.PublicHost,
+			PanelTitle:   input.PanelTitle,
+			UILanguage:   input.UILanguage,
+			PublicHost:   input.PublicHost,
+			CookieSecure: input.CookieSecure,
 		},
 	)
 	if err != nil {
@@ -1061,9 +1074,35 @@ func (handler managementHandler) updateSettings(
 		return
 	}
 	writePrivateJSON(response, http.StatusOK, settingsMutationResponse{
-		Settings: settingsResponse(input),
+		Settings: settingsResponse{
+			PanelTitle:         input.PanelTitle,
+			UILanguage:         input.UILanguage,
+			PublicHost:         input.PublicHost,
+			CookieSecure:       input.CookieSecure,
+			RequiresMUIRestart: input.CookieSecure != handler.cookieSecure,
+		},
 		Revision: newRevisionResponse(revision),
 	})
+}
+
+func (handler managementHandler) restartApplication(
+	response http.ResponseWriter,
+	request *http.Request,
+) {
+	if handler.requestRestart == nil {
+		writeAPIError(
+			response,
+			request,
+			http.StatusServiceUnavailable,
+			"APPLICATION_RESTART_UNAVAILABLE",
+			"The current deployment does not provide an application supervisor.",
+		)
+		return
+	}
+	writePrivateJSON(response, http.StatusAccepted, applicationRestartResponse{
+		Restarting: true,
+	})
+	handler.requestRestart()
 }
 
 func (handler managementHandler) getEndpointSettings(

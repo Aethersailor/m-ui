@@ -7,8 +7,8 @@ instance. It is not designed as a public multi-tenant service. The panel UI
 listens on all IPv4 interfaces by default while the Mihomo `external-controller`
 dashboard API remains loopback-only.
 They are separate listeners: m-ui's `/api/v1` is not the Mihomo dashboard API.
-Expose either one only through an SSH tunnel, VPN, or carefully configured
-HTTPS reverse proxy.
+Expose either one only through a VPN or carefully configured HTTPS reverse
+proxy.
 
 The database is the source of truth. m-ui accepts typed management operations,
 not arbitrary YAML or command lines. Every configuration mutation is compiled,
@@ -21,8 +21,9 @@ the single transaction coordinator.
 - Session tokens and CSRF tokens are stored as hashes.
 - Authenticated mutations require both the session cookie and the CSRF header.
 - Login attempts are rate limited and return generic authentication failures.
-- Session cookies are HttpOnly and SameSite=Strict. Set `cookie_secure = true`
-  before serving the panel through HTTPS.
+- Session cookies are HttpOnly and SameSite=Strict. Enable HTTPS-only cookies
+  in the Web System settings before serving the panel through HTTPS, then use
+  the authenticated Web restart action to apply the change.
 - Password changes and administrative resets revoke existing sessions.
 
 On a fresh instance, opening the panel directly displays the administrator
@@ -134,9 +135,10 @@ changes it in System settings. The panel bind can be changed to loopback from
 the same page. The m-ui-to-Mihomo connection target remains
 loopback-only and is never allowed to be an arbitrary remote host.
 
-Endpoint changes are stored in SQLite and the generated YAML is validated, but
-they are not treated as live socket changes. The UI reports whether m-ui or
-Mihomo must be restarted. CORS accepts exact `http://`/`https://` origins only;
+Endpoint changes are stored in SQLite and the generated YAML is validated. The
+UI provides the required authenticated m-ui or Mihomo restart action; routine
+endpoint changes do not require a server login. CORS accepts exact
+`http://`/`https://` origins only;
 `*` is rejected. Public dashboard access should use TLS plus a VPN, allowlist,
 or an independently managed reverse proxy, and must still supply the Mihomo
 Controller secret.
@@ -145,7 +147,7 @@ When using a reverse proxy:
 
 - terminate TLS at the proxy;
 - keep the backend on loopback;
-- set `cookie_secure = true`;
+- enable HTTPS-only cookies in Web System settings and apply the Web restart;
 - do not cache `/api/`;
 - apply independent authentication or IP restrictions if appropriate;
 - preserve request size and timeout limits.

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 
-import { setListenerEnabled, updateCore } from './management'
+import { restartApplication, setListenerEnabled, updateCore } from './management'
 
 describe('management API', () => {
   it('sends authenticated mutations with the CSRF header', async () => {
@@ -83,6 +83,26 @@ describe('management API', () => {
     expect(init.method).toBe('POST')
     expect(new Headers(init.headers).get('X-CSRF-Token')).toBe(
       'synthetic-core-csrf',
+    )
+  })
+
+  it('requests an application restart through the authenticated Web API', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ restarting: true }), {
+        status: 202,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const result = await restartApplication('synthetic-restart-csrf')
+
+    expect(result.restarting).toBe(true)
+    const [path, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(path).toBe('/api/v1/system/restart')
+    expect(init.method).toBe('POST')
+    expect(new Headers(init.headers).get('X-CSRF-Token')).toBe(
+      'synthetic-restart-csrf',
     )
   })
 })

@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"net/url"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -10,58 +9,6 @@ import (
 	"github.com/Aethersailor/m-ui/internal/config"
 	muicrypto "github.com/Aethersailor/m-ui/internal/crypto"
 )
-
-func TestSetupLinkPointsDirectlyToBrowserSetup(t *testing.T) {
-	cfg := config.Default()
-	first, err := SetupLink(context.Background(), cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	parsed, err := url.Parse(first)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if parsed.RawQuery != "" || parsed.Path != "/setup" || parsed.Fragment != "" {
-		t.Fatalf("setup URL contains unexpected state: %q", first)
-	}
-	second, err := SetupLink(context.Background(), cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if first != second {
-		t.Fatal("setup URL changed between calls")
-	}
-	rotated, err := RotateSetupLink(context.Background(), cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if rotated != first {
-		t.Fatal("legacy rotate changed the browser setup URL")
-	}
-	public, err := SetupLinkForBaseURL(
-		context.Background(),
-		cfg,
-		"https://panel.example.com/base/",
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	publicURL, err := url.Parse(public)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if publicURL.Scheme != "https" || publicURL.Host != "panel.example.com" ||
-		publicURL.Path != "/base/setup" || publicURL.Fragment != "" {
-		t.Fatalf("public setup link = %q", public)
-	}
-	if _, err := SetupLinkForBaseURL(
-		context.Background(),
-		cfg,
-		"javascript:alert(1)",
-	); err == nil {
-		t.Fatal("unsafe setup base URL was accepted")
-	}
-}
 
 func TestResetAdminPasswordValueKeepsFirstAdministratorInWebBootstrap(t *testing.T) {
 	root := t.TempDir()

@@ -33,6 +33,7 @@ import {
   updateEndpointSettings,
   getRuntimeLogs,
   listAuditEntries,
+  restartApplication,
   runRuntimeAction,
   rollbackCore,
   testController,
@@ -41,6 +42,7 @@ import {
   updateCoreSettings,
   updateSettings,
   type Settings,
+  type SettingsInput,
   type EndpointSettings,
   type CoreStatus,
 } from '@/api/management'
@@ -64,6 +66,7 @@ const message = useMessage()
 const loading = ref(true)
 const saving = ref(false)
 const endpointSaving = ref(false)
+const applicationRestarting = ref(false)
 const coreBusy = ref(false)
 const coreStatus = ref<CoreStatus | null>(null)
 const activeTab = ref('settings')
@@ -71,6 +74,8 @@ const settingsForm = reactive<Settings>({
   panel_title: 'm-ui',
   ui_language: 'auto',
   public_host: 'localhost',
+  cookie_secure: false,
+  requires_mui_restart: false,
 })
 const endpointForm = reactive<EndpointSettings>({
   panel_ui_bind: { host: '0.0.0.0', port: 2095 },
@@ -210,7 +215,13 @@ function confirmCoreAction(action: 'update' | 'rollback') {
 async function saveSettings() {
   saving.value = true
   try {
-    const saved = await updateSettings(auth.csrfToken, { ...settingsForm })
+    const input: SettingsInput = {
+      panel_title: settingsForm.panel_title,
+      ui_language: settingsForm.ui_language,
+      public_host: settingsForm.public_host,
+      cookie_secure: settingsForm.cookie_secure,
+    }
+    const saved = await updateSettings(auth.csrfToken, input)
     management.settings = saved
     preferences.setServerLanguageDefault(saved.ui_language)
     message.success(t('common.saved'))
@@ -219,6 +230,48 @@ async function saveSettings() {
   } finally {
     saving.value = false
   }
+}
+
+function confirmApplicationRestart() {
+  dialog.warning({
+    title: t('system.applicationRestartTitle'),
+    content: t('system.applicationRestartBody'),
+    positiveText: t('system.restartApplication'),
+    negativeText: t('common.cancel'),
+    async onPositiveClick() {
+      applicationRestarting.value = true
+      try {
+        await restartApplication(auth.csrfToken)
+        message.success(t('system.applicationRestarting'))
+        void reconnectAfterApplicationRestart()
+      } catch (error) {
+        applicationRestarting.value = false
+        message.error(t(errorTranslationKey(error)))
+      }
+    },
+  })
+}
+
+async function reconnectAfterApplicationRestart() {
+  await new Promise((resolve) => window.setTimeout(resolve, 1000))
+  const deadline = Date.now() + 60_000
+  while (Date.now() < deadline) {
+    try {
+      const response = await fetch('/api/v1/health', {
+        cache: 'no-store',
+        credentials: 'same-origin',
+      })
+      if (response.ok) {
+        window.location.reload()
+        return
+      }
+    } catch {
+      // A failed request is expected while the supervisor starts m-ui again.
+    }
+    await new Promise((resolve) => window.setTimeout(resolve, 1000))
+  }
+  applicationRestarting.value = false
+  message.warning(t('system.applicationReconnectTimeout'))
 }
 
 async function saveEndpointSettings() {
@@ -367,9 +420,33 @@ async function submitPassword() {
                 <NFormItem :label="t('system.publicHost')" required>
                   <NInput v-model:value="settingsForm.public_host" />
                 </NFormItem>
+                <NFormItem :label="t('system.cookieSecure')">
+                  <NSwitch v-model:value="settingsForm.cookie_secure" />
+                </NFormItem>
               </div>
               <NAlert type="info" :bordered="false">
                 {{ t('system.publicHostHint') }}
+              </NAlert>
+              <NAlert type="info" :bordered="false" class="section-gap">
+                {{ t('system.cookieSecureHint') }}
+              </NAlert>
+              <NAlert
+                v-if="management.settings?.requires_mui_restart"
+                type="warning"
+                :bordered="false"
+                class="section-gap"
+              >
+                <NSpace align="center" justify="space-between">
+                  <span>{{ t('system.applicationRestartPending') }}</span>
+                  <NButton
+                    type="warning"
+                    secondary
+                    :loading="applicationRestarting"
+                    @click="confirmApplicationRestart"
+                  >
+                    {{ t('system.restartApplication') }}
+                  </NButton>
+                </NSpace>
               </NAlert>
               <NSpace justify="end" class="modal-actions">
                 <NButton
@@ -482,6 +559,25 @@ async function submitPassword() {
                         : '',
                     })
                   }}
+                  <NSpace class="section-gap">
+                    <NButton
+                      v-if="management.endpointSettings.pending.requires_mui_restart"
+                      type="warning"
+                      secondary
+                      :loading="applicationRestarting"
+                      @click="confirmApplicationRestart"
+                    >
+                      {{ t('system.restartApplication') }}
+                    </NButton>
+                    <NButton
+                      v-else-if="management.endpointSettings.pending.requires_mihomo_restart"
+                      type="warning"
+                      secondary
+                      @click="confirmRuntimeAction('restart')"
+                    >
+                      {{ t('system.restartMihomoToApply') }}
+                    </NButton>
+                  </NSpace>
                 </NAlert>
                 <NAlert type="info" :bordered="false" class="section-gap">
                   {{ t('system.endpointRestartOrder') }}
@@ -550,6 +646,14 @@ async function submitPassword() {
                   @click="confirmRuntimeAction('stop')"
                 >
                   {{ t('system.stop') }}
+                </NButton>
+                <NButton
+                  type="warning"
+                  secondary
+                  :loading="applicationRestarting"
+                  @click="confirmApplicationRestart"
+                >
+                  {{ t('system.restartApplication') }}
                 </NButton>
               </NSpace>
               <NSpace class="section-gap">

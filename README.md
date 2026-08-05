@@ -121,7 +121,7 @@ curl -fsSL https://github.com/Aethersailor/m-ui/releases/latest/download/install
 http://SERVER_IP:2095/
 ```
 
-页面检测到尚无管理员时会直接显示创建表单，不需要 setup link、token 或服务器命令。
+页面检测到尚无管理员时会直接显示创建表单，不需要令牌或服务器命令。
 首次设置完成后，页面会自动进入节点创建向导，之后 `/setup` 不再允许重复初始化。
 
 使用刚刚在首次设置页面中创建的管理员账号登录。
@@ -134,25 +134,21 @@ http://SERVER_IP:2095/
 - [反向代理配置](docs/reverse-proxy.md)
 - [安全模型](docs/security.md)
 
-使用 HTTPS 后，需要修改：
-
-```toml
-# /etc/m-ui/config.toml
-
-[security]
-cookie_secure = true
-```
-
-然后重启 m-ui：
-
-```sh
-sudo systemctl restart m-ui
-```
+使用 HTTPS 后，在 Web 的“系统 → 设置”中开启“仅通过 HTTPS 发送登录 Cookie”，保存后
+直接点击页面里的“重启 m-ui 并应用”。systemd、OpenRC 或 Docker 会自动拉起应用，
+不需要登录服务器修改 TOML 或执行重启命令。
 
 > [!WARNING]
 > 不要直接将管理面板暴露到公网，也不要反向代理或公开 Mihomo Controller 的 `9090` 端口。
 
-#### 常用管理命令
+#### 部署生命周期与灾难恢复命令
+
+首次安装完成后，日常管理全部在 Web 完成：管理员密码、Listener、用户、分享、配置校验与
+回滚、面板与 Controller 端点、Mihomo 启停与日志、Release/Alpha 核心更新和自动更新都
+不要求 SSH 或容器命令。
+
+只有安装、m-ui 程序升级/重装、卸载、彻底清理，以及面板已经无法访问时的灾难诊断或密码
+恢复属于宿主机生命周期，需要终端权限：
 
 安装后不需要记住 `/usr/lib/m-ui/manage.sh` 路径，直接使用 `m-ui`：
 
@@ -229,7 +225,10 @@ CORS、核心通道、自动更新和检查周期均使用安全初始值，首�
 系统设置中管理。若要改用其他宿主目录，直接修改 Compose 中唯一的 volume
 源路径，并以 `10001:10001`、`0700` 权限提前创建它。
 
-查看健康状态：
+正常健康状态和最近日志直接在 Web“概览/系统”页面查看。只有面板本身无法访问、需要排查
+部署故障时，才使用下面的宿主机命令。
+
+查看容器健康状态：
 
 ```sh
 sudo docker inspect \
@@ -252,16 +251,20 @@ Docker Compose 使用 host network，m-ui 默认监听宿主机所有 IPv4 接�
 ```
 
 直接打开 `http://SERVER_IP:2095/`，网页会在没有管理员时自动进入首次设置。无需 SSH、
-setup link 或设置码。需要限制到本机时，可在 Web 系统设置中改为 `127.0.0.1` 并重启容器。
+令牌或设置码。需要限制到本机时，可在 Web 系统设置中改为 `127.0.0.1`，再点击页面里的
+“重启 m-ui 并应用”。
 
 > [!WARNING]
 > Compose 使用 `network_mode: host`，以便面板动态创建的 Mihomo Listener 直接绑定宿主机端口。
 >
 > 这意味着 Docker 不会为面板和 Listener 端口提供独立的端口映射和隔离，必须自行配置 HTTPS、VPN、访问控制和宿主机防火墙。
 
-#### 更新与数据
+#### 部署更新与数据
 
-更新到最新稳定 Release：
+更新 m-ui 程序属于容器部署生命周期，需要宿主机权限；更新 Mihomo 核心不需要，直接在
+Web 选择 Release/Alpha、检查、更新、回滚或开启自动更新。
+
+更新 m-ui 到最新稳定 Release：
 
 ```sh
 cd /opt/m-ui

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -117,8 +118,64 @@ func TestManagementCRUDUsesAuthenticationCSRFAndPublisher(t *testing.T) {
 	if unauthenticatedCore.Code != http.StatusUnauthorized {
 		t.Fatalf("unauthenticated core status = %d", unauthenticatedCore.Code)
 	}
+	unauthenticatedRestart := performJSONRequest(
+		t,
+		environment.handler,
+		http.MethodPost,
+		"/api/v1/system/restart",
+		nil,
+		nil,
+		"synthetic-csrf",
+	)
+	if unauthenticatedRestart.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated application restart = %d", unauthenticatedRestart.Code)
+	}
 
 	sessionCookie, csrfToken := managementLogin(t, environment.handler)
+	blockedApplicationRestart := performJSONRequest(
+		t,
+		environment.handler,
+		http.MethodPost,
+		"/api/v1/system/restart",
+		nil,
+		sessionCookie,
+		"",
+	)
+	if blockedApplicationRestart.Code != http.StatusForbidden {
+		t.Fatalf("application restart without CSRF = %d", blockedApplicationRestart.Code)
+	}
+	settingsUpdate := performJSONRequest(
+		t,
+		environment.handler,
+		http.MethodPut,
+		"/api/v1/settings",
+		settingsRequest{
+			PanelTitle:   "m-ui",
+			UILanguage:   "en-US",
+			PublicHost:   "vpn.example.com",
+			CookieSecure: true,
+		},
+		sessionCookie,
+		csrfToken,
+	)
+	if settingsUpdate.Code != http.StatusOK ||
+		!strings.Contains(settingsUpdate.Body.String(), `"cookie_secure":true`) ||
+		!strings.Contains(settingsUpdate.Body.String(), `"requires_mui_restart":true`) {
+		t.Fatalf("cookie security settings response = %d %q", settingsUpdate.Code, settingsUpdate.Body)
+	}
+	applicationRestart := performJSONRequest(
+		t,
+		environment.handler,
+		http.MethodPost,
+		"/api/v1/system/restart",
+		nil,
+		sessionCookie,
+		csrfToken,
+	)
+	if applicationRestart.Code != http.StatusAccepted ||
+		!environment.restartRequested.Load() {
+		t.Fatalf("application restart response = %d %q", applicationRestart.Code, applicationRestart.Body)
+	}
 	endpointGet := performJSONRequest(
 		t,
 		environment.handler,
@@ -530,9 +587,10 @@ func TestManagementCRUDUsesAuthenticationCSRFAndPublisher(t *testing.T) {
 }
 
 type managementTestEnvironment struct {
-	handler http.Handler
-	manager *service.Manager
-	cli     *managementCLI
+	handler          http.Handler
+	manager          *service.Manager
+	cli              *managementCLI
+	restartRequested *atomic.Bool
 }
 
 func newManagementTestEnvironment(t *testing.T) managementTestEnvironment {
@@ -641,14 +699,19 @@ func newManagementTestEnvironment(t *testing.T) managementTestEnvironment {
 		t.Fatal(err)
 	}
 	seedAdministrator(t, database, authService)
+	restartRequested := &atomic.Bool{}
 	return managementTestEnvironment{
 		handler: New(Options{
 			Logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
 			Auth:       authService,
 			Management: manager,
+			RequestRestart: func() {
+				restartRequested.Store(true)
+			},
 		}),
-		manager: manager,
-		cli:     cli,
+		manager:          manager,
+		cli:              cli,
+		restartRequested: restartRequested,
 	}
 }
 

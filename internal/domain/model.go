@@ -18,6 +18,7 @@ type DesiredState struct {
 	AsOf                          time.Time
 	PanelTitle                    string
 	UILanguage                    string
+	CookieSecure                  bool
 	PanelUIBind                   Endpoint
 	MihomoExternalControllerBind  Endpoint
 	MihomoControllerConnect       Endpoint

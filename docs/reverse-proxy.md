@@ -2,29 +2,17 @@
 
 m-ui listens on `0.0.0.0:2095` by default so a new installation is immediately
 reachable at `http://SERVER_IP:2095/`. This also exposes the full management API
-wherever that port is reachable. An SSH tunnel remains available after changing
-the panel bind to `127.0.0.1` in System settings:
-
-```sh
-ssh -L 2095:127.0.0.1:2095 user@server
-```
-
-Open `http://127.0.0.1:2095/` locally.
+wherever that port is reachable. For ongoing access, use a VPN or an HTTPS
+reverse proxy with independent access control. Routine panel use does not
+require an SSH tunnel.
 
 ## HTTPS prerequisites
 
-Before using a reverse proxy, set the panel UI bind endpoint to loopback in the
-System settings page, and edit `/etc/m-ui/config.toml` only for bootstrap
-defaults:
-
-```toml
-[security]
-cookie_secure = true
-```
-
-Then restart m-ui. Keep the active panel UI endpoint on `127.0.0.1:2095`. Do
-not bind the panel directly to a public interface just because a reverse proxy
-is present.
+Before using a reverse proxy, set the panel UI bind endpoint to loopback and
+enable HTTPS-only login cookies in the Web System settings page. Save, then
+click “Restart m-ui and apply” on the same page. Keep the active panel UI
+endpoint on `127.0.0.1:2095`. Do not bind the panel directly to a public
+interface just because a reverse proxy is present.
 
 ## Caddy
 

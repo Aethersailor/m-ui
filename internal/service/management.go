@@ -56,9 +56,10 @@ type OnboardingResult struct {
 }
 
 type EditableSettings struct {
-	PanelTitle string
-	UILanguage string
-	PublicHost string
+	PanelTitle   string
+	UILanguage   string
+	PublicHost   string
+	CookieSecure bool
 }
 
 type EndpointSettings = store.EndpointSettings
@@ -628,9 +629,10 @@ func (manager *Manager) EditableSettings(
 		return EditableSettings{}, err
 	}
 	return EditableSettings{
-		PanelTitle: settings.PanelTitle,
-		UILanguage: settings.UILanguage,
-		PublicHost: settings.PublicHost,
+		PanelTitle:   settings.PanelTitle,
+		UILanguage:   settings.UILanguage,
+		PublicHost:   settings.PublicHost,
+		CookieSecure: settings.CookieSecure,
 	}, nil
 }
 
@@ -672,6 +674,7 @@ func (manager *Manager) UpdateSettings(
 			state.PanelTitle = settings.PanelTitle
 			state.UILanguage = settings.UILanguage
 			state.PublicHost = settings.PublicHost
+			state.CookieSecure = settings.CookieSecure
 			return nil
 		},
 	)

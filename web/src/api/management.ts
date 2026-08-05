@@ -95,7 +95,11 @@ export interface Settings {
   panel_title: string
   ui_language: 'auto' | 'en-US' | 'zh-CN'
   public_host: string
+  cookie_secure: boolean
+  requires_mui_restart: boolean
 }
+
+export type SettingsInput = Omit<Settings, 'requires_mui_restart'>
 
 export interface EndpointValue {
   host: string
@@ -455,7 +459,7 @@ export function getSettings(): Promise<Settings> {
 
 export async function updateSettings(
   csrfToken: string,
-  input: Settings,
+  input: SettingsInput,
 ): Promise<Settings> {
   return (
     await mutation<{ settings: Settings }>(
@@ -465,6 +469,12 @@ export async function updateSettings(
       input,
     )
   ).settings
+}
+
+export function restartApplication(
+  csrfToken: string,
+): Promise<{ restarting: boolean }> {
+  return mutation('/api/v1/system/restart', csrfToken)
 }
 
 export function getEndpointSettings(): Promise<EndpointSettingsState> {

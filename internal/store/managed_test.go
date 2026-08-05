@@ -218,6 +218,7 @@ func TestInitialSettingsEncryptStableControllerBootstrapSecret(t *testing.T) {
 		PanelTitle:         "m-ui",
 		UILanguage:         "en-US",
 		PublicHost:         "vpn.example.com",
+		CookieSecure:       true,
 		PanelListenAddress: "127.0.0.1",
 		PanelListenPort:    2095,
 		TrustedProxyCIDRs:  []string{"192.0.2.0/24"},
@@ -238,6 +239,7 @@ func TestInitialSettingsEncryptStableControllerBootstrapSecret(t *testing.T) {
 	}
 	if first.ControllerSecret != initial.BootstrapSecret ||
 		first.PanelTitle != "m-ui" ||
+		!first.CookieSecure ||
 		first.MihomoConfigPath != "/etc/mihomo/config.yaml" {
 		t.Fatalf("initial settings = %#v", first)
 	}
@@ -256,6 +258,7 @@ func TestInitialSettingsEncryptStableControllerBootstrapSecret(t *testing.T) {
 
 	updated := initial
 	updated.PanelTitle = "local-file-title-must-not-overwrite-managed"
+	updated.CookieSecure = false
 	updated.MihomoConfigPath = "/etc/mihomo/next.yaml"
 	if err := managed.EnsureInitialSettings(
 		ctx,
@@ -273,6 +276,9 @@ func TestInitialSettingsEncryptStableControllerBootstrapSecret(t *testing.T) {
 	}
 	if second.PanelTitle != initial.PanelTitle {
 		t.Fatal("managed display setting was overwritten by local configuration")
+	}
+	if !second.CookieSecure {
+		t.Fatal("managed cookie security setting was overwritten by local configuration")
 	}
 	if second.MihomoConfigPath != updated.MihomoConfigPath {
 		t.Fatal("advanced local setting was not reconciled")
@@ -434,17 +440,17 @@ func TestEnsureInitialSettingsMigratesLegacyWildcardControllerAddress(t *testing
 				t.Fatal(err)
 			}
 			if err := managed.EnsureInitialSettings(ctx, InitialSettings{
-				PanelTitle:                       "m-ui",
-				UILanguage:                       "en-US",
-				PublicHost:                       "node.example.com",
-				PanelListenAddress:               "127.0.0.1",
-				PanelListenPort:                  2095,
-				MihomoBinaryPath:                 "/usr/local/bin/mihomo",
-				MihomoConfigDir:                  "/etc/mihomo",
-				MihomoConfigPath:                 "/etc/mihomo/config.yaml",
-				ControllerAddress:                "127.0.0.1:9090",
-				MihomoServiceName:                "mihomo.service",
-				HistoryLimit:                     20,
+				PanelTitle:         "m-ui",
+				UILanguage:         "en-US",
+				PublicHost:         "node.example.com",
+				PanelListenAddress: "127.0.0.1",
+				PanelListenPort:    2095,
+				MihomoBinaryPath:   "/usr/local/bin/mihomo",
+				MihomoConfigDir:    "/etc/mihomo",
+				MihomoConfigPath:   "/etc/mihomo/config.yaml",
+				ControllerAddress:  "127.0.0.1:9090",
+				MihomoServiceName:  "mihomo.service",
+				HistoryLimit:       20,
 			}, now); err != nil {
 				t.Fatal(err)
 			}

@@ -6,8 +6,10 @@ command="/usr/bin/m-ui"
 command_args="server --config /etc/m-ui/config.toml"
 command_user="m-ui:m-ui"
 directory="/var/lib/m-ui"
+supervisor="supervise-daemon"
 pidfile="/run/m-ui.pid"
-command_background="yes"
+respawn_delay=3
+respawn_max=0
 output_log="/var/log/m-ui.log"
 error_log="/var/log/m-ui.log"
 
