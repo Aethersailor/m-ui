@@ -339,6 +339,9 @@ func Run(ctx context.Context, cfg config.Config, build version.Info) error {
 		return fmt.Errorf("initialize core update scheduler: %w", err)
 	}
 	coreManager.SetWake(coreScheduler.Wake)
+	if err := coreManager.ScheduleStartupCheck(ctx); err != nil {
+		return fmt.Errorf("schedule persisted Mihomo core update preference: %w", err)
+	}
 	if cfg.Mihomo.ProcessMode == "managed" {
 		if err := startBackgroundServicesWithSafetyGate(
 			ctx,

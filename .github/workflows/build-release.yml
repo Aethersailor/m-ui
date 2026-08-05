@@ -484,7 +484,8 @@ jobs:
 
       - name: Add lifecycle scripts and latest Compose definition
         run: |
-          cp scripts/manage.sh scripts/install.sh scripts/uninstall.sh dist/
+          cp scripts/manage.sh scripts/install.sh scripts/install-docker.sh \
+            scripts/uninstall.sh dist/
           cp deploy/docker/compose.yml dist/compose.yml
           grep -q '^    image: ghcr.io/aethersailor/m-ui:latest$' \
             dist/compose.yml
@@ -499,14 +500,16 @@ jobs:
             find . -maxdepth 1 -type f \
               \( -name '*.tar.gz' -o -name '*.deb' -o -name '*.apk' \
                  -o -name '*.sbom.spdx.json' -o -name 'manage.sh' \
-                 -o -name 'install.sh' -o -name 'uninstall.sh' \
+                 -o -name 'install.sh' -o -name 'install-docker.sh' \
+                 -o -name 'uninstall.sh' \
                  -o -name 'compose.yml' \
                  -o -name 'MIHOMO_BOOTSTRAP_IDENTITY.json' \) \
               -printf '%f\t%s\n' | sort >ARTIFACT_SIZES.txt
             find . -maxdepth 1 -type f \
               \( -name '*.tar.gz' -o -name '*.deb' -o -name '*.apk' \
                  -o -name '*.sbom.spdx.json' -o -name 'manage.sh' \
-                 -o -name 'install.sh' -o -name 'uninstall.sh' \
+                 -o -name 'install.sh' -o -name 'install-docker.sh' \
+                 -o -name 'uninstall.sh' \
                  -o -name 'compose.yml' \
                  -o -name 'MIHOMO_BOOTSTRAP_IDENTITY.json' \
                  -o -name 'ARTIFACT_SIZES.txt' \) \
@@ -524,6 +527,7 @@ jobs:
           test -s dist/SHA256SUMS
           test -s dist/ARTIFACT_SIZES.txt
           test -s dist/compose.yml
+          test -s dist/install-docker.sh
           test "$(find dist -maxdepth 1 -name '*.sbom.spdx.json' | wc -l)" -ge 6
           (
             cd dist
@@ -562,6 +566,7 @@ jobs:
             dist/*.sbom.spdx.json
             dist/manage.sh
             dist/install.sh
+            dist/install-docker.sh
             dist/uninstall.sh
             dist/compose.yml
             dist/MIHOMO_BOOTSTRAP_IDENTITY.json
@@ -930,6 +935,7 @@ jobs:
             release/*.sbom.spdx.json
             release/manage.sh
             release/install.sh
+            release/install-docker.sh
             release/uninstall.sh
             release/compose.yml
             release/IMAGE_MANIFEST.json

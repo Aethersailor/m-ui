@@ -21,8 +21,11 @@ if grep -Eq '\$\{|M_UI_|data-init' "$repository_root/deploy/docker/compose.yml";
   echo "default Compose contains a variable or legacy initializer" >&2
   exit 1
 fi
-grep -q 'raw.githubusercontent.com/Aethersailor/m-ui/master/deploy/docker/compose.yml' \
+grep -q 'releases/latest/download/install-docker.sh' \
   "$repository_root/README.md" "$repository_root/deploy/docker/README.md"
+sh -n "$repository_root/scripts/install-docker.sh"
+grep -q 'm-ui admin setup-link --base-url' \
+  "$repository_root/scripts/install-docker.sh"
 sh -n "$repository_root/deploy/docker/prepare-data-root.sh"
 
 make_archive() {

@@ -10,12 +10,14 @@ initializer. The default and every formal Release Compose file use
 With Docker Engine and Docker Compose v2 installed:
 
 ```sh
-sudo install -d -o root -g root -m 0755 /opt/m-ui
-sudo install -d -o 10001 -g 10001 -m 0700 /opt/m-ui/data
-cd /opt/m-ui
-sudo curl -fsSLo compose.yml https://raw.githubusercontent.com/Aethersailor/m-ui/master/deploy/docker/compose.yml
-sudo docker compose up -d
+curl -fsSL https://github.com/Aethersailor/m-ui/releases/latest/download/install-docker.sh | sudo sh
 ```
+
+The installer verifies the Release checksum, prepares the non-root data
+directory, starts the canonical Compose service, waits for health, and prints a
+one-time setup link using the detected server address. Pass
+`--base-url https://m-ui.example.com` when a public HTTPS name is already in
+use.
 
 Alpine users may replace `sudo` with `doas`. The data directory must be a real,
 dedicated directory owned by `10001:10001`; startup fails closed instead of
@@ -41,15 +43,16 @@ symbolic links or special files.
 ## First administrator and settings
 
 The panel initially listens on every host IPv4 interface at `0.0.0.0:2095`.
-Open `http://SERVER_IP:2095/`, then print the durable one-time setup link:
+The installer prints the durable one-time setup link. To print it again:
 
 ```sh
-sudo docker compose -f /opt/m-ui/compose.yml exec m-ui m-ui admin setup-link
+sudo docker compose -f /opt/m-ui/compose.yml exec m-ui \
+  m-ui admin setup-link --base-url http://SERVER_IP:2095
 ```
 
-If the command prints a loopback URL, preserve its `/setup#token=...` path and
-replace only the host with the server address. Create the administrator in the
-Web page. Panel bind,
+Create the administrator directly in the Web page; no SSH tunnel is required.
+The one-time capability remains the only setup authorization and is carried in
+the URL fragment, so it is not sent in HTTP requests or access logs. Panel bind,
 Public Host, Mihomo Controller endpoints and CORS, core channel, automatic
 updates, and the check interval are managed from the Web system settings. Safe
 first-start defaults keep the Mihomo Controller loopback-only; the panel is

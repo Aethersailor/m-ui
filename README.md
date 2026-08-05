@@ -121,22 +121,10 @@ Referer。`m-ui admin reset-password` 仅用于
 http://SERVER_IP:2095/
 ```
 
-如果安装器输出的 setup link 使用 `127.0.0.1`，保留其完整
-`/setup#token=...` 路径并把主机名替换为服务器地址即可。也可以选择通过
-SSH 隧道访问：
-
-```sh
-ssh -L 2095:127.0.0.1:2095 user@server
-```
-
-然后在本地浏览器打开：
-
-```text
-http://127.0.0.1:2095/
-```
-
-请打开安装器输出的 `/setup#token=...` 链接，在页面中
-创建管理员。首次设置完成后，页面会自动进入面板。
+请直接打开安装器输出的 `/setup#token=...` 链接，在页面中创建管理员。
+一次性 token 仍是唯一授权条件，但首次设置不再强制用户建立 SSH 隧道；
+链接只能使用一次，且 token 位于 URL fragment 中，不会发送到服务器日志。
+首次设置完成后，页面会自动进入节点创建向导。
 
 使用刚刚在首次设置页面中创建的管理员账号登录。
 
@@ -218,14 +206,18 @@ ghcr.io/aethersailor/m-ui
 
 #### 快速部署
 
-确认 Docker Engine 与 Docker Compose v2 已安装后：
+确认 Docker Engine 与 Docker Compose v2 已安装后，一条命令即可完成目录、
+Compose、镜像、健康检查和首次设置链接的准备：
 
 ```sh
-sudo install -d -o root -g root -m 0755 /opt/m-ui
-sudo install -d -o 10001 -g 10001 -m 0700 /opt/m-ui/data
-cd /opt/m-ui
-sudo curl -fsSLo compose.yml https://raw.githubusercontent.com/Aethersailor/m-ui/master/deploy/docker/compose.yml
-sudo docker compose up -d
+curl -fsSL https://github.com/Aethersailor/m-ui/releases/latest/download/install-docker.sh | sudo sh
+```
+
+需要让安装器输出域名形式的链接时：
+
+```sh
+curl -fsSL https://github.com/Aethersailor/m-ui/releases/latest/download/install-docker.sh | \
+  sudo sh -s -- --base-url https://m-ui.example.com
 ```
 
 默认 Compose 只有一个服务和一个 `/opt/m-ui/data:/data` 映射。长期运行的

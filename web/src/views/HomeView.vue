@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { NAlert, NCard, NSpin, NTag, NText } from 'naive-ui'
+import { NAlert, NButton, NCard, NSpin, NTag, NText } from 'naive-ui'
 import { computed, onBeforeUnmount, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { useRouter } from 'vue-router'
 
 import AppShell from '@/components/AppShell.vue'
 import PageHeader from '@/components/PageHeader.vue'
@@ -9,6 +10,7 @@ import { useManagementStore } from '@/stores/management'
 import { formatBytes, formatDateTime } from '@/utils/format'
 
 const management = useManagementStore()
+const router = useRouter()
 const { locale, t, te } = useI18n()
 let refreshTimer = 0
 
@@ -56,6 +58,20 @@ onBeforeUnmount(() => {
         :title="errorMessage"
         class="section-gap"
       />
+
+      <NCard
+        v-if="!management.loading && !management.listeners.length"
+        :bordered="false"
+        class="surface-card section-gap"
+      >
+        <NText tag="h2" class="section-title">{{ t('onboarding.title') }}</NText>
+        <NText depth="3">{{ t('onboarding.description') }}</NText>
+        <div class="section-gap">
+          <NButton type="primary" @click="router.push({ name: 'onboarding' })">
+            {{ t('onboarding.create') }}
+          </NButton>
+        </div>
+      </NCard>
 
       <NSpin :show="management.loading && !runtime">
         <section class="status-strip">

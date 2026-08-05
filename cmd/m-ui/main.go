@@ -26,7 +26,7 @@ Usage:
   m-ui status
   m-ui update|reinstall|uninstall|purge [options]
   m-ui doctor [panel|database] [--config /etc/m-ui/config.toml]
-  m-ui admin setup-link [--config /etc/m-ui/config.toml]
+  m-ui admin setup-link [--rotate] [--base-url URL] [--config /etc/m-ui/config.toml]
   m-ui admin rotate-setup-token [--config /etc/m-ui/config.toml]
   m-ui admin reset-password --password-file <path> [--username admin]
   m-ui config validate [--config /etc/m-ui/config.toml]
@@ -386,6 +386,8 @@ func runAdmin(args []string) error {
 		"",
 		"path to a file containing the new password",
 	)
+	rotateSetupToken := flags.Bool("rotate", false, "rotate the unused setup token")
+	baseURL := flags.String("base-url", "", "public HTTP or HTTPS base URL for the setup link")
 	if err := flags.Parse(args[1:]); err != nil {
 		return err
 	}
@@ -401,25 +403,33 @@ func runAdmin(args []string) error {
 	switch command {
 	case "setup-link":
 		if *passwordFile != "" || *username != "admin" {
-			return errors.New("setup-link accepts only --config")
+			return errors.New("setup-link accepts only --config, --rotate, and --base-url")
 		}
-		link, err := app.SetupLink(ctx, cfg)
+		var link string
+		if *rotateSetupToken {
+			link, err = app.RotateSetupLinkForBaseURL(ctx, cfg, *baseURL)
+		} else {
+			link, err = app.SetupLinkForBaseURL(ctx, cfg, *baseURL)
+		}
 		if err != nil {
 			return err
 		}
 		fmt.Println(link)
 		return nil
 	case "rotate-setup-token":
-		if *passwordFile != "" || *username != "admin" {
-			return errors.New("rotate-setup-token accepts only --config")
+		if *passwordFile != "" || *username != "admin" || *rotateSetupToken {
+			return errors.New("rotate-setup-token accepts only --config and --base-url")
 		}
-		link, err := app.RotateSetupLink(ctx, cfg)
+		link, err := app.RotateSetupLinkForBaseURL(ctx, cfg, *baseURL)
 		if err != nil {
 			return err
 		}
 		fmt.Println(link)
 		return nil
 	case "reset-password":
+		if *rotateSetupToken || *baseURL != "" {
+			return errors.New("reset-password does not accept --rotate or --base-url")
+		}
 		if *passwordFile == "" {
 			return errors.New("--password-file is required")
 		}

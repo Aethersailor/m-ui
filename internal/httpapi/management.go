@@ -91,6 +91,28 @@ type userMutationResponse struct {
 	Revision revisionResponse `json:"revision"`
 }
 
+type onboardingRequest struct {
+	PublicHost string `json:"public_host"`
+	Listener   struct {
+		Name        string `json:"name"`
+		ListenPort  uint16 `json:"listen_port"`
+		ServerName  string `json:"server_name"`
+		RealityDest string `json:"reality_dest"`
+		UDPEnabled  bool   `json:"udp_enabled"`
+	} `json:"listener"`
+	User struct {
+		Name      string     `json:"name"`
+		ExpiresAt *time.Time `json:"expires_at"`
+	} `json:"user"`
+}
+
+type onboardingResponse struct {
+	Listener listenerResponse `json:"listener"`
+	User     userResponse     `json:"user"`
+	Revision revisionResponse `json:"revision"`
+	Share    shareResponse    `json:"share"`
+}
+
 type generatedKeypairResponse struct {
 	PrivateKey string `json:"private_key"`
 	PublicKey  string `json:"public_key"`
@@ -268,6 +290,7 @@ func mountManagementRoutes(
 		protected.Group(func(mutations chi.Router) {
 			mutations.Use(auth.requireCSRF)
 
+			mutations.Post("/onboarding", handler.completeOnboarding)
 			mutations.Post("/listeners", handler.createListener)
 			mutations.Put("/listeners/{listenerID}", handler.updateListener)
 			mutations.Delete("/listeners/{listenerID}", handler.deleteListener)
@@ -332,6 +355,50 @@ func mountManagementRoutes(
 			mutations.Post("/system/core/update", handler.updateCore)
 			mutations.Post("/system/core/rollback", handler.rollbackCore)
 		})
+	})
+}
+
+func (handler managementHandler) completeOnboarding(
+	response http.ResponseWriter,
+	request *http.Request,
+) {
+	var input onboardingRequest
+	if decodeJSON(response, request, &input) != nil {
+		writeInvalidRequest(response, request)
+		return
+	}
+	result, err := handler.manager.CompleteOnboarding(
+		request.Context(),
+		currentAuthSession(request.Context()).Admin.ID,
+		service.OnboardingSpec{
+			PublicHost: input.PublicHost,
+			Listener: service.ListenerSpec{
+				Name:          input.Listener.Name,
+				ListenAddress: "0.0.0.0",
+				ListenPort:    input.Listener.ListenPort,
+				ServerName:    input.Listener.ServerName,
+				RealityDest:   input.Listener.RealityDest,
+				UDPEnabled:    input.Listener.UDPEnabled,
+			},
+			User: service.UserSpec{
+				Name:      input.User.Name,
+				ExpiresAt: input.User.ExpiresAt,
+			},
+		},
+	)
+	if err != nil {
+		handler.writeError(response, request, err)
+		return
+	}
+	writePrivateJSON(response, http.StatusCreated, onboardingResponse{
+		Listener: newListenerResponse(result.Listener),
+		User:     newUserResponse(result.User),
+		Revision: newRevisionResponse(result.Revision),
+		Share: shareResponse{
+			URI:        result.Share.URI,
+			QRContent:  result.Share.QRContent,
+			ClientYAML: result.Share.ClientYAML,
+		},
 	})
 }
 

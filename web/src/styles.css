@@ -468,6 +468,14 @@ code,
   white-space: pre;
 }
 
+.setup-command {
+  max-height: none;
+  margin: 8px 0;
+  padding: 12px;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
 .config-preview {
   min-height: 260px;
 }

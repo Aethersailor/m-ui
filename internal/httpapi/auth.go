@@ -161,7 +161,7 @@ func (h authHandler) completeSetup(
 			request,
 			http.StatusForbidden,
 			"SETUP_TRANSPORT_NOT_ALLOWED",
-			"First administrator setup is allowed only through the local loopback panel or an SSH tunnel.",
+			"First administrator setup requires a same-origin browser request.",
 		)
 		return
 	}
@@ -275,41 +275,23 @@ func (h authHandler) completeSetup(
 }
 
 func setupTransportAllowed(request *http.Request) bool {
-	peer := net.ParseIP(remoteIP(request.RemoteAddr))
-	if peer == nil || !peer.IsLoopback() {
-		return false
-	}
-	if request.Header.Get("Forwarded") != "" ||
-		request.Header.Get("X-Forwarded-For") != "" ||
-		request.Header.Get("X-Forwarded-Host") != "" ||
-		request.Header.Get("X-Forwarded-Proto") != "" {
-		return false
-	}
-	scheme := "http"
-	if request.TLS != nil {
-		scheme = "https"
-	}
-	hostName, hostPort, ok := setupHost(request.Host, scheme)
-	if !ok {
-		return false
-	}
-	if !isLoopbackSetupHost(hostName) {
-		return false
-	}
 	origins := request.Header.Values("Origin")
 	if len(origins) != 1 || origins[0] == "" {
 		return false
 	}
 	origin, err := url.Parse(origins[0])
-	if err != nil || origin.Scheme == "" || origin.Host == "" ||
-		!strings.EqualFold(origin.Scheme, scheme) || origin.User != nil ||
+	if err != nil || (origin.Scheme != "http" && origin.Scheme != "https") ||
+		origin.Host == "" || origin.User != nil ||
 		origin.Opaque != "" || origin.Path != "" || origin.RawQuery != "" ||
 		origin.Fragment != "" {
 		return false
 	}
-	originHost, originPort, ok := setupHost(origin.Host, scheme)
-	if !ok || !isLoopbackSetupHost(originHost) ||
-		!strings.EqualFold(originHost, hostName) || originPort != hostPort {
+	originHost, originPort, ok := setupHost(origin.Host, origin.Scheme)
+	if !ok {
+		return false
+	}
+	requestHost, requestPort, ok := setupHost(request.Host, origin.Scheme)
+	if !ok || !strings.EqualFold(originHost, requestHost) || originPort != requestPort {
 		return false
 	}
 	if fetchSite := request.Header.Get("Sec-Fetch-Site"); fetchSite != "" &&
@@ -361,14 +343,6 @@ func setupHost(value string, scheme string) (string, string, bool) {
 		return "", "", false
 	}
 	return hostname, strconv.Itoa(portNumber), true
-}
-
-func isLoopbackSetupHost(hostname string) bool {
-	if strings.EqualFold(hostname, "localhost") {
-		return true
-	}
-	ip := net.ParseIP(hostname)
-	return ip != nil && ip.IsLoopback()
 }
 
 func isJSONContentType(value string) bool {

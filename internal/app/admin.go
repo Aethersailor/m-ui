@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/url"
@@ -51,6 +52,14 @@ func ResetAdminPassword(
 }
 
 func SetupLink(ctx context.Context, cfg config.Config) (string, error) {
+	return SetupLinkForBaseURL(ctx, cfg, "")
+}
+
+func SetupLinkForBaseURL(
+	ctx context.Context,
+	cfg config.Config,
+	baseURL string,
+) (string, error) {
 	database, sealer, err := openBootstrapPlane(ctx, cfg)
 	if err != nil {
 		return "", err
@@ -67,10 +76,18 @@ func SetupLink(ctx context.Context, cfg config.Config) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return setupURL(cfg, token), nil
+	return setupURL(cfg, token, baseURL)
 }
 
 func RotateSetupLink(ctx context.Context, cfg config.Config) (string, error) {
+	return RotateSetupLinkForBaseURL(ctx, cfg, "")
+}
+
+func RotateSetupLinkForBaseURL(
+	ctx context.Context,
+	cfg config.Config,
+	baseURL string,
+) (string, error) {
 	database, sealer, err := openBootstrapPlane(ctx, cfg)
 	if err != nil {
 		return "", err
@@ -83,7 +100,7 @@ func RotateSetupLink(ctx context.Context, cfg config.Config) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("rotate administrator bootstrap token: %w", err)
 	}
-	return setupURL(cfg, token), nil
+	return setupURL(cfg, token, baseURL)
 }
 
 func openBootstrapPlane(
@@ -105,7 +122,19 @@ func openBootstrapPlane(
 	return database, sealer, nil
 }
 
-func setupURL(cfg config.Config, token string) string {
+func setupURL(cfg config.Config, token string, baseURL string) (string, error) {
+	if baseURL != "" {
+		parsed, err := url.Parse(baseURL)
+		if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") ||
+			parsed.Host == "" || parsed.User != nil || parsed.Opaque != "" ||
+			parsed.RawQuery != "" || parsed.Fragment != "" {
+			return "", errors.New("base URL must be an absolute HTTP or HTTPS URL")
+		}
+		parsed.Path = strings.TrimRight(parsed.Path, "/") + "/setup"
+		parsed.RawPath = ""
+		parsed.Fragment = "token=" + token
+		return parsed.String(), nil
+	}
 	host := cfg.Server.ListenAddress
 	if ip := net.ParseIP(host); ip == nil || !ip.IsLoopback() {
 		host = "127.0.0.1"
@@ -115,7 +144,7 @@ func setupURL(cfg config.Config, token string) string {
 		Host:     net.JoinHostPort(host, fmt.Sprint(cfg.Server.Port)),
 		Path:     "/setup",
 		Fragment: "token=" + token,
-	}).String()
+	}).String(), nil
 }
 
 func readPasswordFile(path string) (string, error) {

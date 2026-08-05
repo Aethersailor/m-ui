@@ -348,6 +348,10 @@ func (manager *Manager) UpdateSettings(
 	}
 	if !settings.AutoUpdate {
 		state.NextCheckAt = nil
+	} else if settings.Channel != current.Channel {
+		// A channel choice is a request for that channel's newest build. Do not
+		// inherit the previous channel's check deadline.
+		state.NextCheckAt = &now
 	} else {
 		anchor := now
 		if state.LastCheckAt != nil {
@@ -383,6 +387,31 @@ func (manager *Manager) UpdateSettings(
 		),
 		now,
 	)
+}
+
+// ScheduleStartupCheck makes a persisted automatic-update preference take
+// effect on every m-ui start. This is intentionally independent of the m-ui
+// binary version: upgrades, container recreation, and ordinary service
+// restarts all converge to the newest build in the user's selected channel.
+func (manager *Manager) ScheduleStartupCheck(ctx context.Context) error {
+	settings, err := manager.repository.CoreSettings(ctx)
+	if err != nil {
+		return err
+	}
+	if !settings.Managed || !settings.AutoUpdate {
+		return nil
+	}
+	state, err := manager.repository.CoreState(ctx)
+	if err != nil {
+		return err
+	}
+	now := manager.clock().UTC()
+	state.NextCheckAt = &now
+	if err := manager.repository.SaveCoreState(ctx, state); err != nil {
+		return err
+	}
+	manager.wakeScheduler()
+	return nil
 }
 
 func (manager *Manager) Check(

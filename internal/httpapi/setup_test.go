@@ -101,17 +101,18 @@ func TestSetupStatusDoesNotExposeCapability(t *testing.T) {
 	}
 }
 
-func TestSetupRejectsRemoteEvenWithCapability(t *testing.T) {
+func TestSetupAcceptsRemoteSameOriginWithCapability(t *testing.T) {
 	environment := newSetupTestEnvironment(t)
 	response := performSetupRequest(
 		t,
 		environment.handler,
+		"http://192.0.2.20:2095/api/v1/setup/complete",
 		"192.0.2.10:40000",
 		environment.token,
-		"http://127.0.0.1:2095",
+		"http://192.0.2.20:2095",
 	)
-	if response.Code != http.StatusForbidden {
-		t.Fatalf("remote setup status = %d, want 403; body=%s", response.Code, response.Body)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("remote setup status = %d, want 201; body=%s", response.Code, response.Body)
 	}
 }
 
@@ -120,6 +121,7 @@ func TestSetupCreatesSessionAndRequiresOrigin(t *testing.T) {
 	missingOrigin := performSetupRequest(
 		t,
 		environment.handler,
+		"http://127.0.0.1:2095/api/v1/setup/complete",
 		"127.0.0.1:40000",
 		environment.token,
 		"",
@@ -127,10 +129,22 @@ func TestSetupCreatesSessionAndRequiresOrigin(t *testing.T) {
 	if missingOrigin.Code != http.StatusForbidden {
 		t.Fatalf("missing Origin status = %d, want 403", missingOrigin.Code)
 	}
+	crossOrigin := performSetupRequest(
+		t,
+		environment.handler,
+		"http://127.0.0.1:2095/api/v1/setup/complete",
+		"127.0.0.1:40000",
+		environment.token,
+		"http://evil.test:2095",
+	)
+	if crossOrigin.Code != http.StatusForbidden {
+		t.Fatalf("cross Origin status = %d, want 403", crossOrigin.Code)
+	}
 
 	response := performSetupRequest(
 		t,
 		environment.handler,
+		"http://127.0.0.1:2095/api/v1/setup/complete",
 		"127.0.0.1:40000",
 		environment.token,
 		"http://127.0.0.1:2095",
@@ -163,6 +177,7 @@ func TestSetupCreatesSessionAndRequiresOrigin(t *testing.T) {
 func performSetupRequest(
 	t *testing.T,
 	handler http.Handler,
+	targetURL string,
 	remoteAddress string,
 	token string,
 	origin string,
@@ -171,7 +186,7 @@ func performSetupRequest(
 	payload := bytes.NewBufferString(`{"username":"admin","password":"synthetic-setup-password"}`)
 	request := httptest.NewRequest(
 		http.MethodPost,
-		"http://127.0.0.1:2095/api/v1/setup/complete",
+		targetURL,
 		payload,
 	)
 	request.RemoteAddr = remoteAddress

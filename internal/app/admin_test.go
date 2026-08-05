@@ -45,4 +45,27 @@ func TestSetupLinkUsesOneTimeFragmentCapability(t *testing.T) {
 	if rotated == first {
 		t.Fatal("rotating setup token did not change the link")
 	}
+	public, err := SetupLinkForBaseURL(
+		context.Background(),
+		cfg,
+		"https://panel.example.com/base/",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	publicURL, err := url.Parse(public)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if publicURL.Scheme != "https" || publicURL.Host != "panel.example.com" ||
+		publicURL.Path != "/base/setup" || !strings.HasPrefix(publicURL.Fragment, "token=") {
+		t.Fatalf("public setup link = %q", public)
+	}
+	if _, err := SetupLinkForBaseURL(
+		context.Background(),
+		cfg,
+		"javascript:alert(1)",
+	); err == nil {
+		t.Fatal("unsafe setup base URL was accepted")
+	}
 }

@@ -193,6 +193,28 @@ export interface Share {
   client_yaml: string
 }
 
+export interface OnboardingInput {
+  public_host: string
+  listener: {
+    name: string
+    listen_port: number
+    server_name: string
+    reality_dest: string
+    udp_enabled: boolean
+  }
+  user: {
+    name: string
+    expires_at: string | null
+  }
+}
+
+export interface OnboardingResult {
+  listener: Listener
+  user: User
+  revision: Revision
+  share: Share
+}
+
 export interface ConfigPreview {
   yaml: string
   sha256: string
@@ -227,6 +249,18 @@ function mutation<T>(
 export async function listListeners(): Promise<Listener[]> {
   return (await apiRequest<{ listeners: Listener[] }>('/api/v1/listeners'))
     .listeners
+}
+
+export function completeOnboarding(
+  csrfToken: string,
+  input: OnboardingInput,
+): Promise<OnboardingResult> {
+  return mutation<OnboardingResult>(
+    '/api/v1/onboarding',
+    csrfToken,
+    'POST',
+    input,
+  )
 }
 
 export function getListener(id: string): Promise<Listener> {

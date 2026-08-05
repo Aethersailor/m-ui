@@ -42,7 +42,6 @@ const buildVersion = computed(
 const menuOptions = computed<MenuOption[]>(() => [
   menuLink('dashboard', 'dashboard', t('nav.dashboard')),
   menuLink('listeners', 'listeners', t('nav.listeners')),
-  menuLink('config', 'config', t('nav.config')),
   menuLink('system', 'system', t('nav.system')),
 ])
 

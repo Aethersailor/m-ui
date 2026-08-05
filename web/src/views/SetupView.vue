@@ -15,7 +15,7 @@ import { useRouter } from 'vue-router'
 import { completeSetup } from '@/api/setup'
 
 import AppearancePreferences from '@/components/AppearancePreferences.vue'
-import { getSetupToken } from '@/setup-token'
+import { acceptSetupTokenInput, getSetupToken } from '@/setup-token'
 import { useAuthStore } from '@/stores/auth'
 import { useSetupStore } from '@/stores/setup'
 
@@ -24,6 +24,7 @@ const router = useRouter()
 const auth = useAuthStore()
 const setup = useSetupStore()
 const token = ref('')
+const tokenInput = ref('')
 const username = ref('admin')
 const password = ref('')
 const confirmation = ref('')
@@ -33,9 +34,6 @@ const loading = ref(false)
 const errorMessage = computed(() => {
   if (formError.value === 'PASSWORD_MISMATCH') {
     return t('auth.passwordMismatch')
-  }
-  if (formError.value === 'MISSING_TOKEN') {
-    return t('setup.tokenMissing')
   }
   if (formError.value === 'SETUP_ALREADY_COMPLETED') {
     return t('setup.completed')
@@ -63,10 +61,17 @@ const canSubmit = computed(
 
 onMounted(() => {
   token.value = getSetupToken()
-  if (!token.value) {
-    formError.value = 'MISSING_TOKEN'
-  }
 })
+
+function acceptToken() {
+  formError.value = ''
+  if (!acceptSetupTokenInput(tokenInput.value)) {
+    formError.value = 'SETUP_AUTHORIZATION_FAILED'
+    return
+  }
+  token.value = getSetupToken()
+  tokenInput.value = ''
+}
 
 async function submit() {
   formError.value = ''
@@ -84,7 +89,7 @@ async function submit() {
     auth.acceptCredentials(response)
     password.value = ''
     confirmation.value = ''
-    await router.replace({ name: 'dashboard' })
+    await router.replace({ name: 'onboarding' })
   } catch (error) {
     const code = error instanceof Error && 'code' in error
       ? String((error as { code?: string }).code ?? '')
@@ -124,7 +129,39 @@ async function submit() {
           class="login-alert"
           role="alert"
         />
-        <NForm size="large" @submit.prevent="submit">
+        <template v-if="!token">
+          <NAlert
+            type="info"
+            :title="t('setup.tokenMissing')"
+            class="login-alert"
+            role="status"
+          />
+          <NText depth="3" class="setup-hint">
+            {{ t('setup.tokenCommandHint') }}
+          </NText>
+          <pre class="code-panel setup-command">m-ui admin setup-link --base-url http://SERVER_IP:2095</pre>
+          <pre class="code-panel setup-command">docker compose exec m-ui m-ui admin setup-link --base-url http://SERVER_IP:2095</pre>
+          <NForm size="large" @submit.prevent="acceptToken">
+            <NFormItem :label="t('setup.tokenInput')">
+              <NInput
+                v-model:value="tokenInput"
+                :placeholder="t('setup.tokenInputPlaceholder')"
+                autocomplete="off"
+                autofocus
+              />
+            </NFormItem>
+            <NButton
+              type="primary"
+              attr-type="submit"
+              block
+              size="large"
+              :disabled="!tokenInput.trim()"
+            >
+              {{ t('setup.continue') }}
+            </NButton>
+          </NForm>
+        </template>
+        <NForm v-else size="large" @submit.prevent="submit">
           <NFormItem :label="t('auth.username')">
             <NInput
               v-model:value="username"

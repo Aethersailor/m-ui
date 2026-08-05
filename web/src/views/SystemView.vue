@@ -659,6 +659,9 @@ async function submitPassword() {
                 class="settings-form section-gap"
                 @submit.prevent="saveCoreSettings"
               >
+                <NAlert type="info" :bordered="false" class="section-gap">
+                  {{ t('system.corePersistenceHint') }}
+                </NAlert>
                 <div class="form-grid">
                   <NFormItem :label="t('system.coreChannel')">
                     <NSelect
@@ -819,9 +822,14 @@ async function submitPassword() {
           <NTabPane name="audit" :tab="t('system.audit')">
             <div class="card-heading">
               <NText depth="3">{{ management.audit.length }}</NText>
-              <NButton size="small" @click="refreshAudit">
-                {{ t('common.refresh') }}
-              </NButton>
+              <NSpace>
+                <NButton size="small" @click="router.push({ name: 'config' })">
+                  {{ t('system.advancedConfig') }}
+                </NButton>
+                <NButton size="small" @click="refreshAudit">
+                  {{ t('common.refresh') }}
+                </NButton>
+              </NSpace>
             </div>
             <NEmpty
               v-if="!management.audit.length"

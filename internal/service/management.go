@@ -42,6 +42,19 @@ type UserSpec struct {
 	ExpiresAt *time.Time
 }
 
+type OnboardingSpec struct {
+	PublicHost string
+	Listener   ListenerSpec
+	User       UserSpec
+}
+
+type OnboardingResult struct {
+	Listener domain.Listener
+	User     domain.User
+	Revision domain.Revision
+	Share    Share
+}
+
 type EditableSettings struct {
 	PanelTitle string
 	UILanguage string
@@ -168,6 +181,82 @@ func (manager *Manager) Listener(
 		return domain.Listener{}, ErrNotFound
 	}
 	return state.Listeners[index], nil
+}
+
+func (manager *Manager) CompleteOnboarding(
+	ctx context.Context,
+	actorAdminID string,
+	spec OnboardingSpec,
+) (OnboardingResult, error) {
+	listenerID, err := domain.GenerateUUID()
+	if err != nil {
+		return OnboardingResult{}, err
+	}
+	userID, err := domain.GenerateUUID()
+	if err != nil {
+		return OnboardingResult{}, err
+	}
+	if spec.User.UUID == "" {
+		spec.User.UUID, err = domain.GenerateUUID()
+		if err != nil {
+			return OnboardingResult{}, err
+		}
+	}
+	keypair, err := manager.cli.GenerateRealityKeypair(ctx)
+	if err != nil {
+		return OnboardingResult{}, err
+	}
+	spec.Listener.RealityPrivateKey = keypair.PrivateKey
+	spec.Listener.RealityPublicKey = keypair.PublicKey
+	spec.Listener.ShortID, err = domain.GenerateShortID()
+	if err != nil {
+		return OnboardingResult{}, err
+	}
+
+	var result OnboardingResult
+	result.Revision, err = manager.mutate(
+		ctx,
+		actorAdminID,
+		"complete first-use onboarding",
+		"onboarding.complete",
+		"system",
+		"onboarding",
+		"Created and enabled the first listener and user.",
+		func(state *domain.DesiredState, now time.Time) error {
+			if len(state.Listeners) != 0 {
+				return fmt.Errorf("%w: onboarding is already complete", ErrConflict)
+			}
+			state.PublicHost = strings.TrimSpace(spec.PublicHost)
+			listener := listenerFromSpec(listenerID, spec.Listener)
+			listener.Enabled = true
+			listener.CreatedAt = now
+			listener.UpdatedAt = now
+			user := domain.User{
+				ID:         userID,
+				ListenerID: listenerID,
+				Name:       spec.User.Name,
+				Enabled:    true,
+				UUID:       spec.User.UUID,
+				ExpiresAt:  normalizeExpiry(spec.User.ExpiresAt),
+				CreatedAt:  now,
+				UpdatedAt:  now,
+			}
+			listener.Users = []domain.User{user}
+			state.Listeners = append(state.Listeners, listener)
+			share, shareErr := BuildShare(*state, listenerID, userID)
+			if shareErr != nil {
+				return fmt.Errorf("%w: %v", ErrValidation, shareErr)
+			}
+			result.Listener = listener
+			result.User = user
+			result.Share = share
+			return nil
+		},
+	)
+	if err != nil {
+		return OnboardingResult{}, err
+	}
+	return result, nil
 }
 
 func (manager *Manager) CreateListener(

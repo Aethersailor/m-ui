@@ -147,8 +147,8 @@ function confirmDelete(listener: Listener) {
           :description="t('listeners.empty')"
         >
           <template #extra>
-            <NButton type="primary" @click="openCreate">
-              {{ t('listeners.create') }}
+            <NButton type="primary" @click="router.push({ name: 'onboarding' })">
+              {{ t('onboarding.create') }}
             </NButton>
           </template>
         </NEmpty>

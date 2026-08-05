@@ -448,6 +448,30 @@ run_as_m_ui() {
     fi
 }
 
+setup_base_url() {
+    if [ -n "${M_UI_PUBLIC_URL:-}" ]; then
+        case "$M_UI_PUBLIC_URL" in
+            http://*|https://*) printf '%s\n' "$M_UI_PUBLIC_URL" ;;
+            *) fail "M_UI_PUBLIC_URL must be an absolute HTTP or HTTPS URL" ;;
+        esac
+        return
+    fi
+    if [ -n "$root" ]; then
+        printf '%s\n' "http://127.0.0.1:2095"
+        return
+    fi
+    address="$(ip -4 route get 1.1.1.1 2>/dev/null |
+        sed -n 's/.* src \([^ ]*\).*/\1/p' | head -n 1 || true)"
+    if [ -z "$address" ]; then
+        address="$(hostname -I 2>/dev/null | awk '{print $1}' || true)"
+    fi
+    [ -n "$address" ] || address="127.0.0.1"
+    case "$address" in
+        *:*) printf 'http://[%s]:2095\n' "$address" ;;
+        *) printf 'http://%s:2095\n' "$address" ;;
+    esac
+}
+
 run_as_mihomo() {
     if [ -n "$root" ]; then
         "$@"
@@ -798,7 +822,9 @@ fi
 
 setup_message="Administrator setup is already complete or can be recovered with: m-ui admin setup-link"
 if [ "$database_was_present" -eq 0 ]; then
+    setup_url="$(setup_base_url)"
     setup_link="$(run_as_m_ui "$(target /usr/bin/m-ui)" admin setup-link \
+        --base-url "$setup_url" \
         --config "$(target /etc/m-ui/config.toml)" 2>/dev/null || true)"
     case "$setup_link" in
         http://*/setup\#token=*)

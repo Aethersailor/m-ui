@@ -21,6 +21,74 @@ import (
 	"github.com/Aethersailor/m-ui/internal/store"
 )
 
+func TestOnboardingCreatesReadyListenerUserAndShareOnce(t *testing.T) {
+	t.Parallel()
+	environment := newManagementTestEnvironment(t)
+	sessionCookie, csrfToken := managementLogin(t, environment.handler)
+	payload := onboardingRequest{PublicHost: "node.example.com"}
+	payload.Listener.Name = "default"
+	payload.Listener.ListenPort = 443
+	payload.Listener.ServerName = "www.example.com"
+	payload.Listener.RealityDest = "www.example.com:443"
+	payload.Listener.UDPEnabled = true
+	payload.User.Name = "first-user"
+
+	withoutCSRF := performJSONRequest(
+		t,
+		environment.handler,
+		http.MethodPost,
+		"/api/v1/onboarding",
+		payload,
+		sessionCookie,
+		"",
+	)
+	if withoutCSRF.Code != http.StatusForbidden {
+		t.Fatalf("onboarding without CSRF = %d", withoutCSRF.Code)
+	}
+
+	created := performJSONRequest(
+		t,
+		environment.handler,
+		http.MethodPost,
+		"/api/v1/onboarding",
+		payload,
+		sessionCookie,
+		csrfToken,
+	)
+	if created.Code != http.StatusCreated {
+		t.Fatalf("onboarding status = %d; body=%s", created.Code, created.Body)
+	}
+	var body onboardingResponse
+	if err := json.NewDecoder(created.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if !body.Listener.Enabled || len(body.Listener.Users) != 1 ||
+		!body.User.Enabled || body.Share.URI == "" || body.Share.QRContent != body.Share.URI ||
+		!strings.Contains(body.Share.URI, "node.example.com:443") {
+		t.Fatalf("onboarding response = %#v", body)
+	}
+
+	repeated := performJSONRequest(
+		t,
+		environment.handler,
+		http.MethodPost,
+		"/api/v1/onboarding",
+		payload,
+		sessionCookie,
+		csrfToken,
+	)
+	if repeated.Code != http.StatusConflict {
+		t.Fatalf("repeated onboarding = %d; body=%s", repeated.Code, repeated.Body)
+	}
+	listeners, err := environment.manager.Listeners(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(listeners) != 1 || len(listeners[0].Users) != 1 {
+		t.Fatalf("onboarding left partial or duplicate state: %#v", listeners)
+	}
+}
+
 func TestManagementCRUDUsesAuthenticationCSRFAndPublisher(t *testing.T) {
 	t.Parallel()
 	environment := newManagementTestEnvironment(t)

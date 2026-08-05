@@ -59,6 +59,12 @@ export const router = createRouter({
       meta: { public: true },
     },
     {
+      path: '/onboarding',
+      name: 'onboarding',
+      component: () => import('@/views/OnboardingView.vue'),
+      meta: { section: 'listeners' },
+    },
+    {
       path: '/initialization-error',
       name: 'initialization-error',
       component: InitializationErrorView,

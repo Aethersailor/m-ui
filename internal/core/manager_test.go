@@ -382,6 +382,49 @@ func TestManagerSettingsUpdateSchedulesAndWakesCoreChecks(t *testing.T) {
 	}
 }
 
+func TestManagerSettingsChannelChangeChecksImmediately(t *testing.T) {
+	t.Parallel()
+	fixture := newManagerFixture(t)
+	now := time.Unix(2000, 0).UTC()
+	lastCheck := now.Add(-time.Hour)
+	fixture.manager.clock = func() time.Time { return now }
+	fixture.repository.state.LastCheckAt = &lastCheck
+	settings := fixture.repository.settings
+	settings.Channel = ChannelAlpha
+	settings.AutoUpdate = true
+	if err := fixture.manager.UpdateSettings(context.Background(), "admin", settings); err != nil {
+		t.Fatal(err)
+	}
+	if next := fixture.repository.state.NextCheckAt; next == nil || !next.Equal(now) {
+		t.Fatalf("next check = %v, want %v", next, now)
+	}
+}
+
+func TestManagerSchedulesPersistedAutoUpdateOnStartup(t *testing.T) {
+	t.Parallel()
+	fixture := newManagerFixture(t)
+	now := time.Unix(3000, 0).UTC()
+	fixture.manager.clock = func() time.Time { return now }
+	fixture.repository.settings.Channel = ChannelAlpha
+	fixture.repository.settings.AutoUpdate = true
+	previous := now.Add(24 * time.Hour)
+	fixture.repository.state.NextCheckAt = &previous
+
+	if err := fixture.manager.ScheduleStartupCheck(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if next := fixture.repository.state.NextCheckAt; next == nil || !next.Equal(now) {
+		t.Fatalf("next check = %v, want %v", next, now)
+	}
+	due, err := fixture.manager.Due(context.Background(), now)
+	if err != nil || !due {
+		t.Fatalf("Due() = %v, %v; want true, nil", due, err)
+	}
+	if fixture.repository.settings.Channel != ChannelAlpha {
+		t.Fatalf("channel = %q, want alpha", fixture.repository.settings.Channel)
+	}
+}
+
 type managerFixture struct {
 	root        string
 	files       *FileStore

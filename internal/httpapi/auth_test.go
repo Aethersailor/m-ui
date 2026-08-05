@@ -268,10 +268,10 @@ func TestSetupTransportRequiresOneStructuralSameOrigin(t *testing.T) {
 		wantAccept bool
 	}{
 		{
-			name:       "ipv4",
-			host:       "127.0.0.1:2095",
-			remote:     "127.0.0.1:40000",
-			origin:     []string{"http://127.0.0.1:2095"},
+			name:       "remote ipv4",
+			host:       "192.0.2.20:2095",
+			remote:     "192.0.2.10:40000",
+			origin:     []string{"http://192.0.2.20:2095"},
 			wantAccept: true,
 		},
 		{
@@ -282,10 +282,18 @@ func TestSetupTransportRequiresOneStructuralSameOrigin(t *testing.T) {
 			wantAccept: true,
 		},
 		{
-			name:       "ipv6",
-			host:       "[::1]:2095",
-			remote:     "[::1]:40000",
-			origin:     []string{"http://[::1]:2095"},
+			name:       "remote ipv6",
+			host:       "[2001:db8::20]:2095",
+			remote:     "[2001:db8::10]:40000",
+			origin:     []string{"http://[2001:db8::20]:2095"},
+			wantAccept: true,
+		},
+		{
+			name:       "https reverse proxy",
+			host:       "panel.example.com",
+			remote:     "127.0.0.1:40000",
+			origin:     []string{"https://panel.example.com"},
+			forwarded:  "for=192.0.2.10;proto=https;host=panel.example.com",
 			wantAccept: true,
 		},
 		{
@@ -313,17 +321,10 @@ func TestSetupTransportRequiresOneStructuralSameOrigin(t *testing.T) {
 			origin: []string{"http://127.0.0.1:2095", "http://evil.test"},
 		},
 		{
-			name:      "forwarded",
-			host:      "127.0.0.1:2095",
-			remote:    "127.0.0.1:40000",
-			origin:    []string{"http://127.0.0.1:2095"},
-			forwarded: "for=127.0.0.1",
-		},
-		{
-			name:   "non loopback peer",
-			host:   "127.0.0.1:2095",
+			name:   "cross origin",
+			host:   "192.0.2.20:2095",
 			remote: "192.0.2.10:40000",
-			origin: []string{"http://127.0.0.1:2095"},
+			origin: []string{"http://evil.test:2095"},
 		},
 	}
 	for _, test := range tests {
