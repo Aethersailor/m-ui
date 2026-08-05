@@ -112,6 +112,14 @@ type Manager struct {
 	clock       func() time.Time
 }
 
+// ReserveApplicationRestart prevents a Web-requested m-ui restart from
+// interrupting a configuration publication, Mihomo lifecycle action, or core
+// update. The caller intentionally keeps the returned lease until the process
+// exits; the cross-process lock is then released by the operating system.
+func (manager *Manager) ReserveApplicationRestart() (func(), error) {
+	return manager.coordinator.TryAcquire()
+}
+
 func NewManager(options ManagerOptions) (*Manager, error) {
 	switch {
 	case options.Store == nil:

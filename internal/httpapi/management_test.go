@@ -176,6 +176,24 @@ func TestManagementCRUDUsesAuthenticationCSRFAndPublisher(t *testing.T) {
 		!environment.restartRequested.Load() {
 		t.Fatalf("application restart response = %d %q", applicationRestart.Code, applicationRestart.Body)
 	}
+	release, err := environment.manager.ReserveApplicationRestart()
+	if err != nil {
+		t.Fatal(err)
+	}
+	busyRestart := performJSONRequest(
+		t,
+		environment.handler,
+		http.MethodPost,
+		"/api/v1/system/restart",
+		nil,
+		sessionCookie,
+		csrfToken,
+	)
+	release()
+	if busyRestart.Code != http.StatusConflict ||
+		!strings.Contains(busyRestart.Body.String(), "CORE_OPERATION_IN_PROGRESS") {
+		t.Fatalf("busy application restart response = %d %q", busyRestart.Code, busyRestart.Body)
+	}
 	endpointGet := performJSONRequest(
 		t,
 		environment.handler,
@@ -705,8 +723,9 @@ func newManagementTestEnvironment(t *testing.T) managementTestEnvironment {
 			Logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
 			Auth:       authService,
 			Management: manager,
-			RequestRestart: func() {
+			RequestRestart: func(release func()) {
 				restartRequested.Store(true)
+				release()
 			},
 		}),
 		manager:          manager,

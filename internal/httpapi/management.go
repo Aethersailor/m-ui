@@ -22,7 +22,7 @@ const revealConfigConfirmation = "reveal-current-config"
 type managementHandler struct {
 	manager        *service.Manager
 	cookieSecure   bool
-	requestRestart func()
+	requestRestart func(func())
 }
 
 type listenerRequest struct {
@@ -1099,10 +1099,15 @@ func (handler managementHandler) restartApplication(
 		)
 		return
 	}
+	release, err := handler.manager.ReserveApplicationRestart()
+	if err != nil {
+		handler.writeError(response, request, err)
+		return
+	}
 	writePrivateJSON(response, http.StatusAccepted, applicationRestartResponse{
 		Restarting: true,
 	})
-	handler.requestRestart()
+	handler.requestRestart(release)
 }
 
 func (handler managementHandler) getEndpointSettings(

@@ -24,7 +24,7 @@ type Options struct {
 	Management      *service.Manager
 	LanguageDefault func(context.Context) (string, error)
 	CookieSecure    bool
-	RequestRestart  func()
+	RequestRestart  func(func())
 }
 
 type healthResponse struct {

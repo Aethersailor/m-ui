@@ -358,7 +358,7 @@ func Run(ctx context.Context, cfg config.Config, build version.Info) error {
 			return err
 		}
 	}
-	restartRequested := make(chan struct{}, 1)
+	restartRequested := make(chan func(), 1)
 	server := &http.Server{
 		Addr: domain.Endpoint{
 			Host: runtimeSettings.PanelListenAddress,
@@ -371,10 +371,11 @@ func Run(ctx context.Context, cfg config.Config, build version.Info) error {
 			Management:      manager,
 			LanguageDefault: manager.UILanguage,
 			CookieSecure:    runtimeSettings.CookieSecure,
-			RequestRestart: func() {
+			RequestRestart: func(release func()) {
 				select {
-				case restartRequested <- struct{}{}:
+				case restartRequested <- release:
 				default:
+					release()
 				}
 			},
 		}),
@@ -453,6 +454,7 @@ func Run(ctx context.Context, cfg config.Config, build version.Info) error {
 	}()
 
 	restarting := false
+	var restartRelease func()
 	select {
 	case serveErr := <-errCh:
 		if errors.Is(serveErr, http.ErrServerClosed) {
@@ -461,7 +463,7 @@ func Run(ctx context.Context, cfg config.Config, build version.Info) error {
 		return fmt.Errorf("serve HTTP: %w", serveErr)
 	case <-ctx.Done():
 		logger.Info("shutting down m-ui server")
-	case <-restartRequested:
+	case restartRelease = <-restartRequested:
 		restarting = true
 		logger.Info("restarting m-ui server by authenticated Web request")
 	}
@@ -469,6 +471,9 @@ func Run(ctx context.Context, cfg config.Config, build version.Info) error {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
 	if err := server.Shutdown(shutdownCtx); err != nil {
+		if restartRelease != nil {
+			restartRelease()
+		}
 		return fmt.Errorf("shut down HTTP server: %w", err)
 	}
 	if restarting {

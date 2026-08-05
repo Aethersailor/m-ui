@@ -49,6 +49,32 @@ func TestManagerUpdatesNoOpsAndReadsActualVersion(t *testing.T) {
 	}
 }
 
+func TestManagerAcceptsMatchingRollingAlphaCLIAndControllerVersions(t *testing.T) {
+	t.Parallel()
+	fixture := newManagerFixture(t)
+	fixture.adopt(t, "old-runtime-version")
+	fixture.setUpstream(
+		t,
+		"Mihomo Meta alpha-944e8e1 linux amd64 with go1.26.5",
+	)
+	fixture.manager.controller = fakeCoreController{version: "alpha-944e8e1"}
+
+	manifest, changed, err := fixture.manager.Update(context.Background(), "admin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !changed || !strings.Contains(manifest.BinaryReportedVersion, "alpha-944e8e1") {
+		t.Fatalf("alpha Update() = %#v, %v", manifest, changed)
+	}
+	status, err := fixture.manager.Status(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !status.RuntimeVersionMatches || status.ControllerVersion != "alpha-944e8e1" {
+		t.Fatalf("alpha Status() = %#v", status)
+	}
+}
+
 func TestManagerRejectsDamagedCandidateBeforeActivation(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -707,10 +733,14 @@ func (*fakeCoreProcess) RecentLogs(context.Context, int) ([]mihomo.LogEntry, err
 }
 
 type fakeCoreController struct {
-	path string
+	path    string
+	version string
 }
 
 func (controller fakeCoreController) Version(context.Context) (mihomo.Version, error) {
+	if controller.version != "" {
+		return mihomo.Version{Version: controller.version}, nil
+	}
 	if controller.path != "" {
 		content, err := os.ReadFile(controller.path)
 		if err != nil {

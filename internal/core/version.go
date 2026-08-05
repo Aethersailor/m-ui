@@ -5,7 +5,7 @@ import (
 	"strings"
 )
 
-var runtimeVersionPattern = regexp.MustCompile(`(?i)(?:^|[^0-9a-z])((?:v)?[0-9]+\.[0-9]+\.[0-9]+(?:[-+._][0-9a-z.-]+)?|prerelease-alpha)(?:$|[^0-9a-z])`)
+var runtimeVersionPattern = regexp.MustCompile(`(?i)(?:^|[^0-9a-z])((?:v)?[0-9]+\.[0-9]+\.[0-9]+(?:[-+._][0-9a-z.-]+)?|prerelease-alpha|alpha-[0-9a-f]{7,40})(?:$|[^0-9a-z])`)
 
 // normalizeRuntimeVersion reduces the different human-readable forms emitted
 // by Mihomo's CLI and Controller to the same identity token.  If an upstream

@@ -10,6 +10,12 @@ func TestRuntimeVersionsMatchNormalizesCLIAndControllerOutput(t *testing.T) {
 	}{
 		{left: "Mihomo Meta v1.19.29", right: "1.19.29", want: true},
 		{left: "v1.19.29", right: "mihomo 1.19.29", want: true},
+		{
+			left:  "Mihomo Meta alpha-944e8e1 linux amd64 with go1.26.5",
+			right: "alpha-944e8e1",
+			want:  true,
+		},
+		{left: "alpha-944e8e1", right: "alpha-deadbee", want: false},
 		{left: "1.19.29-alpha", right: "1.19.29", want: false},
 		{left: "", right: "1.19.29", want: false},
 	}
