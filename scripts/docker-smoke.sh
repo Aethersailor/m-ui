@@ -143,6 +143,34 @@ if [[ -n "$expected_version" ]]; then
     http://127.0.0.1:2095/api/v1/health |
     grep -Fq "\"version\":\"${expected_version}\""
 fi
+
+ui_index="$client_directory/index.html"
+ui_entry="$client_directory/entry.js"
+ui_headers="$client_directory/headers"
+curl --fail --silent --show-error \
+  --output "$ui_index" http://127.0.0.1:2095/
+grep -Fq '<div id="app"' "$ui_index"
+entry_path="$(
+  grep -Eo 'src="/assets/[^"]+\.js"' "$ui_index" |
+    head -n 1 | cut -d '"' -f 2
+)"
+[[ -n "$entry_path" ]]
+curl --fail --silent --show-error \
+  --dump-header "$ui_headers" --output "$ui_entry" \
+  "http://127.0.0.1:2095${entry_path}"
+tr -d '\r' <"$ui_headers" |
+  grep -Eiq '^content-type: (text|application)/javascript([;[:space:]]|$)'
+mapfile -t ui_dependencies < <(
+  grep -Eo 'assets/[A-Za-z0-9._-]+\.js' "$ui_entry" | sort -u
+)
+[[ "${#ui_dependencies[@]}" -gt 0 ]]
+for asset_path in "${ui_dependencies[@]}"; do
+  curl --fail --silent --show-error \
+    --dump-header "$ui_headers" --output /dev/null \
+    "http://127.0.0.1:2095/${asset_path}"
+  tr -d '\r' <"$ui_headers" |
+    grep -Eiq '^content-type: (text|application)/javascript([;[:space:]]|$)'
+done
 if docker_root exec "$name" test -e /usr/lib/m-ui/manage.sh; then
   echo "container unexpectedly contains the native lifecycle manager" >&2
   exit 1

@@ -12,11 +12,11 @@ LDFLAGS := -s -w \
 	-X github.com/Aethersailor/m-ui/internal/version.date=$(BUILD_DATE) \
 	-X github.com/Aethersailor/m-ui/internal/version.dirty=$(DIRTY)
 
-.PHONY: all build web-install web-build test test-go test-web vet lint typecheck smoke clean
+.PHONY: all build web-install web-build web-embed-test test test-go test-web vet lint typecheck smoke clean
 
 all: build
 
-build: web-build
+build: web-embed-test
 	mkdir -p $(OUTPUT_DIR)
 	$(GO) build -tags webembed -trimpath -ldflags "$(LDFLAGS)" -o $(BINARY) ./cmd/m-ui
 
@@ -25,6 +25,9 @@ web-install:
 
 web-build:
 	$(NPM) --prefix web run build
+
+web-embed-test: web-build
+	$(GO) test -tags webembed ./internal/httpapi/ui
 
 test: test-go test-web
 

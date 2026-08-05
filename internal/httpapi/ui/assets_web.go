@@ -7,7 +7,8 @@ import (
 	"io/fs"
 )
 
-//go:embed dist/*
+// Include Vite chunks whose names begin with an underscore or a dot.
+//go:embed all:dist
 var embedded embed.FS
 
 func assets() fs.FS {

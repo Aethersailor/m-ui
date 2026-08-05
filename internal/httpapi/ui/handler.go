@@ -19,6 +19,10 @@ func SPAHandler() http.HandlerFunc {
 		if name == "." || name == "" {
 			name = "index.html"
 		}
+		if request.Method != http.MethodGet && request.Method != http.MethodHead {
+			http.NotFound(response, request)
+			return
+		}
 
 		if name == "index.html" {
 			serveIndex(response, content)
@@ -26,6 +30,10 @@ func SPAHandler() http.HandlerFunc {
 		}
 		if info, err := fs.Stat(content, name); err == nil && !info.IsDir() {
 			files.ServeHTTP(response, request)
+			return
+		}
+		if name == "assets" || strings.HasPrefix(name, "assets/") || path.Ext(name) != "" {
+			http.NotFound(response, request)
 			return
 		}
 
