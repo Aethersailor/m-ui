@@ -132,13 +132,14 @@ func (VLESSModule) BuildShare(
 		query.Set("mode", node.VLESS.Handler.XHTTP.Mode)
 	}
 	query.Set("security", string(node.VLESS.Security.Type))
-	if node.VLESS.Security.Type == domain.VLESSSecurityReality {
+	switch node.VLESS.Security.Type {
+	case domain.VLESSSecurityReality:
 		reality := node.VLESS.Security.Reality
 		query.Set("pbk", reality.PublicKey)
 		if len(reality.ShortIDs) > 0 {
 			query.Set("sid", reality.ShortIDs[0])
 		}
-	} else if node.VLESS.Security.Type == domain.VLESSSecurityTLS {
+	case domain.VLESSSecurityTLS:
 		query.Set("security", "tls")
 		if profile.AllowInsecure || node.VLESS.Security.TLS.AllowInsecure {
 			query.Set("allowInsecure", "1")

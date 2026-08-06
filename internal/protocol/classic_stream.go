@@ -108,7 +108,7 @@ func (TrojanModule) Compile(ctx context.Context, node domain.Node, asOf time.Tim
 		return nil, err
 	}
 	if node.Trojan == nil {
-		return nil, errors.New("Trojan specification is missing")
+		return nil, errors.New("trojan specification is missing")
 	}
 	spec := node.Trojan
 	listener := trojanListener{
@@ -135,7 +135,7 @@ func (TrojanModule) Compile(ctx context.Context, node domain.Node, asOf time.Tim
 
 func (TrojanModule) BuildShare(state domain.DesiredState, node domain.Node, user domain.NodeUser, profile domain.AccessProfile) (Share, error) {
 	if node.Trojan == nil || user.Trojan == nil {
-		return Share{}, errors.New("Trojan share requires Trojan node and user credentials")
+		return Share{}, errors.New("trojan share requires Trojan node and user credentials")
 	}
 	host := shareHost(state, profile)
 	query := url.Values{}

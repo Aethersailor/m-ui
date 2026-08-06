@@ -404,7 +404,7 @@ func assertSQLiteIntegrity(t *testing.T, database *sql.DB) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	if rows.Next() {
 		t.Fatal("PRAGMA foreign_key_check reported a violation")
 	}

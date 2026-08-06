@@ -106,7 +106,7 @@ func readRuntimeCoverageReport(t *testing.T) runtimeCoverageReport {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	var report runtimeCoverageReport
 	decoder := json.NewDecoder(file)
 	decoder.DisallowUnknownFields()

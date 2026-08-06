@@ -29,11 +29,11 @@ func (ShadowsocksModule) Compile(ctx context.Context, node domain.Node, asOf tim
 		return nil, err
 	}
 	if node.Shadowsocks == nil {
-		return nil, errors.New("Shadowsocks specification is missing")
+		return nil, errors.New("shadowsocks specification is missing")
 	}
 	users := effectiveUsers(node, asOf)
 	if len(users) != 1 || users[0].Shadowsocks == nil {
-		return nil, errors.New("Shadowsocks listener requires exactly one effective credential")
+		return nil, errors.New("shadowsocks listener requires exactly one effective credential")
 	}
 	spec := node.Shadowsocks
 	listener := shadowsocksListener{
@@ -52,7 +52,7 @@ func (ShadowsocksModule) Compile(ctx context.Context, node domain.Node, asOf tim
 
 func (ShadowsocksModule) BuildShare(state domain.DesiredState, node domain.Node, user domain.NodeUser, profile domain.AccessProfile) (Share, error) {
 	if node.Shadowsocks == nil || user.Shadowsocks == nil {
-		return Share{}, errors.New("Shadowsocks share requires Shadowsocks node and user credentials")
+		return Share{}, errors.New("shadowsocks share requires Shadowsocks node and user credentials")
 	}
 	host := shareHost(state, profile)
 	query := url.Values{}

@@ -33,7 +33,7 @@ func (Hysteria2Module) Compile(
 		return nil, err
 	}
 	if node.Hysteria2 == nil {
-		return nil, errors.New("Hysteria2 specification is missing")
+		return nil, errors.New("hysteria2 specification is missing")
 	}
 	spec := node.Hysteria2
 	listener := hysteria2Listener{
@@ -69,7 +69,7 @@ func (Hysteria2Module) BuildShare(
 	profile domain.AccessProfile,
 ) (Share, error) {
 	if node.Hysteria2 == nil || user.Hysteria2 == nil {
-		return Share{}, errors.New("Hysteria2 share requires Hysteria2 node and user credentials")
+		return Share{}, errors.New("hysteria2 share requires Hysteria2 node and user credentials")
 	}
 	host := profile.PublicHost
 	if host == "" {

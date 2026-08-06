@@ -712,7 +712,7 @@ func TestR3ProtocolsTransferDataWithRealMihomo(t *testing.T) {
 					clientProcess.diagnostic(secrets),
 				)
 			}
-			defer response.Body.Close()
+			defer func() { _ = response.Body.Close() }()
 			body, err := io.ReadAll(io.LimitReader(response.Body, 1024))
 			if err != nil {
 				t.Fatal(err)

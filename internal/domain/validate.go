@@ -192,25 +192,25 @@ func validateNode(node Node, asOf time.Time) error {
 		}
 	case ProtocolHysteria2:
 		if node.Hysteria2 == nil || protocolSpecCount != 1 {
-			validationErrors = append(validationErrors, errors.New("Hysteria2 node must contain only a Hysteria2 protocol specification"))
+			validationErrors = append(validationErrors, errors.New("hysteria2 node must contain only a Hysteria2 protocol specification"))
 		} else if err := validateHysteria2(*node.Hysteria2); err != nil {
 			validationErrors = append(validationErrors, err)
 		}
 	case ProtocolVMess:
 		if node.VMess == nil || protocolSpecCount != 1 {
-			validationErrors = append(validationErrors, errors.New("VMess node must contain only a VMess protocol specification"))
+			validationErrors = append(validationErrors, errors.New("vmess node must contain only a VMess protocol specification"))
 		} else if err := validateVMess(*node.VMess); err != nil {
 			validationErrors = append(validationErrors, err)
 		}
 	case ProtocolTrojan:
 		if node.Trojan == nil || protocolSpecCount != 1 {
-			validationErrors = append(validationErrors, errors.New("Trojan node must contain only a Trojan protocol specification"))
+			validationErrors = append(validationErrors, errors.New("trojan node must contain only a Trojan protocol specification"))
 		} else if err := validateTrojan(*node.Trojan); err != nil {
 			validationErrors = append(validationErrors, err)
 		}
 	case ProtocolShadowsocks:
 		if node.Shadowsocks == nil || protocolSpecCount != 1 {
-			validationErrors = append(validationErrors, errors.New("Shadowsocks node must contain only a Shadowsocks protocol specification"))
+			validationErrors = append(validationErrors, errors.New("shadowsocks node must contain only a Shadowsocks protocol specification"))
 		} else if err := validateShadowsocks(*node.Shadowsocks); err != nil {
 			validationErrors = append(validationErrors, err)
 		}
@@ -245,7 +245,7 @@ func validateNode(node Node, asOf time.Time) error {
 		validationErrors = append(validationErrors, errors.New("enabled node must have at least one enabled, unexpired user"))
 	}
 	if node.Protocol == ProtocolShadowsocks && len(node.EffectiveUsers(asOf)) > 1 {
-		validationErrors = append(validationErrors, errors.New("Mihomo Shadowsocks listener supports exactly one effective user"))
+		validationErrors = append(validationErrors, errors.New("mihomo Shadowsocks listener supports exactly one effective user"))
 	}
 	if node.Protocol == ProtocolShadowsocks && node.Shadowsocks != nil && strings.HasPrefix(node.Shadowsocks.Cipher, "2022-") {
 		expectedBytes := 32
@@ -258,7 +258,7 @@ func validateNode(node Node, asOf time.Time) error {
 			}
 			decoded, err := base64.StdEncoding.DecodeString(user.Shadowsocks.Password)
 			if err != nil || len(decoded) != expectedBytes {
-				validationErrors = append(validationErrors, fmt.Errorf("Shadowsocks 2022 password must be standard base64 encoding exactly %d bytes", expectedBytes))
+				validationErrors = append(validationErrors, fmt.Errorf("shadowsocks 2022 password must be standard base64 encoding exactly %d bytes", expectedBytes))
 			}
 		}
 	}
@@ -321,24 +321,24 @@ func validateNodeUser(user NodeUser, node Node) (string, error) {
 		credentialID = strings.ToLower(user.VLESS.UUID)
 	case ProtocolHysteria2:
 		if user.Hysteria2 == nil || userCredentialCount(user) != 1 {
-			validationErrors = append(validationErrors, errors.New("Hysteria2 user must contain only Hysteria2 credentials"))
+			validationErrors = append(validationErrors, errors.New("hysteria2 user must contain only Hysteria2 credentials"))
 			break
 		}
 		if strings.TrimSpace(user.Hysteria2.Password) == "" {
-			validationErrors = append(validationErrors, errors.New("Hysteria2 password is required"))
+			validationErrors = append(validationErrors, errors.New("hysteria2 password is required"))
 		}
 		credentialID = user.Hysteria2.Password
 	case ProtocolVMess:
 		if user.VMess == nil || userCredentialCount(user) != 1 {
-			validationErrors = append(validationErrors, errors.New("VMess user must contain only VMess credentials"))
+			validationErrors = append(validationErrors, errors.New("vmess user must contain only VMess credentials"))
 			break
 		}
 		parsed, err := uuid.Parse(user.VMess.UUID)
 		if err != nil || parsed.Variant() != uuid.RFC4122 {
-			validationErrors = append(validationErrors, errors.New("VMess UUID must be an RFC 4122 UUID"))
+			validationErrors = append(validationErrors, errors.New("vmess UUID must be an RFC 4122 UUID"))
 		}
 		if user.VMess.AlterID < 0 {
-			validationErrors = append(validationErrors, errors.New("VMess alter ID must not be negative"))
+			validationErrors = append(validationErrors, errors.New("vmess alter ID must not be negative"))
 		}
 		if !oneOf(defaultString(user.VMess.Cipher, "auto"), "auto", "aes-128-gcm", "chacha20-poly1305", "none", "zero") {
 			validationErrors = append(validationErrors, fmt.Errorf("unsupported VMess cipher %q", user.VMess.Cipher))
@@ -346,20 +346,20 @@ func validateNodeUser(user NodeUser, node Node) (string, error) {
 		credentialID = strings.ToLower(user.VMess.UUID)
 	case ProtocolTrojan:
 		if user.Trojan == nil || userCredentialCount(user) != 1 {
-			validationErrors = append(validationErrors, errors.New("Trojan user must contain only Trojan credentials"))
+			validationErrors = append(validationErrors, errors.New("trojan user must contain only Trojan credentials"))
 			break
 		}
 		if strings.TrimSpace(user.Trojan.Password) == "" {
-			validationErrors = append(validationErrors, errors.New("Trojan password is required"))
+			validationErrors = append(validationErrors, errors.New("trojan password is required"))
 		}
 		credentialID = user.Trojan.Password
 	case ProtocolShadowsocks:
 		if user.Shadowsocks == nil || userCredentialCount(user) != 1 {
-			validationErrors = append(validationErrors, errors.New("Shadowsocks user must contain only Shadowsocks credentials"))
+			validationErrors = append(validationErrors, errors.New("shadowsocks user must contain only Shadowsocks credentials"))
 			break
 		}
 		if strings.TrimSpace(user.Shadowsocks.Password) == "" {
-			validationErrors = append(validationErrors, errors.New("Shadowsocks password is required"))
+			validationErrors = append(validationErrors, errors.New("shadowsocks password is required"))
 		}
 		credentialID = user.Shadowsocks.Password
 	}
@@ -434,9 +434,9 @@ func validateVLESS(spec VLESSSpec) error {
 		}
 	case VLESSHandlerWebSocket:
 		if spec.Handler.WebSocket == nil || spec.Handler.GRPC != nil || spec.Handler.XHTTP != nil || spec.Handler.MKCP != nil {
-			validationErrors = append(validationErrors, errors.New("WebSocket handler configuration is invalid"))
+			validationErrors = append(validationErrors, errors.New("webSocket handler configuration is invalid"))
 		} else if !strings.HasPrefix(spec.Handler.WebSocket.Path, "/") {
-			validationErrors = append(validationErrors, errors.New("WebSocket path must start with /"))
+			validationErrors = append(validationErrors, errors.New("webSocket path must start with /"))
 		}
 	case VLESSHandlerGRPC:
 		if spec.Handler.GRPC == nil || spec.Handler.WebSocket != nil || spec.Handler.XHTTP != nil || spec.Handler.MKCP != nil || strings.TrimSpace(spec.Handler.GRPC.ServiceName) == "" {
@@ -477,17 +477,17 @@ func validateVLESS(spec VLESSSpec) error {
 		}
 	case VLESSSecurityShadowTLS:
 		if securityCount != 1 || spec.Security.ShadowTLS == nil {
-			validationErrors = append(validationErrors, errors.New("ShadowTLS security must contain only ShadowTLS configuration"))
+			validationErrors = append(validationErrors, errors.New("shadowTLS security must contain only ShadowTLS configuration"))
 		} else if err := validateShadowTLS(*spec.Security.ShadowTLS); err != nil {
 			validationErrors = append(validationErrors, err)
 		}
 	case VLESSSecurityResTLS:
 		if securityCount != 1 || spec.Security.ResTLS == nil {
-			validationErrors = append(validationErrors, errors.New("ResTLS security must contain only ResTLS configuration"))
+			validationErrors = append(validationErrors, errors.New("resTLS security must contain only ResTLS configuration"))
 		} else if strings.TrimSpace(spec.Security.ResTLS.Destination) == "" || strings.TrimSpace(spec.Security.ResTLS.Password) == "" {
-			validationErrors = append(validationErrors, errors.New("ResTLS destination and password are required"))
+			validationErrors = append(validationErrors, errors.New("resTLS destination and password are required"))
 		} else if spec.Security.ResTLS.VersionHint != "" && spec.Security.ResTLS.VersionHint != "tls12" && spec.Security.ResTLS.VersionHint != "tls13" {
-			validationErrors = append(validationErrors, errors.New("ResTLS version hint must be tls12 or tls13"))
+			validationErrors = append(validationErrors, errors.New("resTLS version hint must be tls12 or tls13"))
 		}
 	case VLESSSecurityJLS:
 		if securityCount != 1 || spec.Security.JLS == nil {
@@ -499,7 +499,7 @@ func validateVLESS(spec VLESSSpec) error {
 		validationErrors = append(validationErrors, fmt.Errorf("unsupported VLESS security %q", spec.Security.Type))
 	}
 	if spec.Mux.Brutal.Enabled && (strings.TrimSpace(spec.Mux.Brutal.Up) == "" || strings.TrimSpace(spec.Mux.Brutal.Down) == "") {
-		validationErrors = append(validationErrors, errors.New("Brutal mux requires up and down bandwidth"))
+		validationErrors = append(validationErrors, errors.New("brutal mux requires up and down bandwidth"))
 	}
 	return errors.Join(validationErrors...)
 }
@@ -520,10 +520,10 @@ func validateVMess(spec VMessSpec) error {
 	}
 	if spec.Handler.Type == VMessHandlerMKCP &&
 		oneOf(string(spec.Security.Type), string(VLESSSecurityShadowTLS), string(VLESSSecurityResTLS), string(VLESSSecurityJLS)) {
-		validationErrors = append(validationErrors, errors.New("VMess mKCP does not support ShadowTLS, ResTLS, or JLS security"))
+		validationErrors = append(validationErrors, errors.New("mihomo VMess mKCP does not support ShadowTLS, ResTLS, or JLS security"))
 	}
 	if spec.Handler.Type == VLESSHandlerWebSocket && spec.Security.Type == VLESSSecurityReality {
-		validationErrors = append(validationErrors, errors.New("Mihomo VMess WebSocket client does not apply REALITY security"))
+		validationErrors = append(validationErrors, errors.New("mihomo VMess WebSocket client does not apply REALITY security"))
 	}
 	return errors.Join(validationErrors...)
 }
@@ -542,14 +542,14 @@ func validateTrojan(spec TrojanSpec) error {
 	}
 	if spec.Shadowsocks.Enabled {
 		if !oneOf(strings.ToLower(spec.Shadowsocks.Method), "aes-128-gcm", "aes-256-gcm", "chacha20-ietf-poly1305") {
-			validationErrors = append(validationErrors, errors.New("Trojan Shadowsocks method must be aes-128-gcm, aes-256-gcm, or chacha20-ietf-poly1305"))
+			validationErrors = append(validationErrors, errors.New("trojan Shadowsocks method must be aes-128-gcm, aes-256-gcm, or chacha20-ietf-poly1305"))
 		}
 		if strings.TrimSpace(spec.Shadowsocks.Password) == "" {
-			validationErrors = append(validationErrors, errors.New("Trojan Shadowsocks password is required when enabled"))
+			validationErrors = append(validationErrors, errors.New("trojan Shadowsocks password is required when enabled"))
 		}
 	}
 	if spec.Handler.Type == VLESSHandlerWebSocket && spec.Security.Type == VLESSSecurityReality {
-		validationErrors = append(validationErrors, errors.New("Mihomo Trojan WebSocket client does not apply REALITY security"))
+		validationErrors = append(validationErrors, errors.New("mihomo Trojan WebSocket client does not apply REALITY security"))
 	}
 	return errors.Join(validationErrors...)
 }
@@ -575,7 +575,7 @@ func validateClassicStreamHandler(protocol string, handler VLESSHandlerSpec) err
 			return fmt.Errorf("%s mKCP handler configuration is invalid", protocol)
 		}
 		if !oneOf(handler.MKCP.Header, "", "none", "srtp", "utp", "wechat-video", "dtls", "wireguard") {
-			return errors.New("VMess mKCP header is unsupported")
+			return errors.New("vmess mKCP header is unsupported")
 		}
 	default:
 		return fmt.Errorf("unsupported %s handler %q", protocol, handler.Type)
@@ -605,10 +605,10 @@ func validateShadowsocks(spec ShadowsocksSpec) error {
 		validationErrors = append(validationErrors, err)
 	}
 	if spec.SimpleObfs.Enabled && !oneOf(spec.SimpleObfs.Mode, "http", "tls") {
-		validationErrors = append(validationErrors, errors.New("Shadowsocks simple obfs mode must be http or tls"))
+		validationErrors = append(validationErrors, errors.New("shadowsocks simple obfs mode must be http or tls"))
 	}
 	if spec.SimpleObfs.Enabled && spec.Security.Type != VLESSSecurityNone {
-		validationErrors = append(validationErrors, errors.New("Shadowsocks simple obfs cannot be combined with another Mihomo client plugin security"))
+		validationErrors = append(validationErrors, errors.New("shadowsocks simple obfs cannot be combined with another Mihomo client plugin security"))
 	}
 	return errors.Join(validationErrors...)
 }
@@ -616,44 +616,44 @@ func validateShadowsocks(spec ShadowsocksSpec) error {
 func validateShadowTLS(config ShadowTLSConfig) error {
 	var validationErrors []error
 	if config.Version < 1 || config.Version > 3 {
-		validationErrors = append(validationErrors, errors.New("ShadowTLS version must be 1 to 3"))
+		validationErrors = append(validationErrors, errors.New("shadowTLS version must be 1 to 3"))
 	}
 	if config.Version == 2 && strings.TrimSpace(config.Password) == "" {
-		validationErrors = append(validationErrors, errors.New("ShadowTLS version 2 password is required"))
+		validationErrors = append(validationErrors, errors.New("shadowTLS version 2 password is required"))
 	}
 	if config.Version == 3 && len(config.Users) == 0 {
-		validationErrors = append(validationErrors, errors.New("ShadowTLS version 3 requires at least one user"))
+		validationErrors = append(validationErrors, errors.New("shadowTLS version 3 requires at least one user"))
 	}
 	if strings.TrimSpace(config.Handshake.Destination) == "" &&
 		(config.Version < 3 || (config.WildcardSNI != "authed" && config.WildcardSNI != "all")) {
-		validationErrors = append(validationErrors, errors.New("ShadowTLS handshake destination is required"))
+		validationErrors = append(validationErrors, errors.New("shadowTLS handshake destination is required"))
 	} else if config.Handshake.Destination != "" {
 		if err := validateDestination(config.Handshake.Destination); err != nil {
-			validationErrors = append(validationErrors, fmt.Errorf("ShadowTLS handshake %w", err))
+			validationErrors = append(validationErrors, fmt.Errorf("shadowTLS handshake %w", err))
 		}
 	}
 	if config.WildcardSNI != "" && config.WildcardSNI != "off" && config.WildcardSNI != "authed" && config.WildcardSNI != "all" {
-		validationErrors = append(validationErrors, errors.New("ShadowTLS wildcard SNI must be off, authed, or all"))
+		validationErrors = append(validationErrors, errors.New("shadowTLS wildcard SNI must be off, authed, or all"))
 	}
 	userNames := make(map[string]struct{}, len(config.Users))
 	for index, user := range config.Users {
 		if err := validateName("ShadowTLS user name", user.Name); err != nil {
-			validationErrors = append(validationErrors, fmt.Errorf("ShadowTLS user %d: %w", index+1, err))
+			validationErrors = append(validationErrors, fmt.Errorf("shadowTLS user %d: %w", index+1, err))
 		}
 		if strings.TrimSpace(user.Password) == "" {
-			validationErrors = append(validationErrors, fmt.Errorf("ShadowTLS user %d password is required", index+1))
+			validationErrors = append(validationErrors, fmt.Errorf("shadowTLS user %d password is required", index+1))
 		}
 		if _, exists := userNames[user.Name]; exists {
-			validationErrors = append(validationErrors, fmt.Errorf("ShadowTLS user %q is duplicated", user.Name))
+			validationErrors = append(validationErrors, fmt.Errorf("shadowTLS user %q is duplicated", user.Name))
 		}
 		userNames[user.Name] = struct{}{}
 	}
 	for serverName, handshake := range config.HandshakeForServerName {
 		if strings.TrimSpace(serverName) == "" || serverName != strings.TrimSpace(serverName) {
-			validationErrors = append(validationErrors, errors.New("ShadowTLS handshake server name is required and must not have surrounding whitespace"))
+			validationErrors = append(validationErrors, errors.New("shadowTLS handshake server name is required and must not have surrounding whitespace"))
 		}
 		if err := validateDestination(handshake.Destination); err != nil {
-			validationErrors = append(validationErrors, fmt.Errorf("ShadowTLS handshake for %q %w", serverName, err))
+			validationErrors = append(validationErrors, fmt.Errorf("shadowTLS handshake for %q %w", serverName, err))
 		}
 	}
 	return errors.Join(validationErrors...)
@@ -716,20 +716,20 @@ func validateReality(config RealityConfig) error {
 func validateHysteria2(spec Hysteria2Spec) error {
 	var validationErrors []error
 	if strings.TrimSpace(spec.Certificate) == "" || strings.TrimSpace(spec.PrivateKey) == "" {
-		validationErrors = append(validationErrors, errors.New("Hysteria2 certificate and private key are required"))
+		validationErrors = append(validationErrors, errors.New("hysteria2 certificate and private key are required"))
 	}
 	if spec.Obfs != "" && strings.TrimSpace(spec.ObfsPassword) == "" {
-		validationErrors = append(validationErrors, errors.New("Hysteria2 obfuscation password is required when obfuscation is enabled"))
+		validationErrors = append(validationErrors, errors.New("hysteria2 obfuscation password is required when obfuscation is enabled"))
 	}
 	if spec.ObfsMinPacketSize < 0 || spec.ObfsMaxPacketSize < 0 ||
 		(spec.ObfsMaxPacketSize > 0 && spec.ObfsMinPacketSize > spec.ObfsMaxPacketSize) {
-		validationErrors = append(validationErrors, errors.New("Hysteria2 obfuscation packet size range is invalid"))
+		validationErrors = append(validationErrors, errors.New("hysteria2 obfuscation packet size range is invalid"))
 	}
 	if spec.UDPMTU < 0 || spec.CWND < 0 || spec.MaxIdleTime < 0 {
-		validationErrors = append(validationErrors, errors.New("Hysteria2 numeric tuning values must not be negative"))
+		validationErrors = append(validationErrors, errors.New("hysteria2 numeric tuning values must not be negative"))
 	}
 	if spec.Mux.Brutal.Enabled && (strings.TrimSpace(spec.Mux.Brutal.Up) == "" || strings.TrimSpace(spec.Mux.Brutal.Down) == "") {
-		validationErrors = append(validationErrors, errors.New("Hysteria2 Brutal mux requires up and down bandwidth"))
+		validationErrors = append(validationErrors, errors.New("hysteria2 Brutal mux requires up and down bandwidth"))
 	}
 	if err := validateStringList("Hysteria2 ALPN", spec.ALPN); err != nil {
 		validationErrors = append(validationErrors, err)
@@ -746,21 +746,21 @@ func validateHysteria2Realm(config Hysteria2RealmConfig) error {
 	var validationErrors []error
 	parsed, err := url.Parse(config.ServerURL)
 	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
-		validationErrors = append(validationErrors, errors.New("Hysteria2 Realm server URL must be an absolute HTTP or HTTPS URL"))
+		validationErrors = append(validationErrors, errors.New("hysteria2 Realm server URL must be an absolute HTTP or HTTPS URL"))
 	}
 	if strings.TrimSpace(config.RealmID) == "" {
-		validationErrors = append(validationErrors, errors.New("Hysteria2 Realm ID is required"))
+		validationErrors = append(validationErrors, errors.New("hysteria2 Realm ID is required"))
 	}
 	if len(config.STUNServers) == 0 {
-		validationErrors = append(validationErrors, errors.New("Hysteria2 Realm requires at least one STUN server"))
+		validationErrors = append(validationErrors, errors.New("hysteria2 Realm requires at least one STUN server"))
 	}
 	for _, server := range config.STUNServers {
 		if err := validateSTUNServer(server); err != nil {
-			validationErrors = append(validationErrors, fmt.Errorf("Hysteria2 Realm STUN server %q %w", server, err))
+			validationErrors = append(validationErrors, fmt.Errorf("hysteria2 Realm STUN server %q %w", server, err))
 		}
 	}
 	if (config.Certificate == "") != (config.PrivateKey == "") {
-		validationErrors = append(validationErrors, errors.New("Hysteria2 Realm client certificate and private key must be configured together"))
+		validationErrors = append(validationErrors, errors.New("hysteria2 Realm client certificate and private key must be configured together"))
 	}
 	if err := validateStringList("Hysteria2 Realm ALPN", config.ALPN); err != nil {
 		validationErrors = append(validationErrors, err)
