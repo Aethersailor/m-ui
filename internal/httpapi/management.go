@@ -1232,8 +1232,11 @@ func endpointSettingsResponseFromService(
 			Host: settings.MihomoControllerConnect.Host,
 			Port: settings.MihomoControllerConnect.Port,
 		},
-		ExternalControllerCORSOrigins: append([]string(nil), settings.ExternalControllerCORSOrigins...),
-		Generation:                    settings.Generation,
+		ExternalControllerCORSOrigins: append(
+			make([]string, 0, len(settings.ExternalControllerCORSOrigins)),
+			settings.ExternalControllerCORSOrigins...,
+		),
+		Generation: settings.Generation,
 	}
 }
 

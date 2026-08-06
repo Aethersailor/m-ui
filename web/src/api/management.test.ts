@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest'
 import {
   cloneNode,
   createUsers,
+  getEndpointSettings,
   restartApplication,
   setNodeEnabled,
   setNodesEnabled,
@@ -12,6 +13,31 @@ import {
 } from './management'
 
 describe('management API', () => {
+  it('normalizes a legacy null endpoint CORS list at the API boundary', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({
+        active: {
+          panel_ui_bind: { host: '0.0.0.0', port: 2095 },
+          mihomo_external_controller_bind: { host: '127.0.0.1', port: 9090 },
+          mihomo_controller_connect: { host: '127.0.0.1', port: 9090 },
+          external_controller_cors_origins: null,
+          generation: 1,
+        },
+        pending: null,
+      }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const state = await getEndpointSettings()
+
+    expect(state.active.external_controller_cors_origins).toEqual([])
+    expect(fetchMock).toHaveBeenCalledOnce()
+    expect(fetchMock.mock.calls[0]?.[0]).toBe('/api/v1/settings/endpoints')
+  })
+
   it('sends authenticated mutations with the CSRF header', async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(

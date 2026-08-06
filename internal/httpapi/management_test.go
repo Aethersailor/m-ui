@@ -240,6 +240,10 @@ func TestManagementCRUDUsesAuthenticationCSRFAndPublisher(t *testing.T) {
 	if endpointGet.Code != http.StatusOK {
 		t.Fatalf("endpoint settings GET status = %d; body=%s", endpointGet.Code, endpointGet.Body)
 	}
+	if !strings.Contains(endpointGet.Body.String(), `"external_controller_cors_origins":[]`) ||
+		strings.Contains(endpointGet.Body.String(), `"external_controller_cors_origins":null`) {
+		t.Fatalf("empty endpoint CORS origins must use a stable JSON array: %s", endpointGet.Body)
+	}
 	var endpointState endpointSettingsStateResponse
 	if err := json.NewDecoder(endpointGet.Body).Decode(&endpointState); err != nil {
 		t.Fatal(err)

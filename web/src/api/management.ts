@@ -337,6 +337,40 @@ export interface EndpointSettingsState {
   pending: EndpointSettings | null
 }
 
+type EndpointSettingsWire = Omit<
+  EndpointSettings,
+  'external_controller_cors_origins'
+> & {
+  external_controller_cors_origins?: string[] | null
+}
+
+interface EndpointSettingsStateWire {
+  active: EndpointSettingsWire
+  pending: EndpointSettingsWire | null
+}
+
+function normalizeEndpointSettings(
+  settings: EndpointSettingsWire,
+): EndpointSettings {
+  return {
+    ...settings,
+    external_controller_cors_origins: [
+      ...(settings.external_controller_cors_origins ?? []),
+    ],
+  }
+}
+
+function normalizeEndpointSettingsState(
+  state: EndpointSettingsStateWire,
+): EndpointSettingsState {
+  return {
+    active: normalizeEndpointSettings(state.active),
+    pending: state.pending === null
+      ? null
+      : normalizeEndpointSettings(state.pending),
+  }
+}
+
 export interface AuditEntry {
   id: string
   actor_admin_id: string
@@ -745,19 +779,23 @@ export function restartApplication(
   return mutation('/api/v1/system/restart', csrfToken)
 }
 
-export function getEndpointSettings(): Promise<EndpointSettingsState> {
-  return apiRequest<EndpointSettingsState>('/api/v1/settings/endpoints')
+export async function getEndpointSettings(): Promise<EndpointSettingsState> {
+  return normalizeEndpointSettingsState(
+    await apiRequest<EndpointSettingsStateWire>('/api/v1/settings/endpoints'),
+  )
 }
 
-export function updateEndpointSettings(
+export async function updateEndpointSettings(
   csrfToken: string,
   input: Omit<EndpointSettings, 'requires_mui_restart' | 'requires_mihomo_restart' | 'updated_at'>,
 ): Promise<EndpointSettingsState> {
-  return mutation<EndpointSettingsState>(
-    '/api/v1/settings/endpoints',
-    csrfToken,
-    'PUT',
-    input,
+  return normalizeEndpointSettingsState(
+    await mutation<EndpointSettingsStateWire>(
+      '/api/v1/settings/endpoints',
+      csrfToken,
+      'PUT',
+      input,
+    ),
   )
 }
 
