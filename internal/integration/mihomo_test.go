@@ -701,27 +701,59 @@ func TestR3ProtocolsTransferDataWithRealMihomo(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			client := &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL)}, Timeout: 10 * time.Second}
-			response, err := client.Get(echo.URL + "/" + current.name)
-			if err != nil {
-				t.Fatalf(
-					"transfer through %s: %v\nserver: %s\nclient: %s",
-					current.name,
-					err,
-					server.diagnostic(secrets),
-					clientProcess.diagnostic(secrets),
-				)
-			}
-			defer func() { _ = response.Body.Close() }()
-			body, err := io.ReadAll(io.LimitReader(response.Body, 1024))
-			if err != nil {
-				t.Fatal(err)
-			}
 			expected := "m-ui-r3-real-transfer:/" + current.name
-			if response.StatusCode != http.StatusOK || string(body) != expected {
-				t.Fatalf("transfer response = %d %q, want 200 %q", response.StatusCode, body, expected)
+			client := &http.Client{
+				Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL)},
+				Timeout:   2 * time.Second,
 			}
+			waitForHTTPTransfer(
+				t, ctx, client, echo.URL+"/"+current.name, expected,
+				server, clientProcess, secrets,
+			)
 		})
+	}
+}
+
+func waitForHTTPTransfer(
+	t *testing.T,
+	parent context.Context,
+	client *http.Client,
+	requestURL, expected string,
+	server, clientProcess *runningMihomo,
+	secrets []string,
+) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(parent, 5*time.Second)
+	defer cancel()
+	var lastStatus int
+	var lastBody []byte
+	var lastErr error
+	for {
+		request, err := http.NewRequestWithContext(ctx, http.MethodGet, requestURL, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		response, requestErr := client.Do(request)
+		if requestErr == nil {
+			body, readErr := io.ReadAll(io.LimitReader(response.Body, 1024))
+			closeErr := response.Body.Close()
+			lastStatus, lastBody = response.StatusCode, body
+			lastErr = errors.Join(readErr, closeErr)
+			if lastErr == nil && lastStatus == http.StatusOK && string(lastBody) == expected {
+				return
+			}
+		} else {
+			lastErr = requestErr
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatalf(
+				"transfer never became ready: status=%d body=%q error=%v, want 200 %q\nserver: %s\nclient: %s",
+				lastStatus, lastBody, lastErr, expected,
+				server.diagnostic(secrets), clientProcess.diagnostic(secrets),
+			)
+		case <-time.After(100 * time.Millisecond):
+		}
 	}
 }
 
