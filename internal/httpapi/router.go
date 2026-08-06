@@ -25,6 +25,7 @@ type Options struct {
 	LanguageDefault func(context.Context) (string, error)
 	CookieSecure    bool
 	RequestRestart  func(func())
+	Ready           func(context.Context) error
 }
 
 type healthResponse struct {
@@ -45,7 +46,15 @@ func New(options Options) http.Handler {
 	router.Use(accessLog(logger))
 	router.Use(securityHeaders)
 
-	health := func(response http.ResponseWriter, _ *http.Request) {
+	health := func(response http.ResponseWriter, request *http.Request) {
+		if options.Ready != nil && options.Ready(request.Context()) != nil {
+			writeJSON(response, http.StatusServiceUnavailable, healthResponse{
+				Status: "not_ready",
+				Time:   time.Now().UTC(),
+				Build:  options.Build,
+			})
+			return
+		}
 		writeJSON(response, http.StatusOK, healthResponse{
 			Status: "ok",
 			Time:   time.Now().UTC(),

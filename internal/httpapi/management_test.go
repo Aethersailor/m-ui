@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -420,9 +421,19 @@ func TestManagementCRUDUsesAuthenticationCSRFAndPublisher(t *testing.T) {
 	if err := json.NewDecoder(createdUser.Body).Decode(&userBody); err != nil {
 		t.Fatal(err)
 	}
-	if userBody.User.VLESS == nil || userBody.User.VLESS.UUID == "" || !userBody.User.Enabled {
+	if userBody.User.VLESS == nil || userBody.User.VLESS.UUID != "" ||
+		!userBody.User.SecretsSet["vless.uuid"] || !userBody.User.Enabled {
 		t.Fatalf("created user = %#v", userBody.User)
 	}
+	storedWithUser, err := environment.manager.Node(context.Background(), listenerID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(storedWithUser.Users) != 1 || storedWithUser.Users[0].VLESS == nil ||
+		storedWithUser.Users[0].VLESS.UUID == "" {
+		t.Fatalf("stored user = %#v", storedWithUser.Users)
+	}
+	userUUID := storedWithUser.Users[0].VLESS.UUID
 
 	enabled := performJSONRequest(
 		t,
@@ -465,7 +476,7 @@ func TestManagementCRUDUsesAuthenticationCSRFAndPublisher(t *testing.T) {
 	}
 	for _, secret := range []string{
 		environment.cli.keypair.PrivateKey,
-		userBody.User.VLESS.UUID,
+		userUUID,
 	} {
 		if strings.Contains(preview.Body.String(), secret) {
 			t.Fatalf("redacted preview contains %q", secret)
@@ -659,6 +670,12 @@ type managementTestEnvironment struct {
 	handler          http.Handler
 	manager          *service.Manager
 	cli              *managementCLI
+	database         *store.Store
+	managed          *store.ManagedStore
+	controller       *managementController
+	process          *managementProcess
+	databasePath     string
+	configPath       string
 	restartRequested *atomic.Bool
 }
 
@@ -666,7 +683,8 @@ func newManagementTestEnvironment(t *testing.T) managementTestEnvironment {
 	t.Helper()
 	ctx := context.Background()
 	directory := t.TempDir()
-	database, err := store.Open(ctx, filepath.Join(directory, "m-ui.db"))
+	databasePath := filepath.Join(directory, "m-ui.db")
+	database, err := store.Open(ctx, databasePath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -712,8 +730,11 @@ func newManagementTestEnvironment(t *testing.T) managementTestEnvironment {
 		PrivateKey: base64.RawURLEncoding.EncodeToString(privateBytes),
 		PublicKey:  base64.RawURLEncoding.EncodeToString(publicBytes),
 	}}
-	controller := managementController{}
-	process := managementProcess{active: true}
+	controller := &managementController{state: &managementControllerState{}}
+	process := &managementProcess{
+		active: true,
+		state:  &managementProcessState{active: true},
+	}
 	configurationPublisher, err := publisher.New(
 		managed,
 		publisher.YAMLCompiler{},
@@ -729,6 +750,12 @@ func newManagementTestEnvironment(t *testing.T) managementTestEnvironment {
 		},
 	)
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err := configurationPublisher.ReconcileStartupBeforeRuntime(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := configurationPublisher.ReconcileStartup(ctx); err != nil {
 		t.Fatal(err)
 	}
 	runtimeMonitor, err := service.NewRuntimeMonitor(
@@ -781,6 +808,12 @@ func newManagementTestEnvironment(t *testing.T) managementTestEnvironment {
 		}),
 		manager:          manager,
 		cli:              cli,
+		database:         database,
+		managed:          managed,
+		controller:       controller,
+		process:          process,
+		databasePath:     databasePath,
+		configPath:       configPath,
 		restartRequested: restartRequested,
 	}
 }
@@ -826,7 +859,15 @@ func (cli *managementCLI) GenerateRealityKeypair(
 	return cli.keypair, nil
 }
 
-type managementController struct{}
+type managementController struct {
+	state *managementControllerState
+}
+
+type managementControllerState struct {
+	mutex        sync.Mutex
+	reloadErrors []error
+	reloads      int
+}
 
 func (managementController) Version(
 	context.Context,
@@ -848,22 +889,76 @@ func (managementController) Connections(
 ) (mihomo.ConnectionsSnapshot, error) {
 	return mihomo.ConnectionsSnapshot{}, nil
 }
-func (managementController) Reload(context.Context, string) error { return nil }
+func (controller managementController) Reload(context.Context, string) error {
+	if controller.state == nil {
+		return nil
+	}
+	controller.state.mutex.Lock()
+	defer controller.state.mutex.Unlock()
+	controller.state.reloads++
+	if len(controller.state.reloadErrors) == 0 {
+		return nil
+	}
+	err := controller.state.reloadErrors[0]
+	controller.state.reloadErrors = controller.state.reloadErrors[1:]
+	return err
+}
 func (managementController) Restart(context.Context, string) error {
 	return nil
 }
 
 type managementProcess struct {
 	active bool
+	state  *managementProcessState
+}
+
+type managementProcessState struct {
+	mutex         sync.Mutex
+	active        bool
+	restartErrors []error
 }
 
 func (process managementProcess) IsActive(context.Context) (bool, error) {
-	return process.active, nil
+	if process.state == nil {
+		return process.active, nil
+	}
+	process.state.mutex.Lock()
+	defer process.state.mutex.Unlock()
+	return process.state.active, nil
 }
-func (managementProcess) Start(context.Context) error   { return nil }
-func (managementProcess) Stop(context.Context) error    { return nil }
-func (managementProcess) Restart(context.Context) error { return nil }
-func (managementProcess) Reload(context.Context) error  { return nil }
+func (process managementProcess) Start(context.Context) error {
+	if process.state == nil {
+		return nil
+	}
+	process.state.mutex.Lock()
+	defer process.state.mutex.Unlock()
+	process.state.active = true
+	return nil
+}
+func (process managementProcess) Stop(context.Context) error {
+	if process.state == nil {
+		return nil
+	}
+	process.state.mutex.Lock()
+	defer process.state.mutex.Unlock()
+	process.state.active = false
+	return nil
+}
+func (process managementProcess) Restart(context.Context) error {
+	if process.state == nil {
+		return nil
+	}
+	process.state.mutex.Lock()
+	defer process.state.mutex.Unlock()
+	if len(process.state.restartErrors) != 0 {
+		err := process.state.restartErrors[0]
+		process.state.restartErrors = process.state.restartErrors[1:]
+		return err
+	}
+	process.state.active = true
+	return nil
+}
+func (managementProcess) Reload(context.Context) error { return nil }
 func (managementProcess) RecentLogs(
 	context.Context,
 	int,

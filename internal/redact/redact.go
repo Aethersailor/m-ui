@@ -19,7 +19,7 @@ var patterns = []struct {
 		"[redacted-key]",
 	},
 	{
-		regexp.MustCompile(`(?i)\b(secret|private[-_ ]?key)["']?\s*[:=]\s*["']?[^"'\s,;]+`),
+		regexp.MustCompile(`(?i)\b(secret|password|token|seed|private[-_ ]?key)["']?\s*[:=]\s*["']?[^"'\s,;]+`),
 		"$1: [redacted]",
 	},
 	{

@@ -295,6 +295,30 @@ func Run(ctx context.Context, cfg config.Config, build version.Info) error {
 			startupReconcileErr,
 		)
 	}
+	if errors.Is(startupReconcileErr, publisher.ErrStartupDegraded) {
+		convergence, convergenceErr := managedStore.RuntimeConvergenceState(ctx)
+		if convergenceErr != nil {
+			return fmt.Errorf("read runtime convergence after startup failure: %w", convergenceErr)
+		}
+		if convergence.R3CutoverPending {
+			snapshot, snapshotErr := managedStore.ReadPublicationSnapshot(
+				ctx,
+				time.Now().UTC(),
+			)
+			if snapshotErr != nil {
+				return fmt.Errorf("read R3 cutover baseline after startup failure: %w", snapshotErr)
+			}
+			if snapshot.ActiveRevision == nil {
+				// Native service ordering must not be released while the old YAML
+				// can still be present. A later restart may retry the durable
+				// baseline publication after the CLI/filesystem problem is fixed.
+				return fmt.Errorf(
+					"R3 protocol cutover baseline is not installed: %w",
+					startupReconcileErr,
+				)
+			}
+		}
+	}
 	if cfg.Mihomo.ProcessMode == "managed" {
 		recoveryConfigurer, ok := process.(mihomo.RecoveryConfigurer)
 		if !ok {
@@ -377,6 +401,18 @@ func Run(ctx context.Context, cfg config.Config, build version.Info) error {
 				default:
 					release()
 				}
+			},
+			Ready: func(healthContext context.Context) error {
+				convergence, readinessErr := managedStore.RuntimeConvergenceState(
+					healthContext,
+				)
+				if readinessErr != nil {
+					return readinessErr
+				}
+				if convergence.R3CutoverPending {
+					return errors.New("R3 runtime convergence is pending")
+				}
+				return nil
 			},
 		}),
 		ReadHeaderTimeout: readHeaderTimeout,

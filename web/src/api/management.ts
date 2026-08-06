@@ -133,6 +133,7 @@ export interface User {
   enabled: boolean
   vless?: { uuid: string; flow?: string }
   hysteria2?: { password: string }
+  secrets_set: Record<string, boolean>
   expires_at: string | null
   created_at: string
   updated_at: string

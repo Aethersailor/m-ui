@@ -9,6 +9,7 @@ import CapabilityValueInput from '@/components/CapabilityValueInput.vue'
 import {
   fieldVisible,
   pathValue,
+  secretPathConfigured,
   withPathValue,
 } from '@/utils/schemaForm'
 
@@ -39,7 +40,7 @@ function update(field: FieldCapability, value: unknown) {
 }
 
 function secretStored(field: FieldCapability): boolean {
-  return props.secretsSet[props.secretPathPrefix + field.path] === true
+  return secretPathConfigured(props.secretsSet, field.path, props.secretPathPrefix)
 }
 </script>
 

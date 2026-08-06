@@ -40,6 +40,15 @@ export function maskCredential(value: string): string {
   return `${value.slice(0, 8)}••••${value.slice(-4)}`
 }
 
+export function formatCredentialSummary(
+  value: unknown,
+  configured: boolean,
+  configuredLabel: string,
+): string {
+  if (typeof value === 'string' && value) return maskCredential(value)
+  return configured ? configuredLabel : ''
+}
+
 export async function copyText(value: string): Promise<void> {
   await navigator.clipboard.writeText(value)
 }

@@ -73,8 +73,8 @@ import {
   updateComponentConfig,
 } from '@/utils/capabilities'
 import { errorTranslationKey } from '@/utils/errors'
-import { formatDateTime, maskCredential } from '@/utils/format'
-import { cloneJSONValue, pathValue, withPathValue } from '@/utils/schemaForm'
+import { formatCredentialSummary, formatDateTime } from '@/utils/format'
+import { cloneJSONValue, pathValue, secretPathConfigured, withPathValue } from '@/utils/schemaForm'
 
 const { t, locale } = useI18n()
 const route = useRoute()
@@ -108,6 +108,12 @@ const protocolOptions = computed(() => (capabilities.value?.protocols ?? []).map
 const activeProtocol = computed(() => protocolCapability(capabilities.value, form.protocol))
 const selectedComponents = computed(() => componentSelection(activeProtocol.value, form))
 const primaryUserField = computed(() => activeProtocol.value?.user_fields.find((field) => field.secret) ?? activeProtocol.value?.user_fields[0])
+// User capability paths are rooted in the user payload. Unlike component
+// fields, their secrets_set keys do not need a component path prefix.
+const userSecretPathPrefix = ''
+const editingUserSecrets = computed(() =>
+  node.value?.users.find((user) => user.id === editingUserID.value)?.secrets_set ?? {},
+)
 const allUsersSelected = computed(() => Boolean(node.value?.users.length) && node.value!.users.every((user) => selectedUserIDs.value.includes(user.id)))
 const someUsersSelected = computed(() => node.value?.users.some((user) => selectedUserIDs.value.includes(user.id)) ?? false)
 
@@ -481,7 +487,10 @@ async function openShare(user: User) {
 function credential(user: User): string {
   const field = primaryUserField.value
   const value = field ? pathValue(user, field.path) : undefined
-  return typeof value === 'string' ? value : ''
+  const configured = field?.secret === true
+    ? secretPathConfigured(user.secrets_set, field.path, userSecretPathPrefix)
+    : false
+  return formatCredentialSummary(value, configured, t('users.credentialConfigured'))
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -605,7 +614,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
           </NSpace>
           <NAlert v-if="!node.users.length" type="warning" :bordered="false">{{ t('users.empty') }}</NAlert>
           <div v-else class="table-scroll"><table class="data-table"><thead><tr><th><NCheckbox :checked="allUsersSelected" :indeterminate="someUsersSelected && !allUsersSelected" :aria-label="t('users.selectAll')" @update:checked="toggleAllUsers" /></th><th>{{ t('users.name') }}</th><th>{{ primaryUserField?.label ?? t('nodes.credential') }}</th><th>{{ t('users.expiresAt') }}</th><th>{{ t('users.status') }}</th><th class="actions-cell">{{ t('common.actions') }}</th></tr></thead><tbody>
-            <tr v-for="user in node.users" :key="user.id"><td><NCheckbox :checked="selectedUserIDs.includes(user.id)" :aria-label="t('users.selectUser', { name: user.name })" @update:checked="toggleUserSelection(user.id, $event)" /></td><td><strong>{{ user.name }}</strong></td><td><code>{{ maskCredential(credential(user)) }}</code></td><td>{{ user.expires_at ? formatDateTime(user.expires_at, locale) : t('common.never') }}</td><td><NTag :type="user.enabled ? 'success' : 'default'" :bordered="false">{{ user.enabled ? t('common.enabled') : t('common.disabled') }}</NTag></td><td class="actions-cell"><NSpace justify="end" :wrap="false"><NButton size="small" secondary :disabled="!node.enabled || !user.enabled" @click="openShare(user)">{{ t('users.share') }}</NButton><NButton size="small" @click="openUserEdit(user)">{{ t('common.edit') }}</NButton><NButton size="small" @click="toggleUser(user)">{{ user.enabled ? t('nodes.disable') : t('nodes.enable') }}</NButton><NButton size="small" type="error" secondary @click="confirmDeleteUser(user)">{{ t('common.delete') }}</NButton></NSpace></td></tr>
+            <tr v-for="user in node.users" :key="user.id"><td><NCheckbox :checked="selectedUserIDs.includes(user.id)" :aria-label="t('users.selectUser', { name: user.name })" @update:checked="toggleUserSelection(user.id, $event)" /></td><td><strong>{{ user.name }}</strong></td><td><code>{{ credential(user) }}</code></td><td>{{ user.expires_at ? formatDateTime(user.expires_at, locale) : t('common.never') }}</td><td><NTag :type="user.enabled ? 'success' : 'default'" :bordered="false">{{ user.enabled ? t('common.enabled') : t('common.disabled') }}</NTag></td><td class="actions-cell"><NSpace justify="end" :wrap="false"><NButton size="small" secondary :disabled="!node.enabled || !user.enabled" @click="openShare(user)">{{ t('users.share') }}</NButton><NButton size="small" @click="openUserEdit(user)">{{ t('common.edit') }}</NButton><NButton size="small" @click="toggleUser(user)">{{ user.enabled ? t('nodes.disable') : t('nodes.enable') }}</NButton><NButton size="small" type="error" secondary @click="confirmDeleteUser(user)">{{ t('common.delete') }}</NButton></NSpace></td></tr>
           </tbody></table></div>
         </NCard>
       </NSpin>
@@ -616,6 +625,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
       <CapabilityFields
         :model-value="userProtocolForm"
         :fields="activeProtocol?.user_fields ?? []"
+        :secrets-set="editingUserSecrets"
+        :secret-path-prefix="userSecretPathPrefix"
+        :secret-placeholder="t('nodes.secretStored')"
         show-advanced
         @update:model-value="updateUserProtocol"
       />

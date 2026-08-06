@@ -517,6 +517,7 @@ func (manager *Manager) UpdateUser(
 			if spec.Shadowsocks != nil {
 				updated.Shadowsocks = spec.Shadowsocks
 			}
+			preserveUserSecrets(&updated, current)
 			state.Nodes[nodePosition].Users[userPosition] = updated
 			state.Nodes[nodePosition].Generation++
 			state.Nodes[nodePosition].UpdatedAt = now
@@ -524,6 +525,24 @@ func (manager *Manager) UpdateUser(
 		},
 	)
 	return updated, revision, err
+}
+
+func preserveUserSecrets(updated *domain.NodeUser, current domain.NodeUser) {
+	if updated.VLESS != nil && current.VLESS != nil && updated.VLESS.UUID == "" {
+		updated.VLESS.UUID = current.VLESS.UUID
+	}
+	if updated.Hysteria2 != nil && current.Hysteria2 != nil && updated.Hysteria2.Password == "" {
+		updated.Hysteria2.Password = current.Hysteria2.Password
+	}
+	if updated.VMess != nil && current.VMess != nil && updated.VMess.UUID == "" {
+		updated.VMess.UUID = current.VMess.UUID
+	}
+	if updated.Trojan != nil && current.Trojan != nil && updated.Trojan.Password == "" {
+		updated.Trojan.Password = current.Trojan.Password
+	}
+	if updated.Shadowsocks != nil && current.Shadowsocks != nil && updated.Shadowsocks.Password == "" {
+		updated.Shadowsocks.Password = current.Shadowsocks.Password
+	}
 }
 
 func (manager *Manager) DeleteUser(

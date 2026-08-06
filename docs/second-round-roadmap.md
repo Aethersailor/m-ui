@@ -67,6 +67,9 @@
 
 ### R3 验收结果
 
+破坏性节点模型升级的保留/重置边界、baseline publication、恢复单元和真实浏览器门禁见
+[R3 数据切换与上线合同](r3-cutover-contract.md)。
+
 - Go 全量测试、race detector、`go vet`、`webembed` 构建标签测试，以及 Web 单元测试、
   Lint、类型检查和生产构建通过；
 - Debian WSL 上使用 Mihomo Meta `v1.19.29`，验证五 Listener 服务端配置及其五份

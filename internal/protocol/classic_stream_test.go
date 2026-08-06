@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"net/url"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -160,6 +161,12 @@ func TestNewProtocolCapabilitiesAreSelfMounted(t *testing.T) {
 	for _, field := range vmessTLS.Fields {
 		if field.Path == "tls.allow_insecure" {
 			t.Fatal("VMess exposed unsupported listener allow-insecure")
+		}
+	}
+	for _, kind := range []domain.ProtocolKind{domain.ProtocolVMess, domain.ProtocolTrojan} {
+		websocket := componentByKind(t, protocolByKind(t, manifest, kind), ComponentTransport, "websocket")
+		if !slices.Contains(websocket.Conflicts, "security:reality") {
+			t.Fatalf("%s WebSocket capability does not reject unsupported REALITY client combination: %#v", kind, websocket.Conflicts)
 		}
 	}
 }

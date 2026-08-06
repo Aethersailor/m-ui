@@ -40,6 +40,4 @@ else
 fi
 
 M_UI_TEST_MIHOMO_BINARY="$mihomo_binary" \
-    go test ./internal/integration \
-    -run '^TestGeneratedServerAndClientConfigurationsWithRealMihomo$' \
-    -count=1 -v
+    go test ./internal/integration -count=1 -timeout=10m -v

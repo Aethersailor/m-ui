@@ -1161,6 +1161,213 @@ func TestStartupIntegrityUsesTheActiveRevisionEffectiveTime(t *testing.T) {
 	}
 }
 
+func TestR3CutoverInstallsAndConvergesEmptyBaselineInRealSQLite(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	directory := t.TempDir()
+	database, err := store.Open(ctx, filepath.Join(directory, "m-ui.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	sealer, err := muicrypto.NewSealer(muicrypto.MasterKey{31, 32, 33})
+	if err != nil {
+		t.Fatal(err)
+	}
+	repository, err := store.NewManagedStore(database, sealer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	emptyState := publisherState("removed-by-cutover", 443)
+	emptyState.Nodes = nil
+	transaction, err := repository.BeginImmediate(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := transaction.ReplaceDesiredState(ctx, emptyState); err != nil {
+		t.Fatal(err)
+	}
+	if err := transaction.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	staleYAML, err := (YAMLCompiler{}).Compile(ctx, publisherState("stale-listener", 443))
+	if err != nil {
+		t.Fatal(err)
+	}
+	emptyYAML, err := (YAMLCompiler{}).Compile(ctx, emptyState)
+	if err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(directory, "mihomo", "config.yaml")
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(configPath, staleYAML, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	cli := &fakeCLI{}
+	controller := &fakeController{}
+	process := &fakeProcess{active: true}
+	instance, err := New(
+		repository,
+		YAMLCompiler{},
+		cli,
+		controller,
+		process,
+		Options{
+			ConfigPath:        configPath,
+			RevisionDirectory: filepath.Join(directory, "revisions"),
+			HistoryLimit:      20,
+			HealthTimeout:     50 * time.Millisecond,
+			HealthInterval:    time.Millisecond,
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := emptyState.AsOf.Add(time.Minute)
+	instance.now = func() time.Time { return now }
+
+	if _, err := instance.Publish(ctx, Request{
+		Reason: "must remain blocked",
+		Mutate: func(context.Context, store.PublicationTransaction) error {
+			return nil
+		},
+	}); !errors.Is(err, ErrRuntimeConvergence) {
+		t.Fatalf("ordinary Publish() error = %v, want ErrRuntimeConvergence", err)
+	}
+	if err := instance.ReconcileStartupBeforeRuntime(ctx); err != nil {
+		t.Fatalf("ReconcileStartupBeforeRuntime() error = %v", err)
+	}
+	activeYAML, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(activeYAML) != string(emptyYAML) || !strings.Contains(string(activeYAML), "listeners: []") {
+		t.Fatalf("pre-runtime active YAML is not the empty baseline:\n%s", activeYAML)
+	}
+	if controller.reloadCount() != 0 {
+		t.Fatal("pre-runtime convergence touched the Mihomo runtime")
+	}
+	convergence, err := repository.RuntimeConvergenceState(ctx)
+	if err != nil || !convergence.R3CutoverPending {
+		t.Fatalf("pre-runtime convergence state = %#v, %v", convergence, err)
+	}
+	revisions, err := repository.Revisions(ctx, 10, 0)
+	if err != nil || len(revisions) != 1 || revisions[0].Status != domain.RevisionActive ||
+		revisions[0].Reason != r3CutoverBaselineReason {
+		t.Fatalf("pre-runtime baseline revisions = %#v, %v", revisions, err)
+	}
+	if err := instance.ReconcileStartupBeforeRuntime(ctx); err != nil {
+		t.Fatalf("idempotent pre-runtime reconciliation error = %v", err)
+	}
+	revisions, err = repository.Revisions(ctx, 10, 0)
+	if err != nil || len(revisions) != 1 {
+		t.Fatalf("idempotent pre-runtime revisions = %#v, %v", revisions, err)
+	}
+
+	if err := instance.ReconcileStartup(ctx); err != nil {
+		t.Fatalf("post-runtime ReconcileStartup() error = %v", err)
+	}
+	if controller.reloadCount() != 1 || cli.calls.Load() != 2 {
+		t.Fatalf("validation/reload calls = %d/%d, want 2/1", cli.calls.Load(), controller.reloadCount())
+	}
+	convergence, err = repository.RuntimeConvergenceState(ctx)
+	if err != nil || convergence.R3CutoverPending {
+		t.Fatalf("completed convergence state = %#v, %v", convergence, err)
+	}
+	systemState, err := repository.SystemState(ctx)
+	if err != nil || systemState.Degraded {
+		t.Fatalf("completed system state = %#v, %v", systemState, err)
+	}
+	if err := instance.ReconcileStartup(ctx); err != nil {
+		t.Fatalf("idempotent post-runtime reconciliation error = %v", err)
+	}
+	if controller.reloadCount() != 1 {
+		t.Fatal("completed convergence reloaded Mihomo again")
+	}
+}
+
+func TestR3CutoverFailureStaysPendingAndRetryConverges(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	directory := t.TempDir()
+	database, err := store.Open(ctx, filepath.Join(directory, "m-ui.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	sealer, err := muicrypto.NewSealer(muicrypto.MasterKey{34, 35, 36})
+	if err != nil {
+		t.Fatal(err)
+	}
+	repository, err := store.NewManagedStore(database, sealer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	emptyState := publisherState("removed-by-cutover", 443)
+	emptyState.Nodes = nil
+	transaction, err := repository.BeginImmediate(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := transaction.ReplaceDesiredState(ctx, emptyState); err != nil {
+		t.Fatal(err)
+	}
+	if err := transaction.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(directory, "mihomo", "config.yaml")
+	cli := &fakeCLI{validateErr: errors.New("synthetic invalid baseline")}
+	instance, err := New(
+		repository,
+		YAMLCompiler{},
+		cli,
+		&fakeController{},
+		&fakeProcess{active: true},
+		Options{
+			ConfigPath:        configPath,
+			RevisionDirectory: filepath.Join(directory, "revisions"),
+			HistoryLimit:      20,
+			HealthTimeout:     50 * time.Millisecond,
+			HealthInterval:    time.Millisecond,
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	instance.now = func() time.Time { return emptyState.AsOf.Add(time.Minute) }
+
+	if err := instance.ReconcileStartupBeforeRuntime(ctx); !errors.Is(err, ErrStartupDegraded) {
+		t.Fatalf("failed cutover error = %v, want ErrStartupDegraded", err)
+	}
+	convergence, err := repository.RuntimeConvergenceState(ctx)
+	if err != nil || !convergence.R3CutoverPending {
+		t.Fatalf("failed convergence state = %#v, %v", convergence, err)
+	}
+	systemState, err := repository.SystemState(ctx)
+	if err != nil || !systemState.Degraded ||
+		!strings.HasPrefix(systemState.DegradedReason, store.R3ProtocolCutoverReason+":") {
+		t.Fatalf("failed system state = %#v, %v", systemState, err)
+	}
+
+	cli.validateErr = nil
+	if err := instance.ReconcileStartupBeforeRuntime(ctx); err != nil {
+		t.Fatalf("retry pre-runtime reconciliation error = %v", err)
+	}
+	if err := instance.ReconcileStartup(ctx); err != nil {
+		t.Fatalf("retry post-runtime reconciliation error = %v", err)
+	}
+	convergence, err = repository.RuntimeConvergenceState(ctx)
+	if err != nil || convergence.R3CutoverPending {
+		t.Fatalf("retried convergence state = %#v, %v", convergence, err)
+	}
+	systemState, err = repository.SystemState(ctx)
+	if err != nil || systemState.Degraded {
+		t.Fatalf("retried system state = %#v, %v", systemState, err)
+	}
+}
+
 type sqliteReconciliationFixture struct {
 	database      *store.Store
 	repository    *store.ManagedStore
@@ -1195,6 +1402,11 @@ func newSQLiteReconciliationFixture(t *testing.T) sqliteReconciliationFixture {
 	}
 	repository, err := store.NewManagedStore(database, sealer)
 	if err != nil {
+		t.Fatal(err)
+	}
+	// Ordinary Publisher integrity scenarios start after production startup
+	// convergence. Dedicated tests below retain the fresh 0008 marker.
+	if err := repository.CompleteR3ProtocolCutover(ctx, time.Now().UTC()); err != nil {
 		t.Fatal(err)
 	}
 	initialState := publisherState("old", 443)

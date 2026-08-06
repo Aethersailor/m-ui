@@ -522,6 +522,9 @@ func validateVMess(spec VMessSpec) error {
 		oneOf(string(spec.Security.Type), string(VLESSSecurityShadowTLS), string(VLESSSecurityResTLS), string(VLESSSecurityJLS)) {
 		validationErrors = append(validationErrors, errors.New("VMess mKCP does not support ShadowTLS, ResTLS, or JLS security"))
 	}
+	if spec.Handler.Type == VLESSHandlerWebSocket && spec.Security.Type == VLESSSecurityReality {
+		validationErrors = append(validationErrors, errors.New("Mihomo VMess WebSocket client does not apply REALITY security"))
+	}
 	return errors.Join(validationErrors...)
 }
 
@@ -544,6 +547,9 @@ func validateTrojan(spec TrojanSpec) error {
 		if strings.TrimSpace(spec.Shadowsocks.Password) == "" {
 			validationErrors = append(validationErrors, errors.New("Trojan Shadowsocks password is required when enabled"))
 		}
+	}
+	if spec.Handler.Type == VLESSHandlerWebSocket && spec.Security.Type == VLESSSecurityReality {
+		validationErrors = append(validationErrors, errors.New("Mihomo Trojan WebSocket client does not apply REALITY security"))
 	}
 	return errors.Join(validationErrors...)
 }

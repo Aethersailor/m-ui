@@ -2,7 +2,9 @@ package httpapi
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -57,6 +59,31 @@ func TestHealth(t *testing.T) {
 	}
 	if body.Time.IsZero() {
 		t.Fatal("health time is zero")
+	}
+}
+
+func TestHealthIsNotReadyWhileRuntimeConvergenceIsPending(t *testing.T) {
+	t.Parallel()
+	handler := New(Options{
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Ready: func(context.Context) error {
+			return errors.New("runtime convergence pending")
+		},
+	})
+	request := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	response := httptest.NewRecorder()
+
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusServiceUnavailable)
+	}
+	var body healthResponse
+	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Status != "not_ready" {
+		t.Fatalf("health status = %q, want not_ready", body.Status)
 	}
 }
 

@@ -8,6 +8,7 @@ import {
   setNodesEnabled,
   setUsersEnabled,
   updateCore,
+  updateUser,
 } from './management'
 
 describe('management API', () => {
@@ -137,5 +138,44 @@ describe('management API', () => {
       { path: '/api/v1/nodes/node-1/users/batch', method: 'POST', body: { users: [{ name: 'alice', enabled: true, expires_at: null, future: { token: '' } }] } },
       { path: '/api/v1/nodes/node-1/users/batch-enabled', method: 'POST', body: { user_ids: ['user-1'], enabled: true } },
     ])
+  })
+
+  it('keeps an empty stored secret in the user update payload', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({
+        user: {
+          id: 'user-1',
+          node_id: 'node-1',
+          name: 'alice',
+          enabled: true,
+          trojan: { password: '' },
+          secrets_set: { 'trojan.password': true },
+          expires_at: null,
+          created_at: '2026-08-06T00:00:00Z',
+          updated_at: '2026-08-06T00:00:00Z',
+        },
+      }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const user = await updateUser('csrf', 'node-1', 'user-1', {
+      name: 'alice',
+      enabled: true,
+      trojan: { password: '' },
+      expires_at: null,
+    })
+
+    const [path, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(path).toBe('/api/v1/nodes/node-1/users/user-1')
+    expect(JSON.parse(String(init.body))).toEqual({
+      name: 'alice',
+      enabled: true,
+      trojan: { password: '' },
+      expires_at: null,
+    })
+    expect(user.secrets_set).toEqual({ 'trojan.password': true })
   })
 })

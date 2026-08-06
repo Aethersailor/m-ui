@@ -8,8 +8,10 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"math/big"
 	"net"
 	"net/http"
@@ -21,13 +23,16 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	muicrypto "github.com/Aethersailor/m-ui/internal/crypto"
 	"github.com/Aethersailor/m-ui/internal/domain"
 	"github.com/Aethersailor/m-ui/internal/mihomo"
 	"github.com/Aethersailor/m-ui/internal/publisher"
 	"github.com/Aethersailor/m-ui/internal/service"
+	"github.com/Aethersailor/m-ui/internal/store"
 )
 
 func TestGeneratedServerAndClientConfigurationsWithRealMihomo(t *testing.T) {
@@ -171,6 +176,11 @@ func TestGeneratedHysteria2ConfigurationsWithRealMihomo(t *testing.T) {
 				ALPN: []string{"h3"}, Up: "100 Mbps", Down: "100 Mbps",
 				UDPMTU: 1200, InitialStreamReceiveWindow: 8388608,
 				MaxStreamReceiveWindow: 8388608,
+				Realm: &domain.Hysteria2RealmConfig{
+					Enabled: true, ServerURL: "https://realm.example.com", Token: "hysteria2-realm-token",
+					RealmID: "edge-a", STUNServers: []string{"stun.example.com:3478"},
+					ServerName: "realm.example.com", SkipCertVerify: true, ALPN: []string{"h3"},
+				},
 			},
 			Users: []domain.NodeUser{{
 				ID: userID, NodeID: nodeID, Name: "alice", Enabled: true,
@@ -194,7 +204,7 @@ func TestGeneratedHysteria2ConfigurationsWithRealMihomo(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewCLI() error = %v", err)
 	}
-	sensitive := []string{state.ControllerSecret, "hysteria2-obfs-secret", "hysteria2-user-secret"}
+	sensitive := []string{state.ControllerSecret, "hysteria2-obfs-secret", "hysteria2-user-secret", "hysteria2-realm-token"}
 	validateWithMihomo(t, ctx, cli, directory, "hysteria2-server.yaml", serverYAML, sensitive)
 	clientYAML := []byte(share.ClientYAML + "rules:\n  - MATCH,DIRECT\n")
 	validateWithMihomo(t, ctx, cli, directory, "hysteria2-client.yaml", clientYAML, sensitive)
@@ -289,12 +299,204 @@ func TestGeneratedR3ProtocolConfigurationsWithRealMihomo(t *testing.T) {
 	secrets := []string{"r3-integration-controller-secret", "r3-mkcp-seed", "r3-trojan-password", "r3-legacy-ss-password"}
 	validateWithMihomo(t, ctx, cli, directory, "r3-server.yaml", serverYAML, secrets)
 	for index := range state.Nodes {
-		share, err := service.BuildShare(state, nodeIDs[index], userIDs[index])
-		if err != nil {
-			t.Fatalf("build %s client YAML: %v", state.Nodes[index].Name, err)
-		}
-		clientYAML := []byte(share.ClientYAML + "rules:\n  - MATCH,DIRECT\n")
-		validateWithMihomo(t, ctx, cli, directory, state.Nodes[index].Name+"-client.yaml", clientYAML, secrets)
+		index := index
+		t.Run(state.Nodes[index].Name, func(t *testing.T) {
+			share, err := service.BuildShare(state, nodeIDs[index], userIDs[index])
+			if err != nil {
+				t.Fatalf("build client YAML: %v", err)
+			}
+			clientYAML := []byte(share.ClientYAML + "rules:\n  - MATCH,DIRECT\n")
+			validateWithMihomo(t, ctx, cli, directory, state.Nodes[index].Name+"-client.yaml", clientYAML, secrets)
+		})
+	}
+}
+
+func TestGeneratedShadowsocksSecurityPluginsWithRealMihomo(t *testing.T) {
+	binary := os.Getenv("M_UI_TEST_MIHOMO_BINARY")
+	if binary == "" {
+		t.Skip("M_UI_TEST_MIHOMO_BINARY is not set")
+	}
+	cli, err := mihomo.NewCLI(binary)
+	if err != nil {
+		t.Fatalf("NewCLI() error = %v", err)
+	}
+	type variant struct {
+		name     string
+		security domain.VLESSSecuritySpec
+		secrets  []string
+	}
+	variants := []variant{
+		{
+			name: "shadow-tls-v3",
+			security: domain.VLESSSecuritySpec{Type: domain.VLESSSecurityShadowTLS, ShadowTLS: &domain.ShadowTLSConfig{
+				Version:   3,
+				Users:     []domain.ShadowTLSUser{{Name: "alice", Password: "plugin-shadow-tls-password"}},
+				Handshake: domain.ShadowTLSHandshake{Destination: "www.example.com:443"},
+			}},
+			secrets: []string{"plugin-shadow-tls-password"},
+		},
+		{
+			name: "restls",
+			security: domain.VLESSSecuritySpec{Type: domain.VLESSSecurityResTLS, ResTLS: &domain.ResTLSConfig{
+				Destination: "www.example.com:443", Password: "plugin-restls-password", VersionHint: "tls13",
+			}},
+			secrets: []string{"plugin-restls-password"},
+		},
+		{
+			name: "jls",
+			security: domain.VLESSSecuritySpec{Type: domain.VLESSSecurityJLS, JLS: &domain.JLSConfig{
+				Destination: "www.example.com:443", ServerName: "www.example.com", ALPN: []string{"h2"},
+				Users: []domain.JLSUser{{Username: "alice", Password: "plugin-jls-password"}},
+			}},
+			secrets: []string{"plugin-jls-password"},
+		},
+	}
+	for index, current := range variants {
+		current := current
+		t.Run(current.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			directory := t.TempDir()
+			nodeID := "b658d301-81c8-48f0-b681-b3ff0d96d99f"
+			userID := "846726df-c9d3-4076-be2f-ef31989aa2ba"
+			state := domain.DesiredState{
+				AsOf:                         time.Date(2026, time.August, 6, 12, 0, 0, 0, time.UTC),
+				MihomoExternalControllerBind: domain.Endpoint{Host: "127.0.0.1", Port: uint16(39200 + index)},
+				MihomoControllerConnect:      domain.Endpoint{Host: "127.0.0.1", Port: uint16(39200 + index)},
+				ControllerSecret:             "plugin-controller-secret", PublicHost: "127.0.0.1",
+				Nodes: []domain.Node{{
+					ID: nodeID, Name: "ss-" + current.name, Enabled: true, ListenAddress: "127.0.0.1", Port: strconv.Itoa(32200 + index),
+					Protocol: domain.ProtocolShadowsocks, SchemaVersion: domain.NodeSchemaVersion, Generation: 1,
+					Shadowsocks: &domain.ShadowsocksSpec{Cipher: "aes-128-gcm", UDP: true, Security: current.security},
+					Users:       []domain.NodeUser{{ID: userID, NodeID: nodeID, Name: "alice", Enabled: true, Shadowsocks: &domain.ShadowsocksCredential{Password: "plugin-ss-password"}}},
+					AccessProfiles: []domain.AccessProfile{{
+						ID: "2b6c8248-cefb-45ad-8767-4f28df86c03a", NodeID: nodeID, Name: "default", Default: true,
+						PublicHost: "127.0.0.1", PublicPort: uint16(32200 + index), ServerName: "www.example.com",
+						Fingerprint: domain.ClientFingerprint, AllowInsecure: true,
+					}},
+				}},
+			}
+			serverYAML, err := (publisher.YAMLCompiler{}).Compile(ctx, state)
+			if err != nil {
+				t.Fatalf("compile %s server YAML: %v", current.name, err)
+			}
+			share, err := service.BuildShare(state, nodeID, userID)
+			if err != nil {
+				t.Fatalf("compile %s client YAML: %v", current.name, err)
+			}
+			secrets := append([]string{"plugin-controller-secret", "plugin-ss-password"}, current.secrets...)
+			validateWithMihomo(t, ctx, cli, directory, current.name+"-server.yaml", serverYAML, secrets)
+			clientYAML := []byte(share.ClientYAML + "rules:\n  - MATCH,DIRECT\n")
+			validateWithMihomo(t, ctx, cli, directory, current.name+"-client.yaml", clientYAML, secrets)
+		})
+	}
+}
+
+func TestGeneratedCoreCipherOptionsWithRealMihomo(t *testing.T) {
+	binary := os.Getenv("M_UI_TEST_MIHOMO_BINARY")
+	if binary == "" {
+		t.Skip("M_UI_TEST_MIHOMO_BINARY is not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	cli, err := mihomo.NewCLI(binary)
+	if err != nil {
+		t.Fatalf("NewCLI() error = %v", err)
+	}
+	certificateRoot := t.TempDir()
+	certificatePath, privateKeyPath := writeTestCertificate(t, certificateRoot)
+
+	type cipherScenario struct {
+		protocol domain.ProtocolKind
+		option   string
+	}
+	var scenarios []cipherScenario
+	for _, option := range []string{"auto", "aes-128-gcm", "chacha20-poly1305", "none", "zero"} {
+		scenarios = append(scenarios, cipherScenario{protocol: domain.ProtocolVMess, option: option})
+	}
+	for _, option := range []string{
+		"2022-blake3-aes-128-gcm", "2022-blake3-aes-256-gcm", "2022-blake3-chacha20-poly1305",
+		"aes-128-gcm", "aes-192-gcm", "aes-256-gcm", "chacha20-ietf-poly1305", "none", "xchacha20-ietf-poly1305",
+	} {
+		scenarios = append(scenarios, cipherScenario{protocol: domain.ProtocolShadowsocks, option: option})
+	}
+	for _, option := range []string{"aes-128-gcm", "aes-256-gcm", "chacha20-ietf-poly1305"} {
+		scenarios = append(scenarios, cipherScenario{protocol: domain.ProtocolTrojan, option: option})
+	}
+
+	for _, current := range scenarios {
+		current := current
+		t.Run(string(current.protocol)+"/"+current.option, func(t *testing.T) {
+			directory := t.TempDir()
+			nodeID := "a893a54c-c1e8-4a2b-8c70-e7432b6ed82e"
+			userID := "aee77e49-91ca-4f09-9233-fce79165c580"
+			node := domain.Node{
+				ID: nodeID, Name: "cipher-option", Enabled: true, ListenAddress: "127.0.0.1", Port: "32443",
+				Protocol: current.protocol, SchemaVersion: domain.NodeSchemaVersion, Generation: 1,
+				AccessProfiles: []domain.AccessProfile{{
+					ID: "b41d0c45-e1f9-4254-8c15-17656a453d58", NodeID: nodeID, Name: "default", Default: true,
+					PublicHost: "127.0.0.1", PublicPort: 32443, ServerName: "hy2.example.com", AllowInsecure: true,
+				}},
+			}
+			user := domain.NodeUser{ID: userID, NodeID: nodeID, Name: "cipher-user", Enabled: true}
+			sensitive := []string{"cipher-controller-secret"}
+			switch current.protocol {
+			case domain.ProtocolVMess:
+				node.VMess = &domain.VMessSpec{
+					Handler:  domain.VLESSHandlerSpec{Type: domain.VLESSHandlerRaw},
+					Security: domain.VLESSSecuritySpec{Type: domain.VLESSSecurityNone},
+				}
+				user.VMess = &domain.VMessCredential{UUID: "4f49ba3b-0bca-4117-9bd1-5a9c1ec6b31b", Cipher: current.option}
+				sensitive = append(sensitive, user.VMess.UUID)
+			case domain.ProtocolShadowsocks:
+				node.Shadowsocks = &domain.ShadowsocksSpec{
+					Cipher: current.option, UDP: true,
+					Security: domain.VLESSSecuritySpec{Type: domain.VLESSSecurityNone},
+				}
+				password := "cipher-legacy-password"
+				if strings.HasPrefix(current.option, "2022-blake3-aes-128") {
+					password = "MDEyMzQ1Njc4OWFiY2RlZg=="
+				} else if strings.HasPrefix(current.option, "2022-blake3-") {
+					password = "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="
+				}
+				user.Shadowsocks = &domain.ShadowsocksCredential{Password: password}
+				sensitive = append(sensitive, password)
+			case domain.ProtocolTrojan:
+				node.Trojan = &domain.TrojanSpec{
+					Handler: domain.VLESSHandlerSpec{Type: domain.VLESSHandlerRaw},
+					Security: domain.VLESSSecuritySpec{Type: domain.VLESSSecurityTLS, TLS: &domain.TLSConfig{
+						Certificate: certificatePath, PrivateKey: privateKeyPath,
+					}},
+					Shadowsocks: domain.TrojanShadowsocksSpec{
+						Enabled: true, Method: current.option, Password: "cipher-wrapper-password",
+					},
+				}
+				user.Trojan = &domain.TrojanCredential{Password: "cipher-trojan-password"}
+				sensitive = append(sensitive, node.Trojan.Shadowsocks.Password, user.Trojan.Password)
+			default:
+				t.Fatalf("unsupported cipher scenario protocol %q", current.protocol)
+			}
+			node.Users = []domain.NodeUser{user}
+			state := domain.DesiredState{
+				AsOf:                         time.Date(2026, time.August, 6, 12, 0, 0, 0, time.UTC),
+				MihomoExternalControllerBind: domain.Endpoint{Host: "127.0.0.1", Port: 39400},
+				MihomoControllerConnect:      domain.Endpoint{Host: "127.0.0.1", Port: 39400},
+				ControllerSecret:             "cipher-controller-secret", PublicHost: "127.0.0.1",
+				Nodes: []domain.Node{node},
+			}
+			serverYAML, err := (publisher.YAMLCompiler{}).Compile(ctx, state)
+			if err != nil {
+				t.Fatalf("compile server YAML: %v", err)
+			}
+			share, err := service.BuildShare(state, nodeID, userID)
+			if err != nil {
+				t.Fatalf("compile client YAML: %v", err)
+			}
+			name := string(current.protocol) + "-" + current.option
+			validateWithMihomo(t, ctx, cli, directory, name+"-server.yaml", serverYAML, sensitive)
+			clientYAML := []byte(share.ClientYAML + "rules:\n  - MATCH,DIRECT\n")
+			validateWithMihomo(t, ctx, cli, directory, name+"-client.yaml", clientYAML, sensitive)
+		})
 	}
 }
 
@@ -310,19 +512,65 @@ func TestR3ProtocolsTransferDataWithRealMihomo(t *testing.T) {
 	defer echo.Close()
 
 	type scenario struct {
-		name     string
-		protocol domain.ProtocolKind
-		build    func(string, string) (*domain.Node, string)
+		name        string
+		protocol    domain.ProtocolKind
+		udpListener bool
+		build       func(string, string) (*domain.Node, string)
 	}
 	scenarios := []scenario{
 		{
-			name: "vmess-mkcp", protocol: domain.ProtocolVMess,
+			name: "vmess-raw", protocol: domain.ProtocolVMess,
+			build: func(_, _ string) (*domain.Node, string) {
+				return &domain.Node{VMess: &domain.VMessSpec{
+					Handler:  domain.VLESSHandlerSpec{Type: domain.VLESSHandlerRaw},
+					Security: domain.VLESSSecuritySpec{Type: domain.VLESSSecurityNone},
+				}}, ""
+			},
+		},
+		{
+			name: "vmess-mkcp", protocol: domain.ProtocolVMess, udpListener: true,
 			build: func(_, _ string) (*domain.Node, string) {
 				return &domain.Node{VMess: &domain.VMessSpec{
 					Handler: domain.VLESSHandlerSpec{Type: domain.VMessHandlerMKCP, MKCP: &domain.MKCPConfig{
 						MTU: 1350, TTI: 50, UplinkCapacity: 5, DownlinkCapacity: 20,
 						WriteBuffer: 2097152, ReadBuffer: 2097152, Seed: "transfer-mkcp-seed", Header: "wireguard",
 					}}, Security: domain.VLESSSecuritySpec{Type: domain.VLESSSecurityNone},
+				}}, ""
+			},
+		},
+		{
+			name: "vmess-mkcp-tls", protocol: domain.ProtocolVMess, udpListener: true,
+			build: func(certificate, privateKey string) (*domain.Node, string) {
+				return &domain.Node{VMess: &domain.VMessSpec{
+					Handler: domain.VLESSHandlerSpec{Type: domain.VMessHandlerMKCP, MKCP: &domain.MKCPConfig{
+						MTU: 1350, TTI: 50, UplinkCapacity: 5, DownlinkCapacity: 20,
+						WriteBuffer: 2097152, ReadBuffer: 2097152, Seed: "transfer-mkcp-tls-seed", Header: "srtp",
+					}},
+					Security: domain.VLESSSecuritySpec{Type: domain.VLESSSecurityTLS, TLS: &domain.TLSConfig{
+						Certificate: certificate, PrivateKey: privateKey,
+					}},
+				}}, ""
+			},
+		},
+		{
+			name: "vmess-websocket-tls", protocol: domain.ProtocolVMess,
+			build: func(certificate, privateKey string) (*domain.Node, string) {
+				return &domain.Node{VMess: &domain.VMessSpec{
+					Handler: domain.VLESSHandlerSpec{Type: domain.VLESSHandlerWebSocket, WebSocket: &domain.WebSocketSpec{Path: "/vmess-websocket"}},
+					Security: domain.VLESSSecuritySpec{Type: domain.VLESSSecurityTLS, TLS: &domain.TLSConfig{
+						Certificate: certificate, PrivateKey: privateKey,
+					}},
+				}}, ""
+			},
+		},
+		{
+			name: "vmess-grpc-tls", protocol: domain.ProtocolVMess,
+			build: func(certificate, privateKey string) (*domain.Node, string) {
+				return &domain.Node{VMess: &domain.VMessSpec{
+					Handler: domain.VLESSHandlerSpec{Type: domain.VLESSHandlerGRPC, GRPC: &domain.GRPCSpec{ServiceName: "vmess-grpc"}},
+					Security: domain.VLESSSecuritySpec{Type: domain.VLESSSecurityTLS, TLS: &domain.TLSConfig{
+						Certificate: certificate, PrivateKey: privateKey,
+					}},
 				}}, ""
 			},
 		},
@@ -338,12 +586,44 @@ func TestR3ProtocolsTransferDataWithRealMihomo(t *testing.T) {
 			},
 		},
 		{
+			name: "trojan-websocket-tls", protocol: domain.ProtocolTrojan,
+			build: func(certificate, privateKey string) (*domain.Node, string) {
+				return &domain.Node{Trojan: &domain.TrojanSpec{
+					Handler: domain.VLESSHandlerSpec{Type: domain.VLESSHandlerWebSocket, WebSocket: &domain.WebSocketSpec{Path: "/trojan-websocket"}},
+					Security: domain.VLESSSecuritySpec{Type: domain.VLESSSecurityTLS, TLS: &domain.TLSConfig{
+						Certificate: certificate, PrivateKey: privateKey,
+					}},
+				}}, "transfer-trojan-password"
+			},
+		},
+		{
+			name: "trojan-grpc-tls", protocol: domain.ProtocolTrojan,
+			build: func(certificate, privateKey string) (*domain.Node, string) {
+				return &domain.Node{Trojan: &domain.TrojanSpec{
+					Handler: domain.VLESSHandlerSpec{Type: domain.VLESSHandlerGRPC, GRPC: &domain.GRPCSpec{ServiceName: "trojan-grpc"}},
+					Security: domain.VLESSSecuritySpec{Type: domain.VLESSSecurityTLS, TLS: &domain.TLSConfig{
+						Certificate: certificate, PrivateKey: privateKey,
+					}},
+				}}, "transfer-trojan-password"
+			},
+		},
+		{
 			name: "shadowsocks-2022", protocol: domain.ProtocolShadowsocks,
 			build: func(_, _ string) (*domain.Node, string) {
 				return &domain.Node{Shadowsocks: &domain.ShadowsocksSpec{
 					Cipher: "2022-blake3-aes-256-gcm", UDP: true,
 					Security: domain.VLESSSecuritySpec{Type: domain.VLESSSecurityNone},
 				}}, "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="
+			},
+		},
+		{
+			name: "shadowsocks-simple-obfs", protocol: domain.ProtocolShadowsocks,
+			build: func(_, _ string) (*domain.Node, string) {
+				return &domain.Node{Shadowsocks: &domain.ShadowsocksSpec{
+					Cipher: "aes-128-gcm", UDP: false,
+					Security:   domain.VLESSSecuritySpec{Type: domain.VLESSSecurityNone},
+					SimpleObfs: domain.SimpleObfsSpec{Enabled: true, Mode: "http"},
+				}}, "transfer-simple-obfs-password"
 			},
 		},
 	}
@@ -356,7 +636,7 @@ func TestR3ProtocolsTransferDataWithRealMihomo(t *testing.T) {
 			clientDirectory := t.TempDir()
 			certificatePath, privateKeyPath := writeTestCertificate(t, serverDirectory)
 			nodePort := availableTCPPortForHost(t, "127.0.0.1")
-			if current.protocol == domain.ProtocolVMess {
+			if current.udpListener {
 				nodePort = availableUDPPortForHost(t, "127.0.0.1")
 			}
 			controllerPort := availableTCPPortForHost(t, "127.0.0.1")
@@ -401,7 +681,7 @@ func TestR3ProtocolsTransferDataWithRealMihomo(t *testing.T) {
 			clientYAML := []byte(share.ClientYAML + fmt.Sprintf(
 				"mixed-port: %d\nmode: rule\nrules:\n  - MATCH,%s\n", clientPort, proxyName,
 			))
-			secrets := []string{"transfer-controller-secret", credential, "transfer-mkcp-seed"}
+			secrets := []string{"transfer-controller-secret", credential, "transfer-mkcp-seed", "transfer-mkcp-tls-seed"}
 			cli, err := mihomo.NewCLI(binary)
 			if err != nil {
 				t.Fatal(err)
@@ -445,6 +725,147 @@ func TestR3ProtocolsTransferDataWithRealMihomo(t *testing.T) {
 	}
 }
 
+func TestR3CutoverReloadsEmptyBaselineAndClosesLegacyListenerWithRealMihomo(t *testing.T) {
+	binary := os.Getenv("M_UI_TEST_MIHOMO_BINARY")
+	if binary == "" {
+		t.Skip("M_UI_TEST_MIHOMO_BINARY is not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	directory := t.TempDir()
+	controllerPort := availableTCPPortForHost(t, "127.0.0.1")
+	legacyPort := availableTCPPortForHost(t, "127.0.0.1")
+	controllerSecret := "r3-cutover-controller-secret"
+	nodeID := "1d66931d-c7ee-4028-bdbd-e9aa97a48013"
+	state := domain.DesiredState{
+		AsOf:                         time.Date(2026, time.August, 6, 12, 0, 0, 0, time.UTC),
+		MihomoExternalControllerBind: domain.Endpoint{Host: "127.0.0.1", Port: uint16(controllerPort)},
+		MihomoControllerConnect:      domain.Endpoint{Host: "127.0.0.1", Port: uint16(controllerPort)},
+		ControllerSecret:             controllerSecret,
+		PublicHost:                   "127.0.0.1",
+		Nodes: []domain.Node{{
+			ID: nodeID, Name: "legacy-runtime-listener", Enabled: true,
+			ListenAddress: "127.0.0.1", Port: strconv.Itoa(legacyPort),
+			Protocol: domain.ProtocolVMess, SchemaVersion: domain.NodeSchemaVersion, Generation: 1,
+			VMess: &domain.VMessSpec{
+				Handler:  domain.VLESSHandlerSpec{Type: domain.VLESSHandlerRaw},
+				Security: domain.VLESSSecuritySpec{Type: domain.VLESSSecurityNone},
+			},
+			Users: []domain.NodeUser{{
+				ID: "3f67885d-3d5c-4789-b1f6-027087f1bf32", NodeID: nodeID,
+				Name: "legacy", Enabled: true,
+				VMess: &domain.VMessCredential{UUID: "707469b6-5f7f-4c28-a708-47f7517c3e11", Cipher: "auto"},
+			}},
+			AccessProfiles: []domain.AccessProfile{{
+				ID: "de8864e0-6302-414c-83a1-c489f58c1272", NodeID: nodeID,
+				Name: "default", Default: true, PublicHost: "127.0.0.1", PublicPort: uint16(legacyPort),
+			}},
+		}},
+	}
+	staleYAML, err := (publisher.YAMLCompiler{}).Compile(ctx, state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	emptyState := state
+	emptyState.Nodes = nil
+	emptyYAML, err := (publisher.YAMLCompiler{}).Compile(ctx, emptyState)
+	if err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(directory, "mihomo", "config.yaml")
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(configPath, staleYAML, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	running := startMihomoForTransfer(t, ctx, binary, directory, configPath)
+	defer running.stop()
+	waitForController(t, ctx, emptyState.MihomoControllerConnect.Address(), controllerSecret, running, []string{controllerSecret})
+	legacyAddress := net.JoinHostPort("127.0.0.1", strconv.Itoa(legacyPort))
+	waitForTCPPort(t, ctx, legacyAddress, running, []string{controllerSecret})
+
+	database, err := store.Open(ctx, filepath.Join(directory, "m-ui.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = database.Close() }()
+	sealer, err := muicrypto.NewSealer(muicrypto.MasterKey{41, 42, 43})
+	if err != nil {
+		t.Fatal(err)
+	}
+	repository, err := store.NewManagedStore(database, sealer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	transaction, err := repository.BeginImmediate(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := transaction.ReplaceDesiredState(ctx, emptyState); err != nil {
+		t.Fatal(err)
+	}
+	if err := transaction.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	cli, err := mihomo.NewCLI(binary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	controller, err := mihomo.NewController(emptyState.MihomoControllerConnect.Address(), controllerSecret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	configurationPublisher, err := publisher.New(
+		repository,
+		publisher.YAMLCompiler{},
+		cli,
+		controller,
+		&observedIntegrationProcess{running: running},
+		publisher.Options{
+			ConfigPath:        configPath,
+			RevisionDirectory: filepath.Join(directory, "revisions"),
+			HistoryLimit:      20,
+			HealthTimeout:     5 * time.Second,
+			HealthInterval:    50 * time.Millisecond,
+			Logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := configurationPublisher.ReconcileStartupBeforeRuntime(ctx); err != nil {
+		t.Fatalf("pre-runtime convergence: %v", err)
+	}
+	activeYAML, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(activeYAML) != string(emptyYAML) || !strings.Contains(string(activeYAML), "listeners: []") {
+		t.Fatalf("active YAML is not the empty cutover baseline:\n%s", activeYAML)
+	}
+	// Pre-runtime publication replaces the file but deliberately cannot claim
+	// that the already-running legacy listener has applied it.
+	waitForTCPPort(t, ctx, legacyAddress, running, []string{controllerSecret})
+	convergence, err := repository.RuntimeConvergenceState(ctx)
+	if err != nil || !convergence.R3CutoverPending {
+		t.Fatalf("pre-runtime convergence state = %#v, %v", convergence, err)
+	}
+
+	if err := configurationPublisher.ReconcileStartup(ctx); err != nil {
+		t.Fatalf("post-runtime convergence: %v", err)
+	}
+	waitForTCPPortClosed(t, ctx, legacyAddress, running, []string{controllerSecret})
+	convergence, err = repository.RuntimeConvergenceState(ctx)
+	if err != nil || convergence.R3CutoverPending {
+		t.Fatalf("post-runtime convergence state = %#v, %v", convergence, err)
+	}
+	activeRevision, err := repository.LatestActiveRevision(ctx)
+	if err != nil || activeRevision.Reason != "r3_protocol_cutover_baseline" {
+		t.Fatalf("active cutover revision = %#v, %v", activeRevision, err)
+	}
+}
+
 func TestGeneratedAdvancedVLESSVariantsWithRealMihomo(t *testing.T) {
 	binary := os.Getenv("M_UI_TEST_MIHOMO_BINARY")
 	if binary == "" {
@@ -463,6 +884,7 @@ func TestGeneratedAdvancedVLESSVariantsWithRealMihomo(t *testing.T) {
 		name     string
 		handler  domain.VLESSHandlerSpec
 		security domain.VLESSSecuritySpec
+		flow     string
 	}
 	variants := []variant{
 		{
@@ -476,6 +898,12 @@ func TestGeneratedAdvancedVLESSVariantsWithRealMihomo(t *testing.T) {
 			name:     "grpc-tls",
 			handler:  domain.VLESSHandlerSpec{Type: domain.VLESSHandlerGRPC, GRPC: &domain.GRPCSpec{ServiceName: "edge"}},
 			security: domain.VLESSSecuritySpec{Type: domain.VLESSSecurityTLS, TLS: &domain.TLSConfig{Certificate: certificatePath, PrivateKey: privateKeyPath, AllowInsecure: true}},
+		},
+		{
+			name:     "raw-tls-vision",
+			handler:  domain.VLESSHandlerSpec{Type: domain.VLESSHandlerRaw},
+			security: domain.VLESSSecuritySpec{Type: domain.VLESSSecurityTLS, TLS: &domain.TLSConfig{Certificate: certificatePath, PrivateKey: privateKeyPath, AllowInsecure: true}},
+			flow:     domain.VLESSFlowVision,
 		},
 		{
 			name:    "raw-shadow-tls-v3",
@@ -501,18 +929,18 @@ func TestGeneratedAdvancedVLESSVariantsWithRealMihomo(t *testing.T) {
 	}
 	nodeIDs := []string{
 		"41464388-95d8-42f6-b393-f4181019ac4a", "84a8593f-e62b-43f3-9c50-f6a45b190021",
-		"65072cc7-0fd9-4d48-9679-c23a2905f0bb", "f0745dc9-f927-4b69-888e-fd02930ee159",
-		"01fc101e-2135-4b69-b788-251db66a5dc8",
+		"5de289cb-bd06-4229-a4f4-fe73f2402c66", "65072cc7-0fd9-4d48-9679-c23a2905f0bb",
+		"f0745dc9-f927-4b69-888e-fd02930ee159", "01fc101e-2135-4b69-b788-251db66a5dc8",
 	}
 	userIDs := []string{
 		"85816360-b0e9-4813-999c-b1f3a8cc6cf9", "ff2fc38c-1c9b-49bd-9162-8d9187977cd5",
-		"74555d11-11a8-456d-96d2-b0686cde8269", "16267745-223c-4dcc-88d9-1076530ab982",
-		"613d0c65-50bf-445a-a045-f7198ded90db",
+		"9cbb2ca3-623e-45e4-a249-3b1393291761", "74555d11-11a8-456d-96d2-b0686cde8269",
+		"16267745-223c-4dcc-88d9-1076530ab982", "613d0c65-50bf-445a-a045-f7198ded90db",
 	}
 	profileIDs := []string{
 		"99d40070-7f4f-47df-b319-90dcb2cf5cdd", "5dc9a870-26c5-4aa0-9375-a36ac30b4ec5",
-		"a536af18-39dc-4c23-a663-7f5f183a0eae", "5c061389-555a-4a09-a77b-ec167e614243",
-		"8b8fb915-18ed-41b3-a219-b609832239da",
+		"7d7a66cd-6106-4c9e-8749-cd8c5d27446e", "a536af18-39dc-4c23-a663-7f5f183a0eae",
+		"5c061389-555a-4a09-a77b-ec167e614243", "8b8fb915-18ed-41b3-a219-b609832239da",
 	}
 	state := domain.DesiredState{
 		AsOf:                         time.Date(2026, time.August, 6, 12, 0, 0, 0, time.UTC),
@@ -529,7 +957,7 @@ func TestGeneratedAdvancedVLESSVariantsWithRealMihomo(t *testing.T) {
 			VLESS: &domain.VLESSSpec{Decryption: "none", Handler: current.handler, Security: current.security},
 			Users: []domain.NodeUser{{
 				ID: userIDs[index], NodeID: nodeIDs[index], Name: "alice", Enabled: true,
-				VLESS: &domain.VLESSCredential{UUID: "226c63f7-e6f3-48c9-9ce2-02d5838743ac"},
+				VLESS: &domain.VLESSCredential{UUID: "226c63f7-e6f3-48c9-9ce2-02d5838743ac", Flow: current.flow},
 			}},
 			AccessProfiles: []domain.AccessProfile{{
 				ID: profileIDs[index], NodeID: nodeIDs[index], Name: "default", Default: true,
@@ -689,6 +1117,7 @@ type runningMihomo struct {
 	output   synchronizedBuffer
 	done     chan error
 	stopOnce sync.Once
+	active   atomic.Bool
 }
 
 func startMihomoForTransfer(
@@ -707,11 +1136,45 @@ func startMihomoForTransfer(
 	if err := process.command.Start(); err != nil {
 		t.Fatalf("start Mihomo with %s: %v", filepath.Base(configPath), err)
 	}
+	process.active.Store(true)
 	go func() {
 		process.done <- process.command.Wait()
+		process.active.Store(false)
 		close(process.done)
 	}()
 	return process
+}
+
+type observedIntegrationProcess struct {
+	running *runningMihomo
+}
+
+func (process *observedIntegrationProcess) IsActive(context.Context) (bool, error) {
+	return process.running != nil && process.running.active.Load(), nil
+}
+
+func (*observedIntegrationProcess) Start(context.Context) error {
+	return errors.New("integration process is already externally started")
+}
+
+func (process *observedIntegrationProcess) Stop(context.Context) error {
+	process.running.stop()
+	return nil
+}
+
+func (*observedIntegrationProcess) Restart(context.Context) error {
+	return errors.New("integration process restart is unavailable")
+}
+
+func (*observedIntegrationProcess) Reload(context.Context) error {
+	return errors.New("integration process reload is unavailable")
+}
+
+func (process *observedIntegrationProcess) RecentLogs(
+	context.Context,
+	int,
+) ([]mihomo.LogEntry, error) {
+	return nil, nil
 }
 
 func (process *runningMihomo) stop() {
@@ -796,6 +1259,41 @@ func waitForTCPPort(
 			t.Fatalf("Mihomo port %s did not become ready: %s", address, process.diagnostic(sensitiveValues))
 		case <-ctx.Done():
 			t.Fatalf("wait for Mihomo port %s: %v: %s", address, ctx.Err(), process.diagnostic(sensitiveValues))
+		case <-ticker.C:
+		}
+	}
+}
+
+func waitForTCPPortClosed(
+	t *testing.T,
+	ctx context.Context,
+	address string,
+	process *runningMihomo,
+	sensitiveValues []string,
+) {
+	t.Helper()
+	deadline := time.NewTimer(10 * time.Second)
+	defer deadline.Stop()
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		connection, err := net.DialTimeout("tcp", address, 250*time.Millisecond)
+		if err != nil {
+			return
+		}
+		_ = connection.Close()
+		select {
+		case processErr := <-process.done:
+			t.Fatalf(
+				"Mihomo exited while waiting for %s to close: %v: %s",
+				address,
+				processErr,
+				process.diagnostic(sensitiveValues),
+			)
+		case <-deadline.C:
+			t.Fatalf("Mihomo port %s remained open after empty-baseline reload: %s", address, process.diagnostic(sensitiveValues))
+		case <-ctx.Done():
+			t.Fatalf("wait for Mihomo port %s to close: %v: %s", address, ctx.Err(), process.diagnostic(sensitiveValues))
 		case <-ticker.C:
 		}
 	}

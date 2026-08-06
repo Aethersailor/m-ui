@@ -174,13 +174,15 @@ func newExpiryFixture(t *testing.T) expiryFixture {
 	}
 	batchTime := time.Date(2026, 7, 28, 4, 0, 0, 0, time.UTC)
 	initialState := expiryState(batchTime)
+	emptyState := initialState
+	emptyState.Nodes = nil
 	transaction, err := managed.BeginImmediate(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := transaction.ReplaceDesiredState(
 		ctx,
-		initialState,
+		emptyState,
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -208,6 +210,12 @@ func newExpiryFixture(t *testing.T) expiryFixture {
 		},
 	)
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err := configurationPublisher.ReconcileStartupBeforeRuntime(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := configurationPublisher.ReconcileStartup(ctx); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := configurationPublisher.Publish(ctx, publisher.Request{

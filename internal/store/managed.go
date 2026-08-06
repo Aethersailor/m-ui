@@ -101,6 +101,14 @@ type EndpointSettingsState struct {
 	Pending     *PendingEndpointSettings
 }
 
+const R3ProtocolCutoverReason = "r3_protocol_cutover"
+
+type RuntimeConvergenceState struct {
+	R3CutoverPending bool
+	PendingReason    string
+	UpdatedAt        time.Time
+}
+
 var ErrEndpointStateChanged = errors.New("endpoint restart state changed while applying")
 
 type PublicationSnapshot struct {
@@ -1034,6 +1042,86 @@ func (managed *ManagedStore) BeginImmediate(ctx context.Context) (PublicationTra
 		return nil, fmt.Errorf("begin immediate publication transaction: %w", err)
 	}
 	return &ManagedTx{conn: conn, sealer: managed.sealer}, nil
+}
+
+func (managed *ManagedStore) RuntimeConvergenceState(
+	ctx context.Context,
+) (RuntimeConvergenceState, error) {
+	var state RuntimeConvergenceState
+	var pending int
+	var updatedAt string
+	if err := managed.store.db.QueryRowContext(
+		ctx,
+		`SELECT r3_cutover_pending, pending_reason, updated_at
+		   FROM runtime_convergence_state
+		  WHERE id = 1`,
+	).Scan(&pending, &state.PendingReason, &updatedAt); err != nil {
+		return RuntimeConvergenceState{}, fmt.Errorf("read runtime convergence state: %w", err)
+	}
+	state.R3CutoverPending = pending == 1
+	var err error
+	state.UpdatedAt, err = parseTime(updatedAt)
+	return state, err
+}
+
+// CompleteR3ProtocolCutover atomically clears both the convergence marker and
+// a degraded state caused by that same cutover. It never clears an unrelated
+// fail-closed reason.
+func (managed *ManagedStore) CompleteR3ProtocolCutover(
+	ctx context.Context,
+	now time.Time,
+) error {
+	connection, err := managed.store.db.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("acquire runtime convergence connection: %w", err)
+	}
+	defer func() { _ = connection.Close() }()
+	if _, err := connection.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
+		return fmt.Errorf("begin runtime convergence completion: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_, _ = connection.ExecContext(context.Background(), "ROLLBACK")
+		}
+	}()
+	var degraded int
+	var degradedReason string
+	if err := connection.QueryRowContext(
+		ctx,
+		"SELECT degraded, degraded_reason FROM system_state WHERE id = 1",
+	).Scan(&degraded, &degradedReason); err != nil {
+		return fmt.Errorf("read degraded state before runtime convergence completion: %w", err)
+	}
+	if degraded == 1 && !strings.HasPrefix(degradedReason, R3ProtocolCutoverReason+":") {
+		return errors.New("unrelated degraded state prevents runtime convergence completion")
+	}
+	if _, err := connection.ExecContext(
+		ctx,
+		`UPDATE runtime_convergence_state
+		    SET r3_cutover_pending = 0, pending_reason = '', updated_at = ?
+		  WHERE id = 1 AND r3_cutover_pending = 1`,
+		formatTime(now),
+	); err != nil {
+		return fmt.Errorf("clear R3 runtime convergence marker: %w", err)
+	}
+	if degraded == 1 {
+		if _, err := connection.ExecContext(
+			ctx,
+			`UPDATE system_state
+			    SET degraded = 0, degraded_reason = '', degraded_revision_id = NULL,
+			        updated_at = ?
+			  WHERE id = 1`,
+			formatTime(now),
+		); err != nil {
+			return fmt.Errorf("clear R3 runtime convergence degraded state: %w", err)
+		}
+	}
+	if _, err := connection.ExecContext(ctx, "COMMIT"); err != nil {
+		return fmt.Errorf("commit runtime convergence completion: %w", err)
+	}
+	committed = true
+	return nil
 }
 
 func (transaction *ManagedTx) DesiredState(

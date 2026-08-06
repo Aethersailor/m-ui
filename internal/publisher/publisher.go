@@ -27,11 +27,19 @@ var (
 	ErrCandidateValidation   = errors.New("candidate configuration validation failed")
 	ErrStartupDegraded       = errors.New("startup reconciliation marked the system degraded")
 	ErrMihomoRestartRequired = errors.New("mihomo restart is required before configuration publication")
+	ErrRuntimeConvergence    = errors.New("runtime convergence is required before configuration publication")
 )
 
 type endpointSettingsReader interface {
 	EndpointSettings(context.Context) (store.EndpointSettingsState, error)
 }
+
+type runtimeConvergenceRepository interface {
+	RuntimeConvergenceState(context.Context) (store.RuntimeConvergenceState, error)
+	CompleteR3ProtocolCutover(context.Context, time.Time) error
+}
+
+const r3CutoverBaselineReason = "r3_protocol_cutover_baseline"
 
 type Mutation func(ctx context.Context, transaction store.PublicationTransaction) error
 
@@ -47,8 +55,9 @@ type Request struct {
 	// RestartRequired commits the candidate and leaves the running Mihomo
 	// process untouched. This is used for listener endpoint changes because a
 	// reload must not be treated as proof that a socket binding changed.
-	RestartRequired bool
-	Mutate          Mutation
+	RestartRequired            bool
+	Mutate                     Mutation
+	runtimeConvergenceBaseline bool
 }
 
 type Options struct {
@@ -286,6 +295,17 @@ func (publisher *Publisher) reconcileStartupLocked(
 	if err != nil {
 		return fmt.Errorf("read system state before startup reconciliation: %w", err)
 	}
+	convergenceState, convergenceSupported, err := publisher.readRuntimeConvergence(
+		reconciliationContext,
+	)
+	if err != nil {
+		return publisher.markStartupDegraded(
+			reconciliationContext,
+			"",
+			r3CutoverFailure("runtime convergence state could not be inspected safely"),
+		)
+	}
+	r3CutoverPending := convergenceSupported && convergenceState.R3CutoverPending
 	endpointState, endpointStateSupported, err := publisher.readEndpointSettings(
 		reconciliationContext,
 	)
@@ -298,6 +318,12 @@ func (publisher *Publisher) reconcileStartupLocked(
 	}
 	mihomoRestartPending := endpointStateSupported && endpointState.Pending != nil &&
 		endpointState.Pending.RequiresMihomoRestart
+	if r3CutoverPending && allowRuntime && mihomoRestartPending {
+		return fmt.Errorf(
+			"%w: Mihomo endpoint restart is still required before R3 runtime convergence",
+			ErrStartupDegraded,
+		)
+	}
 
 	initial, err := publisher.repository.ReadPublicationSnapshot(
 		reconciliationContext,
@@ -317,6 +343,67 @@ func (publisher *Publisher) reconcileStartupLocked(
 			"startup publication state could not be inspected safely",
 		)
 	}
+	if r3CutoverPending && len(initial.State.Nodes) != 0 {
+		return publisher.markStartupDegraded(
+			reconciliationContext,
+			"",
+			r3CutoverFailure("durable desired state is not empty"),
+		)
+	}
+	if r3CutoverPending && initial.ActiveRevision == nil {
+		if allowRuntime {
+			return publisher.markStartupDegraded(
+				reconciliationContext,
+				"",
+				r3CutoverFailure("empty baseline was not installed before runtime startup"),
+			)
+		}
+		if systemState.Degraded {
+			if !strings.HasPrefix(
+				systemState.DegradedReason,
+				store.R3ProtocolCutoverReason+":",
+			) {
+				return fmt.Errorf(
+					"%w: unrelated degraded state prevents R3 cutover baseline publication",
+					ErrStartupDegraded,
+				)
+			}
+			if err := publisher.repository.ClearDegraded(
+				reconciliationContext,
+				publisher.now().UTC(),
+			); err != nil {
+				return fmt.Errorf("clear retryable R3 cutover degraded state: %w", err)
+			}
+			systemState.Degraded = false
+		}
+		revision, publishErr := publisher.publishLocked(
+			reconciliationContext,
+			Request{
+				Reason:                     r3CutoverBaselineReason,
+				RestartRequired:            true,
+				runtimeConvergenceBaseline: true,
+				Mutate: func(
+					ctx context.Context,
+					transaction store.PublicationTransaction,
+				) error {
+					return transaction.ReplaceDesiredState(ctx, initial.State)
+				},
+			},
+		)
+		if publishErr != nil {
+			return publisher.markStartupDegraded(
+				reconciliationContext,
+				"",
+				r3CutoverFailure("empty baseline publication failed"),
+			)
+		}
+		publisher.logger.Warn(
+			"installed empty R3 protocol-cutover baseline before Mihomo startup",
+			"revision",
+			revision.RevisionNumber,
+		)
+		return nil
+	}
 	if initial.ActiveRevision == nil {
 		if systemState.Degraded {
 			return fmt.Errorf(
@@ -327,6 +414,13 @@ func (publisher *Publisher) reconcileStartupLocked(
 		return nil
 	}
 	activeRevision := *initial.ActiveRevision
+	if r3CutoverPending && activeRevision.Reason != r3CutoverBaselineReason {
+		return publisher.markStartupDegraded(
+			reconciliationContext,
+			activeRevision.ID,
+			r3CutoverFailure("active revision is not the R3 empty baseline"),
+		)
+	}
 	if !pathWithin(
 		publisher.options.RevisionDirectory,
 		activeRevision.FilePath,
@@ -415,6 +509,22 @@ func (publisher *Publisher) reconcileStartupLocked(
 		)
 	}
 	if activeYAML.exists && activeYAML.sha256 == activeRevision.SHA256 {
+		if r3CutoverPending {
+			if !allowRuntime {
+				return nil
+			}
+			if err := publisher.validateReloadAndCheckActive(reconciliationContext); err != nil {
+				return publisher.markStartupDegraded(
+					reconciliationContext,
+					activeRevision.ID,
+					r3CutoverFailure("empty baseline could not be reloaded and health-checked"),
+				)
+			}
+			return publisher.completeR3ProtocolCutover(
+				reconciliationContext,
+				activeRevision,
+			)
+		}
 		if mihomoRestartPending {
 			if systemState.Degraded {
 				return fmt.Errorf(
@@ -477,6 +587,12 @@ func (publisher *Publisher) reconcileStartupLocked(
 			reconciliationContext,
 			activeRevision.ID,
 			"Mihomo runtime is inactive during startup reconciliation",
+		)
+	}
+	if r3CutoverPending {
+		return publisher.completeR3ProtocolCutover(
+			reconciliationContext,
+			activeRevision,
 		)
 	}
 	if mihomoRestartPending {
@@ -657,6 +773,15 @@ func (publisher *Publisher) publishLocked(
 	}
 	if request.Mutate == nil {
 		return domain.Revision{}, errors.New("publication mutation is required")
+	}
+	if !request.runtimeConvergenceBaseline {
+		convergence, supported, err := publisher.readRuntimeConvergence(ctx)
+		if err != nil {
+			return domain.Revision{}, fmt.Errorf("read runtime convergence state: %w", err)
+		}
+		if supported && convergence.R3CutoverPending {
+			return domain.Revision{}, ErrRuntimeConvergence
+		}
 	}
 	systemState, err := publisher.repository.SystemState(ctx)
 	if err != nil {
@@ -974,6 +1099,54 @@ func (publisher *Publisher) readEndpointSettings(
 		)
 	}
 	return state, true, nil
+}
+
+func (publisher *Publisher) readRuntimeConvergence(
+	ctx context.Context,
+) (store.RuntimeConvergenceState, bool, error) {
+	repository, ok := publisher.repository.(runtimeConvergenceRepository)
+	if !ok {
+		return store.RuntimeConvergenceState{}, false, nil
+	}
+	state, err := repository.RuntimeConvergenceState(ctx)
+	if err != nil {
+		return store.RuntimeConvergenceState{}, true, err
+	}
+	return state, true, nil
+}
+
+func (publisher *Publisher) completeR3ProtocolCutover(
+	ctx context.Context,
+	revision domain.Revision,
+) error {
+	repository, ok := publisher.repository.(runtimeConvergenceRepository)
+	if !ok {
+		return publisher.markStartupDegraded(
+			ctx,
+			revision.ID,
+			r3CutoverFailure("runtime convergence repository is unavailable"),
+		)
+	}
+	if err := repository.CompleteR3ProtocolCutover(
+		ctx,
+		publisher.now().UTC(),
+	); err != nil {
+		return publisher.markStartupDegraded(
+			ctx,
+			revision.ID,
+			r3CutoverFailure("verified empty baseline could not clear the durable pending marker"),
+		)
+	}
+	publisher.logger.Info(
+		"R3 protocol cutover converged to the empty runtime baseline",
+		"revision",
+		revision.RevisionNumber,
+	)
+	return nil
+}
+
+func r3CutoverFailure(detail string) string {
+	return store.R3ProtocolCutoverReason + ": " + detail
 }
 
 func (publisher *Publisher) rejectPendingMihomoRestart(ctx context.Context) error {

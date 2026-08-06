@@ -43,6 +43,9 @@ func vmessCapability() ProtocolCapability {
 			}
 			components[index].Fields = fields
 		}
+		if components[index].Group == ComponentTransport && components[index].Kind == string(domain.VLESSHandlerWebSocket) {
+			components[index].Conflicts = append(components[index].Conflicts, componentID(ComponentSecurity, string(domain.VLESSSecurityReality)))
+		}
 	}
 	components = append(components, ComponentCapability{
 		Group: ComponentTransport, Kind: string(domain.VMessHandlerMKCP), Label: "mKCP",
@@ -88,6 +91,12 @@ func vmessCapability() ProtocolCapability {
 
 func trojanCapability() ProtocolCapability {
 	fields := streamMuxFields("trojan")
+	components := classicStreamComponents()
+	for index := range components {
+		if components[index].Group == ComponentTransport && components[index].Kind == string(domain.VLESSHandlerWebSocket) {
+			components[index].Conflicts = append(components[index].Conflicts, componentID(ComponentSecurity, string(domain.VLESSSecurityReality)))
+		}
+	}
 	fields = append(fields,
 		FieldCapability{Path: "trojan.shadowsocks.enabled", SourceKey: "ss-option.enabled", Label: "Trojan-Go Shadowsocks wrapper", Type: FieldBoolean, Advanced: true},
 		FieldCapability{Path: "trojan.shadowsocks.method", SourceKey: "ss-option.method", Label: "Wrapper method", Type: FieldString, Advanced: true, Options: []string{"aes-128-gcm", "aes-256-gcm", "chacha20-ietf-poly1305"}, VisibleWhen: visibleWhen("trojan.shadowsocks.enabled", true)},
@@ -104,7 +113,7 @@ func trojanCapability() ProtocolCapability {
 			{Group: ComponentTransport, Required: true, DefaultComponent: string(domain.VLESSHandlerRaw)},
 			{Group: ComponentSecurity, Required: true, DefaultComponent: string(domain.VLESSSecurityTLS)},
 		},
-		Components: classicStreamComponents(),
+		Components: components,
 		Fields:     fields,
 		UserFields: []FieldCapability{
 			{Path: "trojan.password", SourceKey: "users.password", Label: "Password", Type: FieldSecret, Required: true, Secret: true},

@@ -9,6 +9,14 @@ export function pathValue(model: unknown, path: string): unknown {
   return current
 }
 
+export function secretPathConfigured(
+  secretsSet: Record<string, boolean> | undefined,
+  path: string,
+  prefix = '',
+): boolean {
+  return secretsSet?.[prefix + path] === true
+}
+
 export function withPathValue<T>(model: T, path: string, value: unknown): T {
   const segments = path.split('.')
   return setPathValue(model, segments, value) as T

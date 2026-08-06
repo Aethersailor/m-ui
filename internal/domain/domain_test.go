@@ -118,6 +118,81 @@ func TestValidateShadowTLSAndJLSProtocolCredentials(t *testing.T) {
 	}
 }
 
+func TestValidateClassicWebSocketRejectsRealityClientMismatch(t *testing.T) {
+	t.Parallel()
+	reality := VLESSSecuritySpec{Type: VLESSSecurityReality, Reality: &RealityConfig{
+		Destination: "www.example.com:443",
+		PrivateKey:  "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+		PublicKey:   "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
+		ShortIDs:    []string{"0123456789abcdef"},
+		ServerNames: []string{"www.example.com"},
+	}}
+	handler := VLESSHandlerSpec{Type: VLESSHandlerWebSocket, WebSocket: &WebSocketSpec{Path: "/edge"}}
+
+	if err := validateVMess(VMessSpec{Handler: handler, Security: reality}); err == nil ||
+		!strings.Contains(err.Error(), "VMess WebSocket client does not apply REALITY") {
+		t.Fatalf("validateVMess(WebSocket+REALITY) error = %v, want outbound compatibility failure", err)
+	}
+	if err := validateTrojan(TrojanSpec{Handler: handler, Security: reality}); err == nil ||
+		!strings.Contains(err.Error(), "Trojan WebSocket client does not apply REALITY") {
+		t.Fatalf("validateTrojan(WebSocket+REALITY) error = %v, want outbound compatibility failure", err)
+	}
+}
+
+func TestValidateVMessMKCPRejectsUnsupportedSecurityWrappers(t *testing.T) {
+	t.Parallel()
+	handler := VLESSHandlerSpec{Type: VMessHandlerMKCP, MKCP: &MKCPConfig{Header: "none"}}
+	for name, security := range map[string]VLESSSecuritySpec{
+		"shadow-tls": {Type: VLESSSecurityShadowTLS, ShadowTLS: &ShadowTLSConfig{
+			Version: 3, Users: []ShadowTLSUser{{Name: "alice", Password: "secret"}},
+			Handshake: ShadowTLSHandshake{Destination: "www.example.com:443"},
+		}},
+		"res-tls": {Type: VLESSSecurityResTLS, ResTLS: &ResTLSConfig{
+			Destination: "www.example.com:443", Password: "secret",
+		}},
+		"jls": {Type: VLESSSecurityJLS, JLS: &JLSConfig{
+			Destination: "www.example.com:443", Users: []JLSUser{{Username: "alice", Password: "secret"}},
+		}},
+	} {
+		name, security := name, security
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			if err := validateVMess(VMessSpec{Handler: handler, Security: security}); err == nil ||
+				!strings.Contains(err.Error(), "VMess mKCP does not support") {
+				t.Fatalf("validateVMess(mKCP+%s) error = %v, want compatibility rejection", name, err)
+			}
+		})
+	}
+}
+
+func TestValidateShadowsocksSimpleObfsRejectsSecurityPlugins(t *testing.T) {
+	t.Parallel()
+	for name, security := range map[string]VLESSSecuritySpec{
+		"shadow-tls": {Type: VLESSSecurityShadowTLS, ShadowTLS: &ShadowTLSConfig{
+			Version: 3, Users: []ShadowTLSUser{{Name: "alice", Password: "secret"}},
+			Handshake: ShadowTLSHandshake{Destination: "www.example.com:443"},
+		}},
+		"res-tls": {Type: VLESSSecurityResTLS, ResTLS: &ResTLSConfig{
+			Destination: "www.example.com:443", Password: "secret",
+		}},
+		"jls": {Type: VLESSSecurityJLS, JLS: &JLSConfig{
+			Destination: "www.example.com:443", Users: []JLSUser{{Username: "alice", Password: "secret"}},
+		}},
+	} {
+		name, security := name, security
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			err := validateShadowsocks(ShadowsocksSpec{
+				Cipher: "aes-128-gcm", Security: security,
+				SimpleObfs: SimpleObfsSpec{Enabled: true, Mode: "http"},
+			})
+			if err == nil || !strings.Contains(err.Error(), "simple obfs cannot be combined") {
+				t.Fatalf("validateShadowsocks(simple-obfs+%s) error = %v, want compatibility rejection", name, err)
+			}
+		})
+	}
+}
+
 func TestValidateHysteria2RealmMatchesRuntimeRequirements(t *testing.T) {
 	t.Parallel()
 

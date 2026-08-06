@@ -93,6 +93,7 @@ type userResponse struct {
 	VMess       *domain.VMessCredential       `json:"vmess,omitempty"`
 	Trojan      *domain.TrojanCredential      `json:"trojan,omitempty"`
 	Shadowsocks *domain.ShadowsocksCredential `json:"shadowsocks,omitempty"`
+	SecretsSet  map[string]bool               `json:"secrets_set"`
 	ExpiresAt   *time.Time                    `json:"expires_at"`
 	CreatedAt   time.Time                     `json:"created_at"`
 	UpdatedAt   time.Time                     `json:"updated_at"`
@@ -1462,12 +1463,39 @@ func newListenerResponse(node domain.Node) listenerResponse {
 }
 
 func newUserResponse(user domain.NodeUser) userResponse {
+	vless := cloneJSON(user.VLESS)
+	hysteria2 := cloneJSON(user.Hysteria2)
+	vmess := cloneJSON(user.VMess)
+	trojan := cloneJSON(user.Trojan)
+	shadowsocks := cloneJSON(user.Shadowsocks)
+	secrets := make(map[string]bool)
+	if vless != nil {
+		secrets["vless.uuid"] = vless.UUID != ""
+		vless.UUID = ""
+	}
+	if hysteria2 != nil {
+		secrets["hysteria2.password"] = hysteria2.Password != ""
+		hysteria2.Password = ""
+	}
+	if vmess != nil {
+		secrets["vmess.uuid"] = vmess.UUID != ""
+		vmess.UUID = ""
+	}
+	if trojan != nil {
+		secrets["trojan.password"] = trojan.Password != ""
+		trojan.Password = ""
+	}
+	if shadowsocks != nil {
+		secrets["shadowsocks.password"] = shadowsocks.Password != ""
+		shadowsocks.Password = ""
+	}
 	return userResponse{
 		ID: user.ID, NodeID: user.NodeID, Name: user.Name,
-		Enabled: user.Enabled, VLESS: user.VLESS, Hysteria2: user.Hysteria2,
-		VMess: user.VMess, Trojan: user.Trojan, Shadowsocks: user.Shadowsocks,
-		ExpiresAt: user.ExpiresAt,
-		CreatedAt: user.CreatedAt, UpdatedAt: user.UpdatedAt,
+		Enabled: user.Enabled, VLESS: vless, Hysteria2: hysteria2,
+		VMess: vmess, Trojan: trojan, Shadowsocks: shadowsocks,
+		SecretsSet: secrets,
+		ExpiresAt:  user.ExpiresAt,
+		CreatedAt:  user.CreatedAt, UpdatedAt: user.UpdatedAt,
 	}
 }
 

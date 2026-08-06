@@ -46,6 +46,7 @@ Xray 专属字段：**3x-ui 决定面板应该覆盖哪些用户能力，Mihomo 
 和能力实际上是什么，组合架构决定未来怎样增加协议。** 第二轮完成机器可读能力
 Schema 和通用节点编辑器，R3 完成五协议覆盖与通用节点/用户操作，详见
 [迭代路线](docs/second-round-roadmap.md)和[功能对齐矩阵](docs/feature-parity-matrix.md)。
+R3 破坏性节点模型升级必须遵守 [R3 数据切换与上线合同](docs/r3-cutover-contract.md)。
 
 后端采用 Go 编写，Vue 前端被嵌入单一可执行文件中，无需额外部署 Web 服务或数据库。
 

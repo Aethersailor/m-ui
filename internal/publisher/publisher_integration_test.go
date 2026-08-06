@@ -123,6 +123,9 @@ func TestPublisherCommitsManagedStateAndRevisionInRealSQLite(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := repository.CompleteR3ProtocolCutover(ctx, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
 	initial := publisherState("old", 443)
 	transaction, err := repository.BeginImmediate(ctx)
 	if err != nil {

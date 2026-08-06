@@ -12,11 +12,15 @@ func TestTextRemovesSensitiveIdentifiersAndCredentials(t *testing.T) {
 		"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
 		"controller-secret-value",
 		"vless://example-sensitive-share",
+		"trojan-password-value",
+		"vmess-mkcp-seed-value",
 	}
 	input := "uuid=" + sensitive[0] +
 		" private-key: " + sensitive[1] +
 		` "secret": "` + sensitive[2] + `"` +
-		" uri=" + sensitive[3]
+		" uri=" + sensitive[3] +
+		" password: " + sensitive[4] +
+		" seed: " + sensitive[5]
 	output := Text(input)
 	for _, value := range sensitive {
 		if strings.Contains(output, value) {

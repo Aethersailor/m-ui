@@ -12,6 +12,7 @@ import {
   pathValue,
   recordEntries,
   recordFromEntries,
+  secretPathConfigured,
   withPathValue,
 } from './schemaForm'
 
@@ -45,6 +46,16 @@ describe('schema form helpers', () => {
     }
     expect(fieldVisible({ shadow_tls: { version: 3 } }, field)).toBe(true)
     expect(fieldVisible({ shadow_tls: { version: 2 } }, field)).toBe(false)
+  })
+
+  it('resolves stored secrets against rooted and component-prefixed paths', () => {
+    const secrets = {
+      'trojan.password': true,
+      'security.tls.private_key': true,
+    }
+    expect(secretPathConfigured(secrets, 'trojan.password')).toBe(true)
+    expect(secretPathConfigured(secrets, 'private_key', 'security.tls.')).toBe(true)
+    expect(secretPathConfigured(secrets, 'vless.uuid')).toBe(false)
   })
 
   it('creates object-list rows and round-trips record rows', () => {

@@ -1,11 +1,15 @@
 package httpapi
 
 import (
+	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net/http"
+	"net/http/httptest"
+	"os"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/Aethersailor/m-ui/internal/domain"
@@ -48,7 +52,8 @@ func TestManagementClassicProtocolRequestsAndResponses(t *testing.T) {
 			},
 			assertUser: func(t *testing.T, user userResponse) {
 				t.Helper()
-				if user.VMess == nil || user.VMess.UUID == "" || user.VMess.Cipher != "auto" {
+				if user.VMess == nil || user.VMess.UUID != "" || user.VMess.Cipher != "auto" ||
+					!user.SecretsSet["vmess.uuid"] {
 					t.Fatalf("VMess user response = %#v", user)
 				}
 			},
@@ -69,7 +74,8 @@ func TestManagementClassicProtocolRequestsAndResponses(t *testing.T) {
 			},
 			assertUser: func(t *testing.T, user userResponse) {
 				t.Helper()
-				if user.Trojan == nil || user.Trojan.Password == "" {
+				if user.Trojan == nil || user.Trojan.Password != "" ||
+					!user.SecretsSet["trojan.password"] {
 					t.Fatalf("Trojan user response = %#v", user)
 				}
 			},
@@ -90,12 +96,9 @@ func TestManagementClassicProtocolRequestsAndResponses(t *testing.T) {
 			},
 			assertUser: func(t *testing.T, user userResponse) {
 				t.Helper()
-				if user.Shadowsocks == nil {
+				if user.Shadowsocks == nil || user.Shadowsocks.Password != "" ||
+					!user.SecretsSet["shadowsocks.password"] {
 					t.Fatalf("Shadowsocks user response = %#v", user)
-				}
-				key, err := base64.StdEncoding.DecodeString(user.Shadowsocks.Password)
-				if err != nil || len(key) != 16 {
-					t.Fatalf("Shadowsocks 2022 AES-128 password = %q, bytes=%d, err=%v", user.Shadowsocks.Password, len(key), err)
 				}
 			},
 		},
@@ -259,8 +262,18 @@ func TestNodeOperationsRequireCSRFAndPublishAtomically(t *testing.T) {
 	decodeOperationResponse(t, userBatchResponse.Body.Bytes(), &userBatch)
 	if len(userBatch.Users) != 2 || userBatch.Users[0].ID == userBatch.Users[1].ID ||
 		userBatch.Users[0].VLESS == nil || userBatch.Users[1].VLESS == nil ||
-		userBatch.Users[0].VLESS.UUID == userBatch.Users[1].VLESS.UUID {
+		userBatch.Users[0].VLESS.UUID != "" || userBatch.Users[1].VLESS.UUID != "" ||
+		!userBatch.Users[0].SecretsSet["vless.uuid"] || !userBatch.Users[1].SecretsSet["vless.uuid"] {
 		t.Fatalf("created batch users = %#v", userBatch.Users)
+	}
+	storedUserBatch, err := environment.manager.Node(context.Background(), withoutUsers.Node.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(storedUserBatch.Users) != 2 || storedUserBatch.Users[0].VLESS == nil ||
+		storedUserBatch.Users[1].VLESS == nil ||
+		storedUserBatch.Users[0].VLESS.UUID == storedUserBatch.Users[1].VLESS.UUID {
+		t.Fatalf("stored batch credentials = %#v", storedUserBatch.Users)
 	}
 	if after := revisionCount(t, environment, sessionCookie); after != beforeUserBatch+1 {
 		t.Fatalf("user batch added %d revisions, want 1", after-beforeUserBatch)
@@ -270,6 +283,7 @@ func TestNodeOperationsRequireCSRFAndPublishAtomically(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	beforeInvalidBatch := revisionCount(t, environment, sessionCookie)
 	failedBatch := performJSONRequest(
 		t, environment.handler, http.MethodPost,
 		"/api/v1/nodes/"+withoutUsers.Node.ID+"/users/batch",
@@ -281,6 +295,9 @@ func TestNodeOperationsRequireCSRFAndPublishAtomically(t *testing.T) {
 	)
 	if failedBatch.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("invalid user batch status = %d; body=%s", failedBatch.Code, failedBatch.Body)
+	}
+	if after := revisionCount(t, environment, sessionCookie); after != beforeInvalidBatch {
+		t.Fatalf("validation failure added %d revisions, want 0", after-beforeInvalidBatch)
 	}
 	afterFailedState, err := environment.manager.Node(context.Background(), withoutUsers.Node.ID)
 	if err != nil {
@@ -309,6 +326,139 @@ func TestNodeOperationsRequireCSRFAndPublishAtomically(t *testing.T) {
 	if after := revisionCount(t, environment, sessionCookie); after != beforeToggle+1 {
 		t.Fatalf("user toggle added %d revisions, want 1", after-beforeToggle)
 	}
+}
+
+func TestNodeCloneReloadFailureRestoresStateAndHidesError(t *testing.T) {
+	t.Parallel()
+	environment := newManagementTestEnvironment(t)
+	cookie, csrf := managementLogin(t, environment.handler)
+	source := createOperationTestNode(
+		t, environment, cookie, csrf, "source", "443", true,
+		[]userRequest{{Name: "source-user", Enabled: true}},
+	)
+	beforeState, err := environment.manager.Nodes(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeConfig, err := os.ReadFile(environment.configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeRevisions := revisionCount(t, environment, cookie)
+	environment.controller.state.reloadErrors = []error{
+		errors.New("reload candidate with sensitive-reload-marker"),
+		nil,
+	}
+	environment.process.state.restartErrors = []error{
+		errors.New("restart candidate with sensitive-restart-marker"),
+	}
+
+	response := performJSONRequest(
+		t, environment.handler, http.MethodPost,
+		"/api/v1/nodes/"+source.Node.ID+"/clone",
+		cloneNodeRequest{Name: "reload-failed-clone", Port: "8443", IncludeUsers: true},
+		cookie, csrf,
+	)
+	if response.Code != http.StatusInternalServerError {
+		t.Fatalf("operation status = %d; body=%s", response.Code, response.Body)
+	}
+	for _, marker := range []string{"sensitive-reload-marker", "sensitive-restart-marker"} {
+		if strings.Contains(response.Body.String(), marker) {
+			t.Fatalf("error response exposed %q: %s", marker, response.Body)
+		}
+	}
+	afterState, err := environment.manager.Nodes(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !equalJSON(beforeState, afterState) {
+		t.Fatalf("failed operation changed state: before=%#v after=%#v", beforeState, afterState)
+	}
+	afterConfig, err := os.ReadFile(environment.configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(beforeConfig, afterConfig) {
+		t.Fatal("failed operation changed active configuration")
+	}
+	if after := revisionCount(t, environment, cookie); after != beforeRevisions+1 {
+		t.Fatalf("failed publication added %d revisions, want one failed revision", after-beforeRevisions)
+	}
+	revisions, err := environment.manager.Revisions(context.Background(), 100, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(revisions) == 0 || revisions[0].Status != domain.RevisionFailed {
+		t.Fatalf("latest revision = %#v, want failed", revisions)
+	}
+}
+
+func TestConcurrentStaleNodeUpdatesCommitOneRevision(t *testing.T) {
+	t.Parallel()
+	environment := newManagementTestEnvironment(t)
+	cookie, csrf := managementLogin(t, environment.handler)
+	source := createOperationTestNode(
+		t, environment, cookie, csrf, "source", "443", true,
+		[]userRequest{{Name: "source-user", Enabled: true}},
+	)
+	beforeRevisions := revisionCount(t, environment, cookie)
+
+	responses := make(chan *responseCapture, 2)
+	var wait sync.WaitGroup
+	for _, name := range []string{"concurrent-a", "concurrent-b"} {
+		name := name
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			response := performJSONRequest(
+				t, environment.handler, http.MethodPut,
+				"/api/v1/nodes/"+source.Node.ID,
+				listenerRequest{
+					Name: name, Enabled: true,
+					ListenAddress: source.Node.ListenAddress,
+					Port:          source.Node.Port, Protocol: source.Node.Protocol,
+					VLESS: source.Node.VLESS, Generation: source.Node.Generation,
+				},
+				cookie, csrf,
+			)
+			responses <- captureResponse(response)
+		}()
+	}
+	wait.Wait()
+	close(responses)
+	statuses := map[int]int{}
+	for response := range responses {
+		statuses[response.status]++
+	}
+	if statuses[http.StatusOK] != 1 || statuses[http.StatusConflict] != 1 {
+		t.Fatalf("concurrent statuses = %#v, want one success and one conflict", statuses)
+	}
+	if after := revisionCount(t, environment, cookie); after != beforeRevisions+1 {
+		t.Fatalf("concurrent stale updates added %d revisions, want 1", after-beforeRevisions)
+	}
+	stored, err := environment.manager.Node(context.Background(), source.Node.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Generation != source.Node.Generation+1 ||
+		(stored.Name != "concurrent-a" && stored.Name != "concurrent-b") {
+		t.Fatalf("concurrent final state = %#v", stored)
+	}
+}
+
+type responseCapture struct {
+	status int
+	body   string
+}
+
+func captureResponse(response *httptest.ResponseRecorder) *responseCapture {
+	return &responseCapture{status: response.Code, body: response.Body.String()}
+}
+
+func equalJSON(left, right any) bool {
+	leftJSON, _ := json.Marshal(left)
+	rightJSON, _ := json.Marshal(right)
+	return bytes.Equal(leftJSON, rightJSON)
 }
 
 func createOperationTestNode(
