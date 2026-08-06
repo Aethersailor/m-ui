@@ -159,7 +159,7 @@ func TestCommitFailureUsesPreviousRevisionTimeForExpiredOldState(t *testing.T) {
 	expiresAt := publicationTime.Add(time.Minute)
 	activeState := cloneState(fixture.initialState)
 	activeState.AsOf = publicationTime
-	activeState.Listeners[0].Users[0].ExpiresAt = &expiresAt
+	activeState.Nodes[0].Users[0].ExpiresAt = &expiresAt
 	transaction, err := fixture.repository.BeginImmediate(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -193,8 +193,8 @@ func TestCommitFailureUsesPreviousRevisionTimeForExpiredOldState(t *testing.T) {
 	expiryTime := expiresAt.Add(time.Minute)
 	expiredState := cloneState(activeState)
 	expiredState.AsOf = expiryTime
-	expiredState.Listeners[0].Enabled = false
-	expiredState.Listeners[0].Users[0].Enabled = false
+	expiredState.Nodes[0].Enabled = false
+	expiredState.Nodes[0].Users[0].Enabled = false
 	repository := &commitFaultRepository{
 		PublicationRepository: fixture.repository,
 		mode:                  commitFailsBeforeDurableWrite,
@@ -368,7 +368,7 @@ func TestPublishRejectsTamperedOrMissingActiveYAMLBeforeMutation(t *testing.T) {
 				ctx,
 				fixture.effectiveTime,
 			)
-			if stateErr != nil || state.Listeners[0].Name != fixture.nextState.Listeners[0].Name {
+			if stateErr != nil || state.Nodes[0].Name != fixture.nextState.Nodes[0].Name {
 				t.Fatalf("DesiredState() = %#v, %v", state, stateErr)
 			}
 			revisionsAfter, listErr := fixture.repository.Revisions(ctx, 10, 0)
@@ -403,8 +403,8 @@ func TestPublishAcceptsMatchingActiveYAML(t *testing.T) {
 	t.Parallel()
 	fixture := newActiveSQLiteFixture(t)
 	thirdState := cloneState(fixture.nextState)
-	thirdState.Listeners[0].Name = "third"
-	thirdState.Listeners[0].ListenPort = 9443
+	thirdState.Nodes[0].Name = "third"
+	thirdState.Nodes[0].Port = "9443"
 
 	revision, err := fixture.publisher.Publish(
 		context.Background(),
@@ -465,7 +465,7 @@ func TestPublishRejectsActiveYAMLDriftAfterCandidateValidation(t *testing.T) {
 	}
 	state, stateErr := fixture.repository.ReadDesiredState(ctx, fixture.effectiveTime)
 	if stateErr != nil ||
-		state.Listeners[0].Name != fixture.nextState.Listeners[0].Name {
+		state.Nodes[0].Name != fixture.nextState.Nodes[0].Name {
 		t.Fatalf("DesiredState() = %#v, %v", state, stateErr)
 	}
 	active, readErr := os.ReadFile(fixture.configPath)
@@ -519,7 +519,7 @@ func TestPublishActiveIntegrityUsesSnapshotAsOfForExpiredUser(t *testing.T) {
 	expiresAt := publicationTime.Add(time.Minute)
 	activeState := cloneState(fixture.nextState)
 	activeState.AsOf = publicationTime
-	activeState.Listeners[0].Users[0].ExpiresAt = &expiresAt
+	activeState.Nodes[0].Users[0].ExpiresAt = &expiresAt
 	transaction, err := fixture.repository.BeginImmediate(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -549,9 +549,9 @@ func TestPublishActiveIntegrityUsesSnapshotAsOfForExpiredUser(t *testing.T) {
 	instance.now = func() time.Time { return later }
 	laterState := cloneState(activeState)
 	laterState.AsOf = later
-	laterState.Listeners[0].Name = "after-expiry"
-	laterState.Listeners[0].Enabled = false
-	laterState.Listeners[0].Users[0].Enabled = false
+	laterState.Nodes[0].Name = "after-expiry"
+	laterState.Nodes[0].Enabled = false
+	laterState.Nodes[0].Users[0].Enabled = false
 	revision, err := instance.Publish(ctx, fixture.request(laterState))
 	if err != nil {
 		t.Fatalf("Publish() after wall time advance error = %v", err)
@@ -731,7 +731,7 @@ func TestStartupKeepsDegradedWhenEvidenceRemainsInconsistent(t *testing.T) {
 				t.Helper()
 				if _, err := fixture.database.DB().ExecContext(
 					context.Background(),
-					"UPDATE listeners SET listen_port = 10443",
+					"UPDATE nodes SET port = '10443'",
 				); err != nil {
 					t.Fatal(err)
 				}
@@ -930,7 +930,7 @@ func TestStartupDBAndActiveRevisionMismatchMarksDegraded(t *testing.T) {
 	fixture := newActiveSQLiteFixture(t)
 	if _, err := fixture.database.DB().ExecContext(
 		context.Background(),
-		"UPDATE listeners SET listen_port = 10443",
+		"UPDATE nodes SET port = '10443'",
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -1125,7 +1125,7 @@ func TestStartupIntegrityUsesTheActiveRevisionEffectiveTime(t *testing.T) {
 	t.Parallel()
 	fixture := newSQLiteReconciliationFixture(t)
 	expiresAfterPublication := fixture.effectiveTime.Add(time.Hour)
-	fixture.nextState.Listeners[0].Users[0].ExpiresAt = &expiresAfterPublication
+	fixture.nextState.Nodes[0].Users[0].ExpiresAt = &expiresAfterPublication
 	nextYAML, err := (YAMLCompiler{}).Compile(
 		context.Background(),
 		fixture.nextState,
@@ -1291,8 +1291,8 @@ func (fixture sqliteReconciliationFixture) assertStateAndConfig(
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.Listeners[0].Name != wantState.Listeners[0].Name {
-		t.Fatalf("durable listener name = %q, want %q", state.Listeners[0].Name, wantState.Listeners[0].Name)
+	if state.Nodes[0].Name != wantState.Nodes[0].Name {
+		t.Fatalf("durable node name = %q, want %q", state.Nodes[0].Name, wantState.Nodes[0].Name)
 	}
 	active, err := os.ReadFile(fixture.configPath)
 	if err != nil {

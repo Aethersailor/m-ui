@@ -1433,7 +1433,7 @@ func archiveRevision(
 	compiled []byte,
 ) error {
 	snapshot, err := json.MarshalIndent(domain.StateSnapshot{
-		Version: 1,
+		Version: domain.StateSnapshotVersion,
 		State:   state,
 	}, "", "  ")
 	if err != nil {
@@ -1473,7 +1473,7 @@ func readRevisionStateSnapshot(
 	var snapshot domain.StateSnapshot
 	decoder := json.NewDecoder(strings.NewReader(string(content)))
 	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&snapshot); err != nil || snapshot.Version != 1 {
+	if err := decoder.Decode(&snapshot); err != nil || snapshot.Version != domain.StateSnapshotVersion {
 		return domain.StateSnapshot{}, errors.New("revision state snapshot is invalid")
 	}
 	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {

@@ -1,14 +1,19 @@
-# m-ui v0.1 architecture
+# m-ui node architecture
 
 ## Purpose and boundary
 
 m-ui is a single-host administration service for one dedicated Mihomo server
-instance. It manages multiple VLESS TCP listeners using REALITY and XTLS Vision,
-with multiple users per listener. It is not a Mihomo dashboard, a general YAML
-editor, a subscription aggregator, or a multi-node controller.
+instance. Its managed unit is a protocol-aware node composed from a server
+protocol, handler/transport, security layer, users, and public access profiles.
+The first modules are VLESS and Hysteria2. It is not a Mihomo dashboard, a
+general YAML editor, a subscription aggregator, or a multi-host controller.
+
+The parameter contract is reviewed against `MetaCubeX/mihomo` branch `Meta`,
+currently pinned by `domain.MihomoSourceCommit`. The default branch is not an
+acceptable source for node-schema decisions.
 
 The SQLite database is the authoritative representation of administrator,
-listener, user, settings, revision, and audit state. Mihomo YAML is a
+node, user, access-profile, settings, revision, and audit state. Mihomo YAML is a
 deterministic compiled artifact owned exclusively by m-ui.
 
 ## Runtime topology
@@ -49,8 +54,14 @@ non-root UID runs m-ui and its bounded Mihomo supervisor without an init system.
 - `internal/audit`: redacted security and configuration audit events.
 - `internal/config`: protected local m-ui configuration loading and validation.
 - `internal/crypto`: master-key loading and versioned AES-256-GCM envelopes.
-- `internal/domain`: typed listener, user, settings, revision, and desired-state
+- `internal/domain`: typed node unions, users, access profiles, settings, revisions, and desired-state
   models plus validation.
+- `internal/protocol`: compile-time protocol registry. Each protocol module owns
+  server YAML compilation, client YAML generation, share URIs, and capability
+  metadata for the same typed model. The capability manifest is a versioned,
+  machine-readable composition contract: layers, component defaults, field
+  types, Meta source keys, secret markers, and component dependencies are
+  published by the same module that compiles the configuration.
 - `internal/httpapi`: REST routing, middleware, DTOs, and stable error responses.
 - `internal/mihomo`: Controller HTTP client, fixed-argument CLI runner, systemd
   and OpenRC adapters, non-root managed supervisor, and runtime snapshots.
@@ -70,13 +81,27 @@ The Vue application under `web/` is built to static assets and embedded into the
 Go binary. It communicates only with `/api/v1` on the same origin and loads no
 runtime assets from external CDNs.
 
+The node editor consumes `/api/v1/capabilities` for protocol, transport, and
+security choices and their defaults. The capability schema has its own version
+independent from the persisted Node schema, so form-contract evolution does not
+silently change stored configuration semantics.
+
+Capability schema v3 also describes conditional visibility, repeatable object
+items, keyed records, locked layers, and `requires`/`conflicts` references. The
+backend rejects malformed manifests before they reach the editor. The Vue form
+uses immutable path updates that accept reactive proxies, dedicated reusable
+editors for object lists and records, and the same `group:kind` identifiers when
+evaluating a candidate component selection. Protocol-specific operations such
+as REALITY key generation remain explicit extensions beside the generic field
+renderer rather than becoming untyped form behavior.
+
 ## Data and request flow
 
 Reads query the service layer, which obtains structured state from the store or
 an in-memory runtime snapshot. Secret values are decrypted only at the boundary
 that needs them and are never returned through normal list or audit endpoints.
 
-Every listener or user mutation follows one publication path:
+Every node or user mutation follows one publication path:
 
 ```text
 HTTP or scheduler request
@@ -121,8 +146,8 @@ degraded condition.
 
 ## Determinism and revisions
 
-Compiler input is a typed `DesiredState`. Listeners and users are sorted by name
-and then ID. Dedicated YAML output structures determine field order. The same
+Compiler input is a typed `DesiredState`. Nodes are sorted by name and then ID;
+protocol modules emit dedicated typed YAML structures. The same
 state, including the controller secret, must produce byte-identical YAML and
 the same SHA-256 digest.
 
@@ -142,7 +167,8 @@ YAML file over the active configuration.
 - Administrator passwords use Argon2id with per-password random salts.
 - Browser session and CSRF tokens are generated with a CSPRNG. Only SHA-256
   hashes are stored in SQLite.
-- Controller secrets and REALITY private keys use a 32-byte local master key
+- Controller secrets, protocol private keys, obfuscation passwords, and user
+  credentials use a 32-byte local master key
   and versioned AES-256-GCM envelopes with a fresh nonce for every value.
 - State-changing browser requests require a valid session and CSRF header.
 - Login failures are deliberately indistinguishable and rate limited by the
@@ -182,9 +208,18 @@ observability, never user billing data.
 - Installation does not modify the firewall, SSH configuration, reverse proxy,
   or third-party infrastructure.
 
-## v0.1 non-goals
+## Protocol growth boundary
 
-No other protocols or transports, multi-node control, multi-administrator RBAC,
+Adding a protocol does not add fields to a shared listener record. It requires
+one new domain specification and validator, one `protocol.Module`, encrypted
+secret extraction/restoration, API/UI capability metadata, and contract tests
+against the pinned Mihomo `Meta` source. Transport and security variants remain
+protocol-owned tagged unions, so invalid cross-protocol combinations cannot be
+persisted or compiled.
+
+## Current non-goals
+
+Multi-host control, multi-administrator RBAC,
 per-user quota enforcement, permanent public subscriptions, arbitrary
 third-party YAML import, automatic TLS certificates, firewall automation, or
 reverse-proxy installation are part of v0.1.

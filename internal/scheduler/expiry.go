@@ -31,10 +31,10 @@ type Options struct {
 }
 
 type BatchResult struct {
-	BatchTime         time.Time
-	UsersDisabled     int
-	ListenersDisabled int
-	Revision          domain.Revision
+	BatchTime     time.Time
+	UsersDisabled int
+	NodesDisabled int
+	Revision      domain.Revision
 }
 
 type Expiry struct {
@@ -106,15 +106,15 @@ func (scheduler *Expiry) RunOnce(
 	batchTime := scheduler.clock().UTC()
 	result := BatchResult{BatchTime: batchTime}
 	revision, err := scheduler.publisher.Publish(ctx, publisher.Request{
-		Reason:        "disable expired listener users",
+		Reason:        "disable expired node users",
 		AuditAction:   "scheduler.expiry_batch",
-		AuditResource: "listener_users",
+		AuditResource: "node_users",
 		EffectiveAt:   &batchTime,
 		AuditSummaryFunc: func() string {
 			return fmt.Sprintf(
-				"Disabled %d expired listener users and %d affected empty listeners.",
+				"Disabled %d expired node users and %d affected empty nodes.",
 				result.UsersDisabled,
-				result.ListenersDisabled,
+				result.NodesDisabled,
 			)
 		},
 		Mutate: func(
@@ -125,11 +125,11 @@ func (scheduler *Expiry) RunOnce(
 			if err != nil {
 				return err
 			}
-			affectedListeners := make(map[string]struct{})
-			for listenerIndex := range state.Listeners {
-				listener := &state.Listeners[listenerIndex]
-				for userIndex := range listener.Users {
-					user := &listener.Users[userIndex]
+			affectedNodes := make(map[string]struct{})
+			for nodeIndex := range state.Nodes {
+				node := &state.Nodes[nodeIndex]
+				for userIndex := range node.Users {
+					user := &node.Users[userIndex]
 					if !user.Enabled ||
 						user.ExpiresAt == nil ||
 						user.ExpiresAt.After(batchTime) {
@@ -137,23 +137,23 @@ func (scheduler *Expiry) RunOnce(
 					}
 					user.Enabled = false
 					user.UpdatedAt = batchTime
-					affectedListeners[listener.ID] = struct{}{}
+					affectedNodes[node.ID] = struct{}{}
 					result.UsersDisabled++
 				}
 			}
 			if result.UsersDisabled == 0 {
 				return errNoExpiredUsers
 			}
-			for listenerIndex := range state.Listeners {
-				listener := &state.Listeners[listenerIndex]
-				if _, affected := affectedListeners[listener.ID]; !affected {
+			for nodeIndex := range state.Nodes {
+				node := &state.Nodes[nodeIndex]
+				if _, affected := affectedNodes[node.ID]; !affected {
 					continue
 				}
-				if listener.Enabled &&
-					len(listener.EffectiveUsers(batchTime)) == 0 {
-					listener.Enabled = false
-					listener.UpdatedAt = batchTime
-					result.ListenersDisabled++
+				if node.Enabled && len(node.EffectiveUsers(batchTime)) == 0 {
+					node.Enabled = false
+					node.Generation++
+					node.UpdatedAt = batchTime
+					result.NodesDisabled++
 				}
 			}
 			state.AsOf = batchTime
@@ -184,11 +184,11 @@ func (scheduler *Expiry) runAndReport(ctx context.Context) {
 	}
 	if result.UsersDisabled != 0 {
 		scheduler.logger.Info(
-			"expired listener users disabled",
+			"expired node users disabled",
 			"users_disabled",
 			result.UsersDisabled,
-			"listeners_disabled",
-			result.ListenersDisabled,
+			"nodes_disabled",
+			result.NodesDisabled,
 			"revision",
 			result.Revision.RevisionNumber,
 		)

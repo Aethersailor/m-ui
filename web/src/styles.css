@@ -209,6 +209,16 @@ select {
   margin-top: 20px;
 }
 
+.node-filters {
+  display: grid;
+  grid-template-columns: minmax(240px, 1fr) 190px 170px;
+  gap: 12px;
+}
+
+.node-editor-page {
+  width: min(1380px, calc(100% - 64px));
+}
+
 .surface-card,
 .metric-card,
 .revision-card,
@@ -742,6 +752,10 @@ code,
     width: min(100% - 32px, 760px);
     padding-top: 28px;
   }
+
+  .node-filters {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 640px) {
@@ -778,6 +792,15 @@ code,
 
   .card-heading {
     align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .card-heading > .n-space {
+    width: 100%;
+  }
+
+  .card-heading > .n-space .n-button {
+    flex: 1 1 auto;
   }
 
   .credential-row {

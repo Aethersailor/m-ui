@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -40,7 +41,7 @@ func TestPublisherValidatesPublishesCommitsAndArchives(t *testing.T) {
 	if !strings.Contains(string(config), "name: next") {
 		t.Fatalf("active config was not replaced:\n%s", config)
 	}
-	if fixture.repository.currentState().Listeners[0].Name != "next" {
+	if fixture.repository.currentState().Nodes[0].Name != "next" {
 		t.Fatal("structured state was not committed")
 	}
 	for _, path := range []string{revision.FilePath, revision.StateFilePath} {
@@ -187,7 +188,7 @@ func TestPublisherCommitsManagedStateAndRevisionInRealSQLite(t *testing.T) {
 	if err := readTransaction.Rollback(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if loadedState.Listeners[0].Name != "next" {
+	if loadedState.Nodes[0].Name != "next" {
 		t.Fatalf("SQLite desired state = %#v", loadedState)
 	}
 }
@@ -374,7 +375,7 @@ func TestPublisherPruneFailureAfterCommitStillReturnsSuccess(t *testing.T) {
 	if revision.Status != domain.RevisionActive || revision.ActivatedAt == nil {
 		t.Fatalf("revision = %#v", revision)
 	}
-	if fixture.repository.currentState().Listeners[0].Name != "next" {
+	if fixture.repository.currentState().Nodes[0].Name != "next" {
 		t.Fatal("successful publication was not committed")
 	}
 }
@@ -652,8 +653,8 @@ func TestPublisherRollbackRestoresStructuredSnapshotAndCreatesAudit(t *testing.T
 		t.Fatal(err)
 	}
 	thirdState := cloneState(fixture.nextState)
-	thirdState.Listeners[0].Name = "third"
-	thirdState.Listeners[0].ListenPort = 10443
+	thirdState.Nodes[0].Name = "third"
+	thirdState.Nodes[0].Port = "10443"
 	if _, err := fixture.publisher.Publish(
 		context.Background(),
 		fixture.request(thirdState),
@@ -670,7 +671,7 @@ func TestPublisherRollbackRestoresStructuredSnapshotAndCreatesAudit(t *testing.T
 		t.Fatalf("Rollback() error = %v", err)
 	}
 	if rolledBack.RevisionNumber != 3 ||
-		fixture.repository.currentState().Listeners[0].Name != "next" {
+		fixture.repository.currentState().Nodes[0].Name != "next" {
 		t.Fatalf(
 			"rollback revision/state = %#v/%#v",
 			rolledBack,
@@ -781,7 +782,7 @@ func (fixture *publisherFixture) request(state domain.DesiredState) Request {
 		ActorAdminID:    "administrator-id",
 		AuditAction:     "config.publish",
 		AuditResource:   "managed_state",
-		AuditResourceID: state.Listeners[0].ID,
+		AuditResourceID: state.Nodes[0].ID,
 		AuditSummary:    "published managed state",
 		Mutate: func(ctx context.Context, transaction store.PublicationTransaction) error {
 			return transaction.ReplaceDesiredState(ctx, state)
@@ -798,38 +799,41 @@ func (fixture *publisherFixture) assertOldStateAndConfig(t *testing.T) {
 	if string(config) != "old-config\n" {
 		t.Fatalf("active configuration = %q, want original bytes", config)
 	}
-	if fixture.repository.currentState().Listeners[0].Name !=
-		fixture.oldState.Listeners[0].Name {
+	if fixture.repository.currentState().Nodes[0].Name !=
+		fixture.oldState.Nodes[0].Name {
 		t.Fatalf("structured state changed: %#v", fixture.repository.currentState())
 	}
 }
 
 func publisherState(name string, port uint16) domain.DesiredState {
-	listenerID := "773a43f6-ab75-4836-9b83-cf18a1559c97"
+	nodeID := "773a43f6-ab75-4836-9b83-cf18a1559c97"
 	return domain.DesiredState{
 		AsOf:              time.Date(2026, time.July, 28, 12, 0, 0, 0, time.UTC),
 		ControllerAddress: "127.0.0.1:9090",
 		ControllerSecret:  "publisher-controller-secret",
 		PublicHost:        "node.example.com",
-		Listeners: []domain.Listener{{
-			ID:                listenerID,
-			Name:              name,
-			Enabled:           true,
-			ListenAddress:     "0.0.0.0",
-			ListenPort:        port,
-			ServerName:        "www.example.com",
-			RealityDest:       "www.example.com:443",
-			RealityPrivateKey: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-			RealityPublicKey:  "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
-			ShortID:           "0123456789abcdef",
-			UDPEnabled:        true,
-			Users: []domain.User{{
-				ID:         "beb8ec46-f6d8-4c49-9bd4-b8628599c64f",
-				ListenerID: listenerID,
-				Name:       "user",
-				Enabled:    true,
-				UUID:       "2b26a842-8bd1-493a-978b-ee5e546cf508",
+		Nodes: []domain.Node{{
+			ID: nodeID, Name: name, Enabled: true, ListenAddress: "0.0.0.0",
+			Port: fmt.Sprint(port), Protocol: domain.ProtocolVLESS, SchemaVersion: domain.NodeSchemaVersion,
+			VLESS: &domain.VLESSSpec{Decryption: "none", Handler: domain.VLESSHandlerSpec{Type: domain.VLESSHandlerRaw}, Security: domain.VLESSSecuritySpec{
+				Type: domain.VLESSSecurityReality, Reality: &domain.RealityConfig{
+					Destination: "www.example.com:443", PrivateKey: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+					PublicKey: "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
+					ShortIDs:  []string{"0123456789abcdef"}, ServerNames: []string{"www.example.com"},
+				},
 			}},
+			Users: []domain.NodeUser{{
+				ID:      "beb8ec46-f6d8-4c49-9bd4-b8628599c64f",
+				NodeID:  nodeID,
+				Name:    "user",
+				Enabled: true,
+				VLESS:   &domain.VLESSCredential{UUID: "2b26a842-8bd1-493a-978b-ee5e546cf508"},
+			}},
+			AccessProfiles: []domain.AccessProfile{{
+				ID: "9f928c64-b0a0-4a45-917d-56c3e0bd307f", NodeID: nodeID,
+				Name: "default", Default: true, PublicPort: port, ServerName: "www.example.com",
+			}},
+			Generation: 1,
 		}},
 	}
 }

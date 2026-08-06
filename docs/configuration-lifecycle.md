@@ -3,7 +3,8 @@
 ## Sources and artifacts
 
 SQLite is the authoritative desired state for m-ui-managed settings,
-listeners, users, and revisions. `/etc/mihomo/config.yaml` is a deterministic
+nodes, protocol-owned specifications, users, access profiles, and revisions.
+`/etc/mihomo/config.yaml` is a deterministic
 artifact generated from that state. Editing it by hand is unsupported because
 the next successful mutation replaces it.
 
@@ -11,11 +12,14 @@ The compiler:
 
 1. takes one UTC effective-time snapshot;
 2. filters disabled and expired records;
-3. sorts listeners and users deterministically;
-4. emits typed YAML for the supported v0.1 surface;
+3. sorts enabled nodes deterministically and filters ineffective users;
+4. dispatches each node through the compile-time protocol registry and emits
+   typed VLESS or Hysteria2 YAML;
 5. hashes the exact bytes with SHA-256.
 
-No business state is assembled with untyped YAML maps.
+The top-level compiler and protocol modules use explicit YAML output types.
+Maps are used only where Mihomo's source contract itself is keyed (for example,
+Hysteria2 username/password mappings).
 
 ## Publication transaction
 
@@ -144,12 +148,12 @@ publication error.
 
 The scheduler scans every 60 seconds. A batch uses one fixed UTC time,
 disables every enabled user expired at that time, and auto-disables only
-listeners affected by that batch whose resulting effective user set is empty.
+nodes affected by that batch whose resulting effective user set is empty.
 It publishes once and records aggregate audit counts. Failure rolls back the
 entire batch, which is retried by the next scan.
 
-Adding a user never automatically re-enables a listener, and the expiry job
-does not repair unrelated listener state.
+Adding a user never automatically re-enables a node, and the expiry job does
+not repair unrelated node state.
 
 ## Backup and restore
 

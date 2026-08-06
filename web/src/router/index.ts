@@ -23,16 +23,22 @@ export const router = createRouter({
       meta: { section: 'dashboard' },
     },
     {
-      path: '/listeners',
-      name: 'listeners',
+      path: '/nodes',
+      name: 'nodes',
       component: () => import('@/views/ListenersView.vue'),
-      meta: { section: 'listeners' },
+      meta: { section: 'nodes' },
     },
     {
-      path: '/listeners/:id',
-      name: 'listener-detail',
+      path: '/nodes/new',
+      name: 'node-create',
       component: () => import('@/views/ListenerDetailView.vue'),
-      meta: { section: 'listeners' },
+      meta: { section: 'nodes' },
+    },
+    {
+      path: '/nodes/:id',
+      name: 'node-detail',
+      component: () => import('@/views/ListenerDetailView.vue'),
+      meta: { section: 'nodes' },
     },
     {
       path: '/config',
@@ -62,7 +68,7 @@ export const router = createRouter({
       path: '/onboarding',
       name: 'onboarding',
       component: () => import('@/views/OnboardingView.vue'),
-      meta: { section: 'listeners' },
+      meta: { section: 'nodes' },
     },
     {
       path: '/initialization-error',

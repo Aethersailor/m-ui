@@ -6,10 +6,10 @@ import {
   getRuntimeStatus,
   getSettings,
   listAuditEntries,
-  listListeners,
+  listNodes,
   listRevisions,
   type AuditEntry,
-  type Listener,
+  type Node,
   type Revision,
   type RuntimeLog,
   type RuntimeStatus,
@@ -20,7 +20,7 @@ import { APIError } from '@/api/client'
 
 export const useManagementStore = defineStore('management', {
   state: () => ({
-    listeners: [] as Listener[],
+    nodes: [] as Node[],
     runtime: null as RuntimeStatus | null,
     revisions: [] as Revision[],
 		settings: null as Settings | null,
@@ -32,9 +32,9 @@ export const useManagementStore = defineStore('management', {
   }),
   getters: {
     enabledUserCount: (state) =>
-      state.listeners.reduce(
-        (total, listener) =>
-          total + listener.users.filter((user) => user.enabled).length,
+      state.nodes.reduce(
+        (total, node) =>
+          total + node.users.filter((user) => user.enabled).length,
         0,
       ),
     activeRevision: (state) =>
@@ -52,12 +52,12 @@ export const useManagementStore = defineStore('management', {
       this.loading = true
       this.errorCode = ''
       try {
-        const [listeners, runtime, revisions] = await Promise.all([
-          listListeners(),
+        const [nodes, runtime, revisions] = await Promise.all([
+          listNodes(),
           getRuntimeStatus(),
           listRevisions(),
         ])
-        this.listeners = listeners
+        this.nodes = nodes
         this.runtime = runtime
         this.revisions = revisions
       } catch (error) {
@@ -76,8 +76,8 @@ export const useManagementStore = defineStore('management', {
           error instanceof APIError ? error.code : 'REQUEST_FAILED'
       }
     },
-    async refreshListeners() {
-      this.listeners = await listListeners()
+    async refreshNodes() {
+      this.nodes = await listNodes()
     },
     async refreshRevisions() {
       this.revisions = await listRevisions()

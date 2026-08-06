@@ -1,53 +1,267 @@
 import { apiRequest } from './client'
 
+// Protocol identifiers are registry data returned by /api/v1/capabilities.
+// Keeping this open-ended is what lets a newly registered backend protocol
+// appear in the shared node views without another frontend release.
+export type ProtocolKind = string
+export type VLESSHandlerKind = 'raw' | 'websocket' | 'grpc' | 'xhttp'
+export type VLESSSecurityKind = 'none' | 'tls' | 'reality' | 'shadow-tls' | 'res-tls' | 'jls'
+
+export interface MuxSpec {
+  padding?: boolean
+  brutal?: { enabled?: boolean; up?: string; down?: string }
+}
+
+export interface TLSConfig {
+  certificate: string
+  private_key: string
+  client_auth_type?: string
+  client_auth_cert?: string
+  ech_key?: string
+  allow_insecure?: boolean
+}
+
+export interface RealityConfig {
+  destination: string
+  private_key: string
+  public_key: string
+  short_ids: string[]
+  server_names: string[]
+  max_time_difference?: number
+  proxy?: string
+  limit_fallback_upload?: { after_bytes?: number; bytes_per_sec?: number; burst_bytes_per_sec?: number }
+  limit_fallback_download?: { after_bytes?: number; bytes_per_sec?: number; burst_bytes_per_sec?: number }
+}
+
+export interface XHTTPConfig {
+  path?: string
+  host?: string
+  mode?: string
+  x_padding_bytes?: string
+  x_padding_obfs_mode?: boolean
+  x_padding_key?: string
+  x_padding_header?: string
+  x_padding_placement?: string
+  x_padding_method?: string
+  uplink_http_method?: string
+  session_placement?: string
+  session_key?: string
+  seq_placement?: string
+  seq_key?: string
+  uplink_data_placement?: string
+  uplink_data_key?: string
+  uplink_chunk_size?: string
+  no_sse_header?: boolean
+  sc_stream_up_server_secs?: string
+  sc_max_buffered_posts?: string
+  sc_max_each_post_bytes?: string
+}
+
+export interface VLESSSpec {
+  decryption?: string
+  handler: {
+    type: VLESSHandlerKind
+    websocket?: { path: string }
+    grpc?: { service_name: string }
+    xhttp?: XHTTPConfig
+  }
+  security: {
+    type: VLESSSecurityKind
+    tls?: TLSConfig
+    reality?: RealityConfig
+    shadow_tls?: {
+      version?: number
+      password?: string
+      users?: Array<{ name: string; password: string }>
+      handshake: { destination: string; proxy?: string }
+      handshake_for_server_name?: Record<string, { destination: string; proxy?: string }>
+      strict_mode?: boolean
+      wildcard_sni?: string
+    }
+    res_tls?: { destination: string; password: string; version_hint?: string; script?: string; min_record_length?: number; proxy?: string }
+    jls?: { users: Array<{ username: string; password: string }>; server_name?: string; destination: string; alpn?: string[]; proxy?: string; rate_limit?: number }
+  }
+  mux?: MuxSpec
+}
+
+export interface Hysteria2Spec {
+  obfs?: string
+  obfs_password?: string
+  obfs_min_packet_size?: number
+  obfs_max_packet_size?: number
+  certificate: string
+  private_key: string
+  client_auth_type?: string
+  client_auth_cert?: string
+  ech_key?: string
+  max_idle_time?: number
+  alpn?: string[]
+  up?: string
+  down?: string
+  ignore_client_bandwidth?: boolean
+  masquerade?: string
+  cwnd?: number
+  bbr_profile?: string
+  udp_mtu?: number
+  mux?: MuxSpec
+  realm?: {
+    enabled: boolean
+    server_url?: string
+    token?: string
+    realm_id?: string
+    stun_servers?: string[]
+    server_name?: string
+    skip_cert_verify?: boolean
+    name_cert_verify?: string
+    fingerprint?: string
+    certificate?: string
+    private_key?: string
+    alpn?: string[]
+    proxy?: string
+  }
+  initial_stream_receive_window?: number
+  max_stream_receive_window?: number
+  initial_connection_receive_window?: number
+  max_connection_receive_window?: number
+}
+
 export interface User {
+  [key: string]: unknown
   id: string
-  listener_id: string
+  node_id: string
   name: string
   enabled: boolean
-  uuid: string
+  vless?: { uuid: string; flow?: string }
+  hysteria2?: { password: string }
   expires_at: string | null
   created_at: string
   updated_at: string
 }
 
-export interface Listener {
+export interface AccessProfile {
+  id: string
+  node_id: string
+  name: string
+  default: boolean
+  public_host: string
+  public_port: number
+  server_name: string
+  fingerprint: string
+  packet_encoding: string
+  allow_insecure: boolean
+  created_at?: string
+  updated_at?: string
+}
+
+export type AccessProfileInput = Omit<AccessProfile, 'id' | 'node_id' | 'created_at' | 'updated_at'> & { id?: string }
+
+export interface Node {
+  [key: string]: unknown
   id: string
   name: string
   enabled: boolean
-  listen_address: string
-  listen_port: number
-  public_host_override: string
-  public_port_override: number | null
-  server_name: string
-  reality_dest: string
-  reality_public_key: string
-  reality_private_key_set: boolean
-  short_id: string
-  udp_enabled: boolean
+  listen: string
+  port: string
+  protocol: ProtocolKind
+  schema_version: number
+  vless?: VLESSSpec
+  hysteria2?: Hysteria2Spec
   users: User[]
+  access_profiles: AccessProfile[]
+  secrets_set: Record<string, boolean>
+  generation: number
   created_at: string
   updated_at: string
 }
 
-export interface ListenerInput {
+export interface NodeInput {
+  [key: string]: unknown
   name: string
-  listen_address: string
-  listen_port: number
-  public_host_override: string
-  public_port_override: number | null
-  server_name: string
-  reality_dest: string
-  reality_private_key?: string
-  reality_public_key?: string
-  short_id?: string
-  udp_enabled: boolean
+  enabled: boolean
+  listen: string
+  port: string
+  protocol: ProtocolKind
+  vless?: VLESSSpec
+  hysteria2?: Hysteria2Spec
+  users?: UserInput[]
+  access_profiles?: AccessProfileInput[]
+  generation?: number
 }
 
 export interface UserInput {
+  [key: string]: unknown
   name: string
-  uuid?: string
+  enabled: boolean
+  vless?: { uuid: string; flow?: string }
+  hysteria2?: { password: string }
   expires_at: string | null
+}
+
+export interface CapabilityManifest {
+  schema_version: number
+  node_schema_version: number
+  source: { repository: string; branch: string; commit: string }
+  node_fields: FieldCapability[]
+  access_profile_fields: FieldCapability[]
+  protocols: ProtocolCapability[]
+}
+
+export type FieldCapabilityType = 'string' | 'text' | 'secret' | 'boolean' | 'integer' | 'string-list' | 'object-list' | 'record'
+export type ComponentGroup = 'transport' | 'security' | 'extension'
+
+export interface FieldCondition {
+  path: string
+  equals: unknown
+}
+
+export interface FieldCapability {
+  path: string
+  source_key?: string
+  label: string
+  type: FieldCapabilityType
+  required?: boolean
+  secret?: boolean
+  advanced?: boolean
+  minimum?: number
+  maximum?: number
+  options?: string[]
+  item_fields?: FieldCapability[]
+  item_key_label?: string
+  visible_when?: FieldCondition
+  description?: string
+}
+
+export interface LayerCapability {
+  group: ComponentGroup
+  required: boolean
+  multiple: boolean
+  locked?: boolean
+  default_component?: string
+}
+
+export interface ComponentCapability {
+  group: ComponentGroup
+  kind: string
+  label: string
+  default_config: unknown
+  config_path: string
+  selection_path?: string
+  enabled_path?: string
+  fields?: FieldCapability[]
+  requires?: string[]
+  conflicts?: string[]
+}
+
+export interface ProtocolCapability {
+  kind: ProtocolKind
+  label: string
+  default_node: Partial<NodeInput>
+  default_user: Partial<UserInput>
+  layers: LayerCapability[]
+  components: ComponentCapability[]
+  fields?: FieldCapability[]
+  user_fields: FieldCapability[]
+  features?: string[]
 }
 
 export interface Revision {
@@ -199,21 +413,11 @@ export interface Share {
 
 export interface OnboardingInput {
   public_host: string
-  listener: {
-    name: string
-    listen_port: number
-    server_name: string
-    reality_dest: string
-    udp_enabled: boolean
-  }
-  user: {
-    name: string
-    expires_at: string | null
-  }
+  node: NodeInput
 }
 
 export interface OnboardingResult {
-  listener: Listener
+  node: Node
   user: User
   revision: Revision
   share: Share
@@ -250,9 +454,12 @@ function mutation<T>(
   })
 }
 
-export async function listListeners(): Promise<Listener[]> {
-  return (await apiRequest<{ listeners: Listener[] }>('/api/v1/listeners'))
-    .listeners
+export function getCapabilities(): Promise<CapabilityManifest> {
+  return apiRequest<CapabilityManifest>('/api/v1/capabilities')
+}
+
+export async function listNodes(): Promise<Node[]> {
+  return (await apiRequest<{ nodes: Node[] }>('/api/v1/nodes')).nodes
 }
 
 export function completeOnboarding(
@@ -267,80 +474,112 @@ export function completeOnboarding(
   )
 }
 
-export function getListener(id: string): Promise<Listener> {
-  return apiRequest<Listener>(`/api/v1/listeners/${encodeURIComponent(id)}`)
+export function getNode(id: string): Promise<Node> {
+  return apiRequest<Node>(`/api/v1/nodes/${encodeURIComponent(id)}`)
 }
 
-export async function createListener(
+export async function createNode(
   csrfToken: string,
-  input: ListenerInput,
-): Promise<Listener> {
+  input: NodeInput,
+): Promise<Node> {
   return (
-    await mutation<{ listener: Listener }>(
-      '/api/v1/listeners',
+    await mutation<{ node: Node }>(
+      '/api/v1/nodes',
       csrfToken,
       'POST',
       input,
     )
-  ).listener
+  ).node
 }
 
-export async function updateListener(
+export async function updateNode(
   csrfToken: string,
   id: string,
-  input: ListenerInput,
-): Promise<Listener> {
+  input: NodeInput,
+): Promise<Node> {
   return (
-    await mutation<{ listener: Listener }>(
-      `/api/v1/listeners/${encodeURIComponent(id)}`,
+    await mutation<{ node: Node }>(
+      `/api/v1/nodes/${encodeURIComponent(id)}`,
       csrfToken,
       'PUT',
       input,
     )
-  ).listener
+  ).node
 }
 
-export function deleteListener(
+export function deleteNode(
   csrfToken: string,
   id: string,
 ): Promise<void> {
   return mutation<void>(
-    `/api/v1/listeners/${encodeURIComponent(id)}`,
+    `/api/v1/nodes/${encodeURIComponent(id)}`,
     csrfToken,
     'DELETE',
   )
 }
 
-export async function setListenerEnabled(
+export async function setNodeEnabled(
   csrfToken: string,
   id: string,
   enabled: boolean,
-): Promise<Listener> {
+): Promise<Node> {
   return (
-    await mutation<{ listener: Listener }>(
-      `/api/v1/listeners/${encodeURIComponent(id)}/${enabled ? 'enable' : 'disable'}`,
+    await mutation<{ node: Node }>(
+      `/api/v1/nodes/${encodeURIComponent(id)}/${enabled ? 'enable' : 'disable'}`,
       csrfToken,
     )
-  ).listener
+  ).node
+}
+
+export interface CloneNodeInput {
+  name: string
+  port: string
+  include_users: boolean
+}
+
+export function cloneNode(
+  csrfToken: string,
+  id: string,
+  input: CloneNodeInput,
+): Promise<{ node: Node; revision: Revision }> {
+  return mutation(
+    `/api/v1/nodes/${encodeURIComponent(id)}/clone`,
+    csrfToken,
+    'POST',
+    input,
+  )
+}
+
+export function setNodesEnabled(
+  csrfToken: string,
+  nodeIDs: string[],
+  enabled: boolean,
+): Promise<{ nodes: Node[]; revision: Revision }> {
+  return mutation(
+    '/api/v1/nodes/batch-enabled',
+    csrfToken,
+    'POST',
+    { node_ids: nodeIDs, enabled },
+  )
 }
 
 export function generateRealityKeypair(
   csrfToken: string,
 ): Promise<GeneratedKeypair> {
   return mutation<GeneratedKeypair>(
-    '/api/v1/listeners/generate-reality-keypair',
+    '/api/v1/nodes/generate-reality-keypair',
     csrfToken,
   )
 }
 
 export async function createUser(
   csrfToken: string,
-  listenerID: string,
+  nodeID: string,
   input: UserInput,
 ): Promise<User> {
   return (
     await mutation<{ user: User }>(
-      `/api/v1/listeners/${encodeURIComponent(listenerID)}/users`,
+      `/api/v1/nodes/${encodeURIComponent(nodeID)}/users`,
       csrfToken,
       'POST',
       input,
@@ -348,15 +587,28 @@ export async function createUser(
   ).user
 }
 
+export function createUsers(
+  csrfToken: string,
+  nodeID: string,
+  users: UserInput[],
+): Promise<{ users: User[]; revision: Revision }> {
+  return mutation(
+    `/api/v1/nodes/${encodeURIComponent(nodeID)}/users/batch`,
+    csrfToken,
+    'POST',
+    { users },
+  )
+}
+
 export async function updateUser(
   csrfToken: string,
-  listenerID: string,
+  nodeID: string,
   userID: string,
   input: UserInput,
 ): Promise<User> {
   return (
     await mutation<{ user: User }>(
-      `/api/v1/listeners/${encodeURIComponent(listenerID)}/users/${encodeURIComponent(userID)}`,
+      `/api/v1/nodes/${encodeURIComponent(nodeID)}/users/${encodeURIComponent(userID)}`,
       csrfToken,
       'PUT',
       input,
@@ -366,11 +618,11 @@ export async function updateUser(
 
 export function deleteUser(
   csrfToken: string,
-  listenerID: string,
+  nodeID: string,
   userID: string,
 ): Promise<void> {
   return mutation<void>(
-    `/api/v1/listeners/${encodeURIComponent(listenerID)}/users/${encodeURIComponent(userID)}`,
+    `/api/v1/nodes/${encodeURIComponent(nodeID)}/users/${encodeURIComponent(userID)}`,
     csrfToken,
     'DELETE',
   )
@@ -378,24 +630,39 @@ export function deleteUser(
 
 export async function setUserEnabled(
   csrfToken: string,
-  listenerID: string,
+  nodeID: string,
   userID: string,
   enabled: boolean,
 ): Promise<User> {
   return (
     await mutation<{ user: User }>(
-      `/api/v1/listeners/${encodeURIComponent(listenerID)}/users/${encodeURIComponent(userID)}/${enabled ? 'enable' : 'disable'}`,
+      `/api/v1/nodes/${encodeURIComponent(nodeID)}/users/${encodeURIComponent(userID)}/${enabled ? 'enable' : 'disable'}`,
       csrfToken,
     )
   ).user
 }
 
+export function setUsersEnabled(
+  csrfToken: string,
+  nodeID: string,
+  userIDs: string[],
+  enabled: boolean,
+): Promise<{ users: User[]; revision: Revision }> {
+  return mutation(
+    `/api/v1/nodes/${encodeURIComponent(nodeID)}/users/batch-enabled`,
+    csrfToken,
+    'POST',
+    { user_ids: userIDs, enabled },
+  )
+}
+
 export function getShare(
-  listenerID: string,
+  nodeID: string,
   userID: string,
+  profileID = '',
 ): Promise<Share> {
   return apiRequest<Share>(
-    `/api/v1/listeners/${encodeURIComponent(listenerID)}/users/${encodeURIComponent(userID)}/share`,
+    `/api/v1/nodes/${encodeURIComponent(nodeID)}/users/${encodeURIComponent(userID)}/share${profileID ? `?profile_id=${encodeURIComponent(profileID)}` : ''}`,
   )
 }
 

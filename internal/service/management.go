@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"strings"
@@ -11,6 +13,7 @@ import (
 	"github.com/Aethersailor/m-ui/internal/domain"
 	"github.com/Aethersailor/m-ui/internal/mihomo"
 	"github.com/Aethersailor/m-ui/internal/operation"
+	"github.com/Aethersailor/m-ui/internal/protocol"
 	"github.com/Aethersailor/m-ui/internal/publisher"
 	"github.com/Aethersailor/m-ui/internal/redact"
 	"github.com/Aethersailor/m-ui/internal/store"
@@ -22,35 +25,53 @@ var (
 	ErrConflict   = errors.New("managed state conflict")
 )
 
-type ListenerSpec struct {
-	Name               string
-	ListenAddress      string
-	ListenPort         uint16
-	PublicHostOverride string
-	PublicPortOverride *uint16
-	ServerName         string
-	RealityDest        string
-	RealityPrivateKey  string
-	RealityPublicKey   string
-	ShortID            string
-	UDPEnabled         bool
+type NodeSpec struct {
+	Name           string
+	Enabled        bool
+	ListenAddress  string
+	Port           string
+	Protocol       domain.ProtocolKind
+	VLESS          *domain.VLESSSpec
+	Hysteria2      *domain.Hysteria2Spec
+	VMess          *domain.VMessSpec
+	Trojan         *domain.TrojanSpec
+	Shadowsocks    *domain.ShadowsocksSpec
+	Users          []UserSpec
+	AccessProfiles []AccessProfileSpec
+	Generation     int64
 }
 
 type UserSpec struct {
-	Name      string
-	UUID      string
-	ExpiresAt *time.Time
+	Name        string
+	Enabled     bool
+	VLESS       *domain.VLESSCredential
+	Hysteria2   *domain.Hysteria2Credential
+	VMess       *domain.VMessCredential
+	Trojan      *domain.TrojanCredential
+	Shadowsocks *domain.ShadowsocksCredential
+	ExpiresAt   *time.Time
+}
+
+type AccessProfileSpec struct {
+	ID             string
+	Name           string
+	Default        bool
+	PublicHost     string
+	PublicPort     uint16
+	ServerName     string
+	Fingerprint    string
+	PacketEncoding string
+	AllowInsecure  bool
 }
 
 type OnboardingSpec struct {
 	PublicHost string
-	Listener   ListenerSpec
-	User       UserSpec
+	Node       NodeSpec
 }
 
 type OnboardingResult struct {
-	Listener domain.Listener
-	User     domain.User
+	Node     domain.Node
+	User     domain.NodeUser
 	Revision domain.Revision
 	Share    Share
 }
@@ -110,6 +131,7 @@ type Manager struct {
 	coordinator *operation.Coordinator
 	readyGuard  RuntimeReadyGuard
 	clock       func() time.Time
+	protocols   protocol.Registry
 }
 
 // ReserveApplicationRestart prevents a Web-requested m-ui restart from
@@ -166,30 +188,31 @@ func NewManager(options ManagerOptions) (*Manager, error) {
 		coordinator: options.Coordinator,
 		readyGuard:  options.ReadyGuard,
 		clock:       options.Clock,
+		protocols:   protocol.DefaultRegistry(),
 	}, nil
 }
 
-func (manager *Manager) Listeners(ctx context.Context) ([]domain.Listener, error) {
+func (manager *Manager) Nodes(ctx context.Context) ([]domain.Node, error) {
 	state, err := manager.currentState(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return state.Listeners, nil
+	return state.Nodes, nil
 }
 
-func (manager *Manager) Listener(
+func (manager *Manager) Node(
 	ctx context.Context,
-	listenerID string,
-) (domain.Listener, error) {
+	nodeID string,
+) (domain.Node, error) {
 	state, err := manager.currentState(ctx)
 	if err != nil {
-		return domain.Listener{}, err
+		return domain.Node{}, err
 	}
-	index := listenerIndex(state, listenerID)
+	index := nodeIndex(state, nodeID)
 	if index < 0 {
-		return domain.Listener{}, ErrNotFound
+		return domain.Node{}, ErrNotFound
 	}
-	return state.Listeners[index], nil
+	return state.Nodes[index], nil
 }
 
 func (manager *Manager) CompleteOnboarding(
@@ -197,27 +220,12 @@ func (manager *Manager) CompleteOnboarding(
 	actorAdminID string,
 	spec OnboardingSpec,
 ) (OnboardingResult, error) {
-	listenerID, err := domain.GenerateUUID()
+	nodeID, err := domain.GenerateUUID()
 	if err != nil {
 		return OnboardingResult{}, err
 	}
-	userID, err := domain.GenerateUUID()
-	if err != nil {
-		return OnboardingResult{}, err
-	}
-	if spec.User.UUID == "" {
-		spec.User.UUID, err = domain.GenerateUUID()
-		if err != nil {
-			return OnboardingResult{}, err
-		}
-	}
-	keypair, err := manager.cli.GenerateRealityKeypair(ctx)
-	if err != nil {
-		return OnboardingResult{}, err
-	}
-	spec.Listener.RealityPrivateKey = keypair.PrivateKey
-	spec.Listener.RealityPublicKey = keypair.PublicKey
-	spec.Listener.ShortID, err = domain.GenerateShortID()
+	spec.Node.Enabled = true
+	node, err := manager.nodeFromSpec(ctx, nodeID, spec.Node, time.Time{})
 	if err != nil {
 		return OnboardingResult{}, err
 	}
@@ -230,34 +238,32 @@ func (manager *Manager) CompleteOnboarding(
 		"onboarding.complete",
 		"system",
 		"onboarding",
-		"Created and enabled the first listener and user.",
+		"Created and enabled the first protocol-aware node and user.",
 		func(state *domain.DesiredState, now time.Time) error {
-			if len(state.Listeners) != 0 {
+			if len(state.Nodes) != 0 {
 				return fmt.Errorf("%w: onboarding is already complete", ErrConflict)
 			}
 			state.PublicHost = strings.TrimSpace(spec.PublicHost)
-			listener := listenerFromSpec(listenerID, spec.Listener)
-			listener.Enabled = true
-			listener.CreatedAt = now
-			listener.UpdatedAt = now
-			user := domain.User{
-				ID:         userID,
-				ListenerID: listenerID,
-				Name:       spec.User.Name,
-				Enabled:    true,
-				UUID:       spec.User.UUID,
-				ExpiresAt:  normalizeExpiry(spec.User.ExpiresAt),
-				CreatedAt:  now,
-				UpdatedAt:  now,
+			node.CreatedAt = now
+			node.UpdatedAt = now
+			for index := range node.Users {
+				node.Users[index].CreatedAt = now
+				node.Users[index].UpdatedAt = now
 			}
-			listener.Users = []domain.User{user}
-			state.Listeners = append(state.Listeners, listener)
-			share, shareErr := BuildShare(*state, listenerID, userID)
+			for index := range node.AccessProfiles {
+				node.AccessProfiles[index].CreatedAt = now
+				node.AccessProfiles[index].UpdatedAt = now
+			}
+			state.Nodes = append(state.Nodes, node)
+			if len(node.Users) == 0 {
+				return fmt.Errorf("%w: onboarding requires one user", ErrValidation)
+			}
+			share, shareErr := manager.buildShare(*state, nodeID, node.Users[0].ID, "")
 			if shareErr != nil {
 				return fmt.Errorf("%w: %v", ErrValidation, shareErr)
 			}
-			result.Listener = listener
-			result.User = user
+			result.Node = node
+			result.User = node.Users[0]
 			result.Share = share
 			return nil
 		},
@@ -268,149 +274,145 @@ func (manager *Manager) CompleteOnboarding(
 	return result, nil
 }
 
-func (manager *Manager) CreateListener(
+func (manager *Manager) CreateNode(
 	ctx context.Context,
 	actorAdminID string,
-	spec ListenerSpec,
-) (domain.Listener, domain.Revision, error) {
+	spec NodeSpec,
+) (domain.Node, domain.Revision, error) {
 	id, err := domain.GenerateUUID()
 	if err != nil {
-		return domain.Listener{}, domain.Revision{}, err
+		return domain.Node{}, domain.Revision{}, err
 	}
-	if spec.RealityPrivateKey == "" && spec.RealityPublicKey == "" {
-		keypair, err := manager.cli.GenerateRealityKeypair(ctx)
-		if err != nil {
-			return domain.Listener{}, domain.Revision{}, err
-		}
-		spec.RealityPrivateKey = keypair.PrivateKey
-		spec.RealityPublicKey = keypair.PublicKey
-	} else if spec.RealityPrivateKey == "" || spec.RealityPublicKey == "" {
-		return domain.Listener{}, domain.Revision{}, fmt.Errorf(
-			"%w: both REALITY keys are required",
-			ErrValidation,
-		)
+	created, err := manager.nodeFromSpec(ctx, id, spec, time.Time{})
+	if err != nil {
+		return domain.Node{}, domain.Revision{}, err
 	}
-	if spec.ShortID == "" {
-		spec.ShortID, err = domain.GenerateShortID()
-		if err != nil {
-			return domain.Listener{}, domain.Revision{}, err
-		}
-	}
-	var created domain.Listener
 	revision, err := manager.mutate(
 		ctx,
 		actorAdminID,
-		"create listener",
-		"listener.create",
-		"listener",
+		"create node",
+		"node.create",
+		"node",
 		id,
-		"Created a disabled VLESS REALITY listener.",
+		"Created a protocol-aware node.",
 		func(state *domain.DesiredState, now time.Time) error {
-			created = listenerFromSpec(id, spec)
 			created.CreatedAt = now
 			created.UpdatedAt = now
-			state.Listeners = append(state.Listeners, created)
+			for index := range created.Users {
+				created.Users[index].CreatedAt = now
+				created.Users[index].UpdatedAt = now
+			}
+			for index := range created.AccessProfiles {
+				created.AccessProfiles[index].CreatedAt = now
+				created.AccessProfiles[index].UpdatedAt = now
+			}
+			state.Nodes = append(state.Nodes, created)
 			return nil
 		},
 	)
 	return created, revision, err
 }
 
-func (manager *Manager) UpdateListener(
+func (manager *Manager) UpdateNode(
 	ctx context.Context,
-	actorAdminID, listenerID string,
-	spec ListenerSpec,
-) (domain.Listener, domain.Revision, error) {
-	var updated domain.Listener
+	actorAdminID, nodeID string,
+	spec NodeSpec,
+) (domain.Node, domain.Revision, error) {
+	var updated domain.Node
 	revision, err := manager.mutate(
 		ctx,
 		actorAdminID,
-		"update listener",
-		"listener.update",
-		"listener",
-		listenerID,
-		"Updated a VLESS REALITY listener.",
+		"update node",
+		"node.update",
+		"node",
+		nodeID,
+		"Updated a protocol-aware node.",
 		func(state *domain.DesiredState, now time.Time) error {
-			index := listenerIndex(*state, listenerID)
+			index := nodeIndex(*state, nodeID)
 			if index < 0 {
 				return ErrNotFound
 			}
-			current := state.Listeners[index]
-			updated = listenerFromSpec(listenerID, spec)
-			updated.Enabled = current.Enabled
-			updated.Users = current.Users
+			current := state.Nodes[index]
+			if spec.Generation != 0 && spec.Generation != current.Generation {
+				return fmt.Errorf("%w: node generation changed", ErrConflict)
+			}
+			var buildErr error
+			updated, buildErr = manager.nodeFromSpec(ctx, nodeID, spec, now)
+			if buildErr != nil {
+				return buildErr
+			}
+			if spec.Users == nil {
+				updated.Users = current.Users
+			}
+			if spec.AccessProfiles == nil {
+				updated.AccessProfiles = current.AccessProfiles
+			}
 			updated.CreatedAt = current.CreatedAt
 			updated.UpdatedAt = now
-			if updated.RealityPrivateKey == "" {
-				updated.RealityPrivateKey = current.RealityPrivateKey
-			}
-			if updated.RealityPublicKey == "" {
-				updated.RealityPublicKey = current.RealityPublicKey
-			}
-			if updated.ShortID == "" {
-				updated.ShortID = current.ShortID
-			}
-			state.Listeners[index] = updated
+			updated.Generation = current.Generation + 1
+			preserveNodeSecrets(&updated, current)
+			state.Nodes[index] = updated
 			return nil
 		},
 	)
 	return updated, revision, err
 }
 
-func (manager *Manager) DeleteListener(
+func (manager *Manager) DeleteNode(
 	ctx context.Context,
-	actorAdminID, listenerID string,
+	actorAdminID, nodeID string,
 ) (domain.Revision, error) {
 	return manager.mutate(
 		ctx,
 		actorAdminID,
-		"delete listener",
-		"listener.delete",
-		"listener",
-		listenerID,
-		"Deleted a VLESS REALITY listener.",
+		"delete node",
+		"node.delete",
+		"node",
+		nodeID,
+		"Deleted a protocol-aware node.",
 		func(state *domain.DesiredState, _ time.Time) error {
-			index := listenerIndex(*state, listenerID)
+			index := nodeIndex(*state, nodeID)
 			if index < 0 {
 				return ErrNotFound
 			}
-			state.Listeners = append(
-				state.Listeners[:index],
-				state.Listeners[index+1:]...,
+			state.Nodes = append(
+				state.Nodes[:index],
+				state.Nodes[index+1:]...,
 			)
 			return nil
 		},
 	)
 }
 
-func (manager *Manager) SetListenerEnabled(
+func (manager *Manager) SetNodeEnabled(
 	ctx context.Context,
-	actorAdminID, listenerID string,
+	actorAdminID, nodeID string,
 	enabled bool,
-) (domain.Listener, domain.Revision, error) {
-	action := "listener.disable"
-	summary := "Disabled a VLESS REALITY listener."
+) (domain.Node, domain.Revision, error) {
+	action := "node.disable"
+	summary := "Disabled a node."
 	if enabled {
-		action = "listener.enable"
-		summary = "Enabled a VLESS REALITY listener."
+		action = "node.enable"
+		summary = "Enabled a node."
 	}
-	var updated domain.Listener
+	var updated domain.Node
 	revision, err := manager.mutate(
 		ctx,
 		actorAdminID,
 		action,
 		action,
-		"listener",
-		listenerID,
+		"node",
+		nodeID,
 		summary,
 		func(state *domain.DesiredState, now time.Time) error {
-			index := listenerIndex(*state, listenerID)
+			index := nodeIndex(*state, nodeID)
 			if index < 0 {
 				return ErrNotFound
 			}
-			state.Listeners[index].Enabled = enabled
-			state.Listeners[index].UpdatedAt = now
-			updated = state.Listeners[index]
+			state.Nodes[index].Enabled = enabled
+			state.Nodes[index].Generation++
+			state.Nodes[index].UpdatedAt = now
+			updated = state.Nodes[index]
 			return nil
 		},
 	)
@@ -419,58 +421,49 @@ func (manager *Manager) SetListenerEnabled(
 
 func (manager *Manager) Users(
 	ctx context.Context,
-	listenerID string,
-) ([]domain.User, error) {
-	listener, err := manager.Listener(ctx, listenerID)
+	nodeID string,
+) ([]domain.NodeUser, error) {
+	node, err := manager.Node(ctx, nodeID)
 	if err != nil {
 		return nil, err
 	}
-	return listener.Users, nil
+	return node.Users, nil
 }
 
 func (manager *Manager) CreateUser(
 	ctx context.Context,
-	actorAdminID, listenerID string,
+	actorAdminID, nodeID string,
 	spec UserSpec,
-) (domain.User, domain.Revision, error) {
+) (domain.NodeUser, domain.Revision, error) {
 	id, err := domain.GenerateUUID()
 	if err != nil {
-		return domain.User{}, domain.Revision{}, err
+		return domain.NodeUser{}, domain.Revision{}, err
 	}
-	if spec.UUID == "" {
-		spec.UUID, err = domain.GenerateUUID()
-		if err != nil {
-			return domain.User{}, domain.Revision{}, err
-		}
-	}
-	var created domain.User
+	var created domain.NodeUser
 	revision, err := manager.mutate(
 		ctx,
 		actorAdminID,
-		"create listener user",
+		"create node user",
 		"user.create",
-		"listener_user",
+		"node_user",
 		id,
-		"Created an enabled listener user.",
+		"Created an enabled node user.",
 		func(state *domain.DesiredState, now time.Time) error {
-			index := listenerIndex(*state, listenerID)
+			index := nodeIndex(*state, nodeID)
 			if index < 0 {
 				return ErrNotFound
 			}
-			created = domain.User{
-				ID:         id,
-				ListenerID: listenerID,
-				Name:       spec.Name,
-				Enabled:    true,
-				UUID:       spec.UUID,
-				ExpiresAt:  normalizeExpiry(spec.ExpiresAt),
-				CreatedAt:  now,
-				UpdatedAt:  now,
-			}
-			state.Listeners[index].Users = append(
-				state.Listeners[index].Users,
-				created,
+			var buildErr error
+			created, buildErr = userFromSpec(
+				id, nodeID, state.Nodes[index].Protocol, spec, now,
+				shadowsocksCipher(state.Nodes[index]),
 			)
+			if buildErr != nil {
+				return buildErr
+			}
+			state.Nodes[index].Users = append(state.Nodes[index].Users, created)
+			state.Nodes[index].Generation++
+			state.Nodes[index].UpdatedAt = now
 			return nil
 		},
 	)
@@ -479,39 +472,54 @@ func (manager *Manager) CreateUser(
 
 func (manager *Manager) UpdateUser(
 	ctx context.Context,
-	actorAdminID, listenerID, userID string,
+	actorAdminID, nodeID, userID string,
 	spec UserSpec,
-) (domain.User, domain.Revision, error) {
-	var updated domain.User
+) (domain.NodeUser, domain.Revision, error) {
+	var updated domain.NodeUser
 	revision, err := manager.mutate(
 		ctx,
 		actorAdminID,
-		"update listener user",
+		"update node user",
 		"user.update",
-		"listener_user",
+		"node_user",
 		userID,
-		"Updated a listener user.",
+		"Updated a node user.",
 		func(state *domain.DesiredState, now time.Time) error {
-			listenerPosition := listenerIndex(*state, listenerID)
-			if listenerPosition < 0 {
+			nodePosition := nodeIndex(*state, nodeID)
+			if nodePosition < 0 {
 				return ErrNotFound
 			}
 			userPosition := userIndex(
-				state.Listeners[listenerPosition],
+				state.Nodes[nodePosition],
 				userID,
 			)
 			if userPosition < 0 {
 				return ErrNotFound
 			}
-			current := state.Listeners[listenerPosition].Users[userPosition]
+			current := state.Nodes[nodePosition].Users[userPosition]
 			updated = current
 			updated.Name = spec.Name
+			updated.Enabled = spec.Enabled
 			updated.ExpiresAt = normalizeExpiry(spec.ExpiresAt)
 			updated.UpdatedAt = now
-			if spec.UUID != "" {
-				updated.UUID = spec.UUID
+			if spec.VLESS != nil {
+				updated.VLESS = spec.VLESS
 			}
-			state.Listeners[listenerPosition].Users[userPosition] = updated
+			if spec.Hysteria2 != nil {
+				updated.Hysteria2 = spec.Hysteria2
+			}
+			if spec.VMess != nil {
+				updated.VMess = spec.VMess
+			}
+			if spec.Trojan != nil {
+				updated.Trojan = spec.Trojan
+			}
+			if spec.Shadowsocks != nil {
+				updated.Shadowsocks = spec.Shadowsocks
+			}
+			state.Nodes[nodePosition].Users[userPosition] = updated
+			state.Nodes[nodePosition].Generation++
+			state.Nodes[nodePosition].UpdatedAt = now
 			return nil
 		},
 	)
@@ -520,33 +528,35 @@ func (manager *Manager) UpdateUser(
 
 func (manager *Manager) DeleteUser(
 	ctx context.Context,
-	actorAdminID, listenerID, userID string,
+	actorAdminID, nodeID, userID string,
 ) (domain.Revision, error) {
 	return manager.mutate(
 		ctx,
 		actorAdminID,
-		"delete listener user",
+		"delete node user",
 		"user.delete",
-		"listener_user",
+		"node_user",
 		userID,
-		"Deleted a listener user.",
-		func(state *domain.DesiredState, _ time.Time) error {
-			listenerPosition := listenerIndex(*state, listenerID)
-			if listenerPosition < 0 {
+		"Deleted a node user.",
+		func(state *domain.DesiredState, now time.Time) error {
+			nodePosition := nodeIndex(*state, nodeID)
+			if nodePosition < 0 {
 				return ErrNotFound
 			}
 			userPosition := userIndex(
-				state.Listeners[listenerPosition],
+				state.Nodes[nodePosition],
 				userID,
 			)
 			if userPosition < 0 {
 				return ErrNotFound
 			}
-			users := state.Listeners[listenerPosition].Users
-			state.Listeners[listenerPosition].Users = append(
+			users := state.Nodes[nodePosition].Users
+			state.Nodes[nodePosition].Users = append(
 				users[:userPosition],
 				users[userPosition+1:]...,
 			)
+			state.Nodes[nodePosition].Generation++
+			state.Nodes[nodePosition].UpdatedAt = now
 			return nil
 		},
 	)
@@ -554,39 +564,41 @@ func (manager *Manager) DeleteUser(
 
 func (manager *Manager) SetUserEnabled(
 	ctx context.Context,
-	actorAdminID, listenerID, userID string,
+	actorAdminID, nodeID, userID string,
 	enabled bool,
-) (domain.User, domain.Revision, error) {
+) (domain.NodeUser, domain.Revision, error) {
 	action := "user.disable"
 	summary := "Disabled a listener user."
 	if enabled {
 		action = "user.enable"
 		summary = "Enabled a listener user."
 	}
-	var updated domain.User
+	var updated domain.NodeUser
 	revision, err := manager.mutate(
 		ctx,
 		actorAdminID,
 		action,
 		action,
-		"listener_user",
+		"node_user",
 		userID,
 		summary,
 		func(state *domain.DesiredState, now time.Time) error {
-			listenerPosition := listenerIndex(*state, listenerID)
-			if listenerPosition < 0 {
+			nodePosition := nodeIndex(*state, nodeID)
+			if nodePosition < 0 {
 				return ErrNotFound
 			}
 			userPosition := userIndex(
-				state.Listeners[listenerPosition],
+				state.Nodes[nodePosition],
 				userID,
 			)
 			if userPosition < 0 {
 				return ErrNotFound
 			}
-			state.Listeners[listenerPosition].Users[userPosition].Enabled = enabled
-			state.Listeners[listenerPosition].Users[userPosition].UpdatedAt = now
-			updated = state.Listeners[listenerPosition].Users[userPosition]
+			state.Nodes[nodePosition].Users[userPosition].Enabled = enabled
+			state.Nodes[nodePosition].Users[userPosition].UpdatedAt = now
+			state.Nodes[nodePosition].Generation++
+			state.Nodes[nodePosition].UpdatedAt = now
+			updated = state.Nodes[nodePosition].Users[userPosition]
 			return nil
 		},
 	)
@@ -611,15 +623,37 @@ func (manager *Manager) GenerateUUID() (string, error) {
 	return domain.GenerateUUID()
 }
 
+func (manager *Manager) Capabilities() protocol.CapabilityManifest {
+	return manager.protocols.Capabilities()
+}
+
 func (manager *Manager) Share(
 	ctx context.Context,
-	listenerID, userID string,
+	nodeID, userID string,
 ) (Share, error) {
 	state, err := manager.currentState(ctx)
 	if err != nil {
 		return Share{}, err
 	}
-	share, err := BuildShare(state, listenerID, userID)
+	share, err := manager.buildShare(state, nodeID, userID, "")
+	if err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			return Share{}, ErrNotFound
+		}
+		return Share{}, fmt.Errorf("%w: %v", ErrValidation, err)
+	}
+	return share, nil
+}
+
+func (manager *Manager) ShareWithProfile(
+	ctx context.Context,
+	nodeID, userID, profileID string,
+) (Share, error) {
+	state, err := manager.currentState(ctx)
+	if err != nil {
+		return Share{}, err
+	}
+	share, err := manager.buildShare(state, nodeID, userID, profileID)
 	if err != nil {
 		if strings.Contains(err.Error(), "not found") {
 			return Share{}, ErrNotFound
@@ -1083,35 +1117,344 @@ func (manager *Manager) mutate(
 	return revision, err
 }
 
-func listenerFromSpec(id string, spec ListenerSpec) domain.Listener {
-	return domain.Listener{
-		ID:                 id,
-		Name:               spec.Name,
-		ListenAddress:      spec.ListenAddress,
-		ListenPort:         spec.ListenPort,
-		PublicHostOverride: spec.PublicHostOverride,
-		PublicPortOverride: spec.PublicPortOverride,
-		ServerName:         spec.ServerName,
-		RealityDest:        spec.RealityDest,
-		RealityPrivateKey:  spec.RealityPrivateKey,
-		RealityPublicKey:   spec.RealityPublicKey,
-		ShortID:            spec.ShortID,
-		UDPEnabled:         spec.UDPEnabled,
+func (manager *Manager) nodeFromSpec(
+	ctx context.Context,
+	id string,
+	spec NodeSpec,
+	now time.Time,
+) (domain.Node, error) {
+	if spec.Protocol == "" {
+		spec.Protocol = domain.ProtocolVLESS
+	}
+	node := domain.Node{
+		ID: id, Name: spec.Name, Enabled: spec.Enabled,
+		ListenAddress: spec.ListenAddress, Port: spec.Port,
+		Protocol: spec.Protocol, SchemaVersion: domain.NodeSchemaVersion,
+		VLESS: spec.VLESS, Hysteria2: spec.Hysteria2, VMess: spec.VMess,
+		Trojan: spec.Trojan, Shadowsocks: spec.Shadowsocks,
+		Generation: 1,
+	}
+	if node.ListenAddress == "" {
+		node.ListenAddress = "0.0.0.0"
+	}
+	if node.Port == "" {
+		node.Port = "443"
+	}
+	if security := nodeStreamSecurity(&node); security != nil &&
+		security.Type == domain.VLESSSecurityReality && security.Reality != nil {
+		reality := security.Reality
+		if reality.PrivateKey == "" && reality.PublicKey == "" {
+			if now.IsZero() {
+				keypair, err := manager.cli.GenerateRealityKeypair(ctx)
+				if err != nil {
+					return domain.Node{}, err
+				}
+				reality.PrivateKey = keypair.PrivateKey
+				reality.PublicKey = keypair.PublicKey
+			}
+		} else if now.IsZero() && (reality.PrivateKey == "" || reality.PublicKey == "") {
+			return domain.Node{}, fmt.Errorf("%w: both REALITY keys are required", ErrValidation)
+		}
+		if len(reality.ShortIDs) == 0 {
+			shortID, err := domain.GenerateShortID()
+			if err != nil {
+				return domain.Node{}, err
+			}
+			reality.ShortIDs = []string{shortID}
+		}
+	}
+	for _, userSpec := range spec.Users {
+		userID, err := domain.GenerateUUID()
+		if err != nil {
+			return domain.Node{}, err
+		}
+		user, err := userFromSpec(userID, id, node.Protocol, userSpec, now, shadowsocksCipher(node))
+		if err != nil {
+			return domain.Node{}, err
+		}
+		node.Users = append(node.Users, user)
+	}
+	for _, profileSpec := range spec.AccessProfiles {
+		profile, err := accessProfileFromSpec(id, profileSpec, now)
+		if err != nil {
+			return domain.Node{}, err
+		}
+		node.AccessProfiles = append(node.AccessProfiles, profile)
+	}
+	if spec.AccessProfiles == nil || len(node.AccessProfiles) == 0 {
+		port, ok := domain.SinglePort(node.Port)
+		if !ok {
+			return domain.Node{}, fmt.Errorf("%w: an explicit access profile is required for a port range", ErrValidation)
+		}
+		profileID, err := domain.GenerateUUID()
+		if err != nil {
+			return domain.Node{}, err
+		}
+		serverName := ""
+		if security := nodeStreamSecurity(&node); security != nil && security.Reality != nil && len(security.Reality.ServerNames) > 0 {
+			serverName = security.Reality.ServerNames[0]
+		}
+		node.AccessProfiles = []domain.AccessProfile{{
+			ID: profileID, NodeID: id, Name: "default", Default: true,
+			PublicPort: port, ServerName: serverName,
+			Fingerprint: domain.ClientFingerprint, PacketEncoding: domain.PacketEncodingXUDP,
+			CreatedAt: now, UpdatedAt: now,
+		}}
+	}
+	return node, nil
+}
+
+func userFromSpec(id, nodeID string, kind domain.ProtocolKind, spec UserSpec, now time.Time, ssCipher ...string) (domain.NodeUser, error) {
+	user := domain.NodeUser{
+		ID: id, NodeID: nodeID, Name: spec.Name, Enabled: spec.Enabled,
+		VLESS: spec.VLESS, Hysteria2: spec.Hysteria2, VMess: spec.VMess,
+		Trojan: spec.Trojan, Shadowsocks: spec.Shadowsocks,
+		ExpiresAt: normalizeExpiry(spec.ExpiresAt), CreatedAt: now, UpdatedAt: now,
+	}
+	switch kind {
+	case domain.ProtocolVLESS:
+		if user.VLESS == nil {
+			user.VLESS = &domain.VLESSCredential{Flow: domain.VLESSFlowVision}
+		}
+		if user.VLESS.UUID == "" {
+			value, err := domain.GenerateUUID()
+			if err != nil {
+				return domain.NodeUser{}, err
+			}
+			user.VLESS.UUID = value
+		}
+		user.Hysteria2 = nil
+		user.VMess, user.Trojan, user.Shadowsocks = nil, nil, nil
+	case domain.ProtocolHysteria2:
+		if user.Hysteria2 == nil {
+			user.Hysteria2 = &domain.Hysteria2Credential{}
+		}
+		if user.Hysteria2.Password == "" {
+			value, err := domain.GenerateUUID()
+			if err != nil {
+				return domain.NodeUser{}, err
+			}
+			user.Hysteria2.Password = strings.ReplaceAll(value, "-", "")
+		}
+		user.VLESS = nil
+		user.VMess, user.Trojan, user.Shadowsocks = nil, nil, nil
+	case domain.ProtocolVMess:
+		if user.VMess == nil {
+			user.VMess = &domain.VMessCredential{Cipher: "auto"}
+		}
+		if user.VMess.UUID == "" {
+			value, err := domain.GenerateUUID()
+			if err != nil {
+				return domain.NodeUser{}, err
+			}
+			user.VMess.UUID = value
+		}
+		if user.VMess.Cipher == "" {
+			user.VMess.Cipher = "auto"
+		}
+		user.VLESS, user.Hysteria2, user.Trojan, user.Shadowsocks = nil, nil, nil, nil
+	case domain.ProtocolTrojan:
+		if user.Trojan == nil {
+			user.Trojan = &domain.TrojanCredential{}
+		}
+		if user.Trojan.Password == "" {
+			value, err := domain.GenerateUUID()
+			if err != nil {
+				return domain.NodeUser{}, err
+			}
+			user.Trojan.Password = strings.ReplaceAll(value, "-", "")
+		}
+		user.VLESS, user.Hysteria2, user.VMess, user.Shadowsocks = nil, nil, nil, nil
+	case domain.ProtocolShadowsocks:
+		if user.Shadowsocks == nil {
+			user.Shadowsocks = &domain.ShadowsocksCredential{}
+		}
+		if user.Shadowsocks.Password == "" {
+			keyBytes := 32
+			if len(ssCipher) > 0 && ssCipher[0] == "2022-blake3-aes-128-gcm" {
+				keyBytes = 16
+			}
+			value := make([]byte, keyBytes)
+			if _, err := rand.Read(value); err != nil {
+				return domain.NodeUser{}, fmt.Errorf("generate Shadowsocks password: %w", err)
+			}
+			user.Shadowsocks.Password = base64.StdEncoding.EncodeToString(value)
+		}
+		user.VLESS, user.Hysteria2, user.VMess, user.Trojan = nil, nil, nil, nil
+	default:
+		return domain.NodeUser{}, fmt.Errorf("%w: unsupported protocol %q", ErrValidation, kind)
+	}
+	return user, nil
+}
+
+func accessProfileFromSpec(nodeID string, spec AccessProfileSpec, now time.Time) (domain.AccessProfile, error) {
+	id := spec.ID
+	if id == "" {
+		var err error
+		id, err = domain.GenerateUUID()
+		if err != nil {
+			return domain.AccessProfile{}, err
+		}
+	}
+	name := spec.Name
+	if name == "" {
+		name = "default"
+	}
+	return domain.AccessProfile{
+		ID: id, NodeID: nodeID, Name: name, Default: spec.Default,
+		PublicHost: spec.PublicHost, PublicPort: spec.PublicPort, ServerName: spec.ServerName,
+		Fingerprint: spec.Fingerprint, PacketEncoding: spec.PacketEncoding,
+		AllowInsecure: spec.AllowInsecure, CreatedAt: now, UpdatedAt: now,
+	}, nil
+}
+
+func preserveNodeSecrets(updated *domain.Node, current domain.Node) {
+	if updated.Protocol != current.Protocol {
+		return
+	}
+	u, c := nodeStreamSecurity(updated), nodeStreamSecurity(&current)
+	if u != nil && c != nil {
+		if u.TLS != nil && c.TLS != nil && u.TLS.PrivateKey == "" {
+			u.TLS.PrivateKey = c.TLS.PrivateKey
+		}
+		if u.TLS != nil && c.TLS != nil && u.TLS.ECHKey == "" {
+			u.TLS.ECHKey = c.TLS.ECHKey
+		}
+		if u.Reality != nil && c.Reality != nil {
+			if u.Reality.PrivateKey == "" {
+				u.Reality.PrivateKey = c.Reality.PrivateKey
+			}
+			if u.Reality.PublicKey == "" {
+				u.Reality.PublicKey = c.Reality.PublicKey
+			}
+		}
+		if u.ShadowTLS != nil && c.ShadowTLS != nil && u.ShadowTLS.Password == "" {
+			u.ShadowTLS.Password = c.ShadowTLS.Password
+		}
+		if u.ShadowTLS != nil && c.ShadowTLS != nil {
+			passwords := make(map[string]string, len(c.ShadowTLS.Users))
+			for _, item := range c.ShadowTLS.Users {
+				passwords[item.Name] = item.Password
+			}
+			for index := range u.ShadowTLS.Users {
+				if u.ShadowTLS.Users[index].Password == "" {
+					u.ShadowTLS.Users[index].Password = passwords[u.ShadowTLS.Users[index].Name]
+				}
+			}
+		}
+		if u.ResTLS != nil && c.ResTLS != nil && u.ResTLS.Password == "" {
+			u.ResTLS.Password = c.ResTLS.Password
+		}
+		if u.JLS != nil && c.JLS != nil {
+			passwords := make(map[string]string, len(c.JLS.Users))
+			for _, item := range c.JLS.Users {
+				passwords[item.Username] = item.Password
+			}
+			for index := range u.JLS.Users {
+				if u.JLS.Users[index].Password == "" {
+					u.JLS.Users[index].Password = passwords[u.JLS.Users[index].Username]
+				}
+			}
+		}
+	}
+	if updated.Trojan != nil && current.Trojan != nil &&
+		updated.Trojan.Shadowsocks.Enabled && current.Trojan.Shadowsocks.Enabled &&
+		updated.Trojan.Shadowsocks.Password == "" {
+		updated.Trojan.Shadowsocks.Password = current.Trojan.Shadowsocks.Password
+	}
+	if updated.VMess != nil && current.VMess != nil &&
+		updated.VMess.Handler.MKCP != nil && current.VMess.Handler.MKCP != nil &&
+		updated.VMess.Handler.MKCP.Seed == "" {
+		updated.VMess.Handler.MKCP.Seed = current.VMess.Handler.MKCP.Seed
+	}
+	if updated.Hysteria2 != nil && current.Hysteria2 != nil {
+		if updated.Hysteria2.PrivateKey == "" {
+			updated.Hysteria2.PrivateKey = current.Hysteria2.PrivateKey
+		}
+		if updated.Hysteria2.ECHKey == "" {
+			updated.Hysteria2.ECHKey = current.Hysteria2.ECHKey
+		}
+		if updated.Hysteria2.ObfsPassword == "" {
+			updated.Hysteria2.ObfsPassword = current.Hysteria2.ObfsPassword
+		}
+		if updated.Hysteria2.Realm != nil && current.Hysteria2.Realm != nil {
+			if updated.Hysteria2.Realm.Token == "" {
+				updated.Hysteria2.Realm.Token = current.Hysteria2.Realm.Token
+			}
+			if updated.Hysteria2.Realm.PrivateKey == "" {
+				updated.Hysteria2.Realm.PrivateKey = current.Hysteria2.Realm.PrivateKey
+			}
+		}
 	}
 }
 
-func listenerIndex(state domain.DesiredState, listenerID string) int {
-	for index := range state.Listeners {
-		if state.Listeners[index].ID == listenerID {
+func nodeStreamSecurity(node *domain.Node) *domain.VLESSSecuritySpec {
+	switch {
+	case node.VLESS != nil:
+		return &node.VLESS.Security
+	case node.VMess != nil:
+		return &node.VMess.Security
+	case node.Trojan != nil:
+		return &node.Trojan.Security
+	case node.Shadowsocks != nil:
+		return &node.Shadowsocks.Security
+	default:
+		return nil
+	}
+}
+
+func shadowsocksCipher(node domain.Node) string {
+	if node.Shadowsocks == nil {
+		return ""
+	}
+	return node.Shadowsocks.Cipher
+}
+
+func (manager *Manager) buildShare(state domain.DesiredState, nodeID, userID, profileID string) (Share, error) {
+	nodePosition := nodeIndex(state, nodeID)
+	if nodePosition < 0 {
+		return Share{}, errors.New("node not found")
+	}
+	node := state.Nodes[nodePosition]
+	userPosition := userIndex(node, userID)
+	if userPosition < 0 {
+		return Share{}, errors.New("user not found")
+	}
+	var profile domain.AccessProfile
+	var exists bool
+	if profileID == "" {
+		profile, exists = node.DefaultAccessProfile()
+	} else {
+		for _, candidate := range node.AccessProfiles {
+			if candidate.ID == profileID {
+				profile = candidate
+				exists = true
+				break
+			}
+		}
+	}
+	if !exists {
+		return Share{}, errors.New("access profile not found")
+	}
+	compiled, err := manager.protocols.BuildShare(state, node, node.Users[userPosition], profile)
+	if err != nil {
+		return Share{}, err
+	}
+	return Share{URI: compiled.URI, QRContent: compiled.QRContent, ClientYAML: string(compiled.ClientYAML)}, nil
+}
+
+func nodeIndex(state domain.DesiredState, nodeID string) int {
+	for index := range state.Nodes {
+		if state.Nodes[index].ID == nodeID {
 			return index
 		}
 	}
 	return -1
 }
 
-func userIndex(listener domain.Listener, userID string) int {
-	for index := range listener.Users {
-		if listener.Users[index].ID == userID {
+func userIndex(node domain.Node, userID string) int {
+	for index := range node.Users {
+		if node.Users[index].ID == userID {
 			return index
 		}
 	}

@@ -60,7 +60,7 @@ onBeforeUnmount(() => {
       />
 
       <NCard
-        v-if="!management.loading && !management.listeners.length"
+        v-if="!management.loading && !management.nodes.length"
         :bordered="false"
         class="surface-card section-gap"
       >
@@ -137,7 +137,7 @@ onBeforeUnmount(() => {
           </NCard>
           <NCard class="metric-card" :bordered="false">
             <NText depth="3">{{ t('dashboard.listenerCount') }}</NText>
-            <strong>{{ management.listeners.length }}</strong>
+            <strong>{{ management.nodes.length }}</strong>
           </NCard>
           <NCard class="metric-card" :bordered="false">
             <NText depth="3">{{ t('dashboard.enabledUsers') }}</NText>

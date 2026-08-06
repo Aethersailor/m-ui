@@ -2,6 +2,8 @@ package domain
 
 import "time"
 
+const StateSnapshotVersion = 2
+
 type RevisionStatus string
 
 const (

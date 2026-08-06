@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strconv"
@@ -26,62 +27,102 @@ type managementHandler struct {
 }
 
 type listenerRequest struct {
-	Name               string  `json:"name"`
-	ListenAddress      string  `json:"listen_address"`
-	ListenPort         uint16  `json:"listen_port"`
-	PublicHostOverride string  `json:"public_host_override"`
-	PublicPortOverride *uint16 `json:"public_port_override"`
-	ServerName         string  `json:"server_name"`
-	RealityDest        string  `json:"reality_dest"`
-	RealityPrivateKey  string  `json:"reality_private_key"`
-	RealityPublicKey   string  `json:"reality_public_key"`
-	ShortID            string  `json:"short_id"`
-	UDPEnabled         bool    `json:"udp_enabled"`
+	Name           string                  `json:"name"`
+	Enabled        bool                    `json:"enabled"`
+	ListenAddress  string                  `json:"listen"`
+	Port           string                  `json:"port"`
+	Protocol       domain.ProtocolKind     `json:"protocol"`
+	VLESS          *domain.VLESSSpec       `json:"vless"`
+	Hysteria2      *domain.Hysteria2Spec   `json:"hysteria2"`
+	VMess          *domain.VMessSpec       `json:"vmess"`
+	Trojan         *domain.TrojanSpec      `json:"trojan"`
+	Shadowsocks    *domain.ShadowsocksSpec `json:"shadowsocks"`
+	Users          []userRequest           `json:"users"`
+	AccessProfiles []accessProfileRequest  `json:"access_profiles"`
+	Generation     int64                   `json:"generation"`
 }
 
 type listenerResponse struct {
-	ID                   string         `json:"id"`
-	Name                 string         `json:"name"`
-	Enabled              bool           `json:"enabled"`
-	ListenAddress        string         `json:"listen_address"`
-	ListenPort           uint16         `json:"listen_port"`
-	PublicHostOverride   string         `json:"public_host_override"`
-	PublicPortOverride   *uint16        `json:"public_port_override"`
-	ServerName           string         `json:"server_name"`
-	RealityDest          string         `json:"reality_dest"`
-	RealityPublicKey     string         `json:"reality_public_key"`
-	RealityPrivateKeySet bool           `json:"reality_private_key_set"`
-	ShortID              string         `json:"short_id"`
-	UDPEnabled           bool           `json:"udp_enabled"`
-	Users                []userResponse `json:"users"`
-	CreatedAt            time.Time      `json:"created_at"`
-	UpdatedAt            time.Time      `json:"updated_at"`
+	ID             string                  `json:"id"`
+	Name           string                  `json:"name"`
+	Enabled        bool                    `json:"enabled"`
+	ListenAddress  string                  `json:"listen"`
+	Port           string                  `json:"port"`
+	Protocol       domain.ProtocolKind     `json:"protocol"`
+	SchemaVersion  int                     `json:"schema_version"`
+	VLESS          *domain.VLESSSpec       `json:"vless,omitempty"`
+	Hysteria2      *domain.Hysteria2Spec   `json:"hysteria2,omitempty"`
+	VMess          *domain.VMessSpec       `json:"vmess,omitempty"`
+	Trojan         *domain.TrojanSpec      `json:"trojan,omitempty"`
+	Shadowsocks    *domain.ShadowsocksSpec `json:"shadowsocks,omitempty"`
+	Users          []userResponse          `json:"users"`
+	AccessProfiles []accessProfileResponse `json:"access_profiles"`
+	SecretsSet     map[string]bool         `json:"secrets_set"`
+	Generation     int64                   `json:"generation"`
+	CreatedAt      time.Time               `json:"created_at"`
+	UpdatedAt      time.Time               `json:"updated_at"`
 }
 
 type listenersResponse struct {
-	Listeners []listenerResponse `json:"listeners"`
+	Nodes []listenerResponse `json:"nodes"`
 }
 
 type listenerMutationResponse struct {
-	Listener listenerResponse `json:"listener"`
+	Node     listenerResponse `json:"node"`
 	Revision revisionResponse `json:"revision"`
 }
 
 type userRequest struct {
-	Name      string     `json:"name"`
-	UUID      string     `json:"uuid"`
-	ExpiresAt *time.Time `json:"expires_at"`
+	Name        string                        `json:"name"`
+	Enabled     bool                          `json:"enabled"`
+	VLESS       *domain.VLESSCredential       `json:"vless"`
+	Hysteria2   *domain.Hysteria2Credential   `json:"hysteria2"`
+	VMess       *domain.VMessCredential       `json:"vmess"`
+	Trojan      *domain.TrojanCredential      `json:"trojan"`
+	Shadowsocks *domain.ShadowsocksCredential `json:"shadowsocks"`
+	ExpiresAt   *time.Time                    `json:"expires_at"`
 }
 
 type userResponse struct {
-	ID         string     `json:"id"`
-	ListenerID string     `json:"listener_id"`
-	Name       string     `json:"name"`
-	Enabled    bool       `json:"enabled"`
-	UUID       string     `json:"uuid"`
-	ExpiresAt  *time.Time `json:"expires_at"`
-	CreatedAt  time.Time  `json:"created_at"`
-	UpdatedAt  time.Time  `json:"updated_at"`
+	ID          string                        `json:"id"`
+	NodeID      string                        `json:"node_id"`
+	Name        string                        `json:"name"`
+	Enabled     bool                          `json:"enabled"`
+	VLESS       *domain.VLESSCredential       `json:"vless,omitempty"`
+	Hysteria2   *domain.Hysteria2Credential   `json:"hysteria2,omitempty"`
+	VMess       *domain.VMessCredential       `json:"vmess,omitempty"`
+	Trojan      *domain.TrojanCredential      `json:"trojan,omitempty"`
+	Shadowsocks *domain.ShadowsocksCredential `json:"shadowsocks,omitempty"`
+	ExpiresAt   *time.Time                    `json:"expires_at"`
+	CreatedAt   time.Time                     `json:"created_at"`
+	UpdatedAt   time.Time                     `json:"updated_at"`
+}
+
+type accessProfileRequest struct {
+	ID             string `json:"id"`
+	Name           string `json:"name"`
+	Default        bool   `json:"default"`
+	PublicHost     string `json:"public_host"`
+	PublicPort     uint16 `json:"public_port"`
+	ServerName     string `json:"server_name"`
+	Fingerprint    string `json:"fingerprint"`
+	PacketEncoding string `json:"packet_encoding"`
+	AllowInsecure  bool   `json:"allow_insecure"`
+}
+
+type accessProfileResponse struct {
+	ID             string    `json:"id"`
+	NodeID         string    `json:"node_id"`
+	Name           string    `json:"name"`
+	Default        bool      `json:"default"`
+	PublicHost     string    `json:"public_host"`
+	PublicPort     uint16    `json:"public_port"`
+	ServerName     string    `json:"server_name"`
+	Fingerprint    string    `json:"fingerprint"`
+	PacketEncoding string    `json:"packet_encoding"`
+	AllowInsecure  bool      `json:"allow_insecure"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
 }
 
 type usersResponse struct {
@@ -94,22 +135,12 @@ type userMutationResponse struct {
 }
 
 type onboardingRequest struct {
-	PublicHost string `json:"public_host"`
-	Listener   struct {
-		Name        string `json:"name"`
-		ListenPort  uint16 `json:"listen_port"`
-		ServerName  string `json:"server_name"`
-		RealityDest string `json:"reality_dest"`
-		UDPEnabled  bool   `json:"udp_enabled"`
-	} `json:"listener"`
-	User struct {
-		Name      string     `json:"name"`
-		ExpiresAt *time.Time `json:"expires_at"`
-	} `json:"user"`
+	PublicHost string          `json:"public_host"`
+	Node       listenerRequest `json:"node"`
 }
 
 type onboardingResponse struct {
-	Listener listenerResponse `json:"listener"`
+	Node     listenerResponse `json:"node"`
 	User     userResponse     `json:"user"`
 	Revision revisionResponse `json:"revision"`
 	Share    shareResponse    `json:"share"`
@@ -279,11 +310,12 @@ func mountManagementRoutes(
 	router.Group(func(protected chi.Router) {
 		protected.Use(auth.authenticate)
 
-		protected.Get("/listeners", handler.listListeners)
-		protected.Get("/listeners/{listenerID}", handler.getListener)
-		protected.Get("/listeners/{listenerID}/users", handler.listUsers)
+		protected.Get("/capabilities", handler.capabilities)
+		protected.Get("/nodes", handler.listListeners)
+		protected.Get("/nodes/{nodeID}", handler.getListener)
+		protected.Get("/nodes/{nodeID}/users", handler.listUsers)
 		protected.Get(
-			"/listeners/{listenerID}/users/{userID}/share",
+			"/nodes/{nodeID}/users/{userID}/share",
 			handler.shareUser,
 		)
 		protected.Get("/runtime/status", handler.runtimeStatus)
@@ -300,44 +332,54 @@ func mountManagementRoutes(
 			mutations.Use(auth.requireCSRF)
 
 			mutations.Post("/onboarding", handler.completeOnboarding)
-			mutations.Post("/listeners", handler.createListener)
-			mutations.Put("/listeners/{listenerID}", handler.updateListener)
-			mutations.Delete("/listeners/{listenerID}", handler.deleteListener)
+			mutations.Post("/nodes", handler.createListener)
+			mutations.Post("/nodes/batch-enabled", handler.setNodesEnabled)
+			mutations.Put("/nodes/{nodeID}", handler.updateListener)
+			mutations.Delete("/nodes/{nodeID}", handler.deleteListener)
+			mutations.Post("/nodes/{nodeID}/clone", handler.cloneNode)
 			mutations.Post(
-				"/listeners/{listenerID}/enable",
+				"/nodes/{nodeID}/enable",
 				handler.enableListener,
 			)
 			mutations.Post(
-				"/listeners/{listenerID}/disable",
+				"/nodes/{nodeID}/disable",
 				handler.disableListener,
 			)
 			mutations.Post(
-				"/listeners/generate-reality-keypair",
+				"/nodes/generate-reality-keypair",
 				handler.generateRealityKeypair,
 			)
 
 			mutations.Post(
-				"/listeners/{listenerID}/users",
+				"/nodes/{nodeID}/users",
 				handler.createUser,
 			)
+			mutations.Post(
+				"/nodes/{nodeID}/users/batch",
+				handler.createUsers,
+			)
+			mutations.Post(
+				"/nodes/{nodeID}/users/batch-enabled",
+				handler.setUsersEnabled,
+			)
 			mutations.Put(
-				"/listeners/{listenerID}/users/{userID}",
+				"/nodes/{nodeID}/users/{userID}",
 				handler.updateUser,
 			)
 			mutations.Delete(
-				"/listeners/{listenerID}/users/{userID}",
+				"/nodes/{nodeID}/users/{userID}",
 				handler.deleteUser,
 			)
 			mutations.Post(
-				"/listeners/{listenerID}/users/{userID}/enable",
+				"/nodes/{nodeID}/users/{userID}/enable",
 				handler.enableUser,
 			)
 			mutations.Post(
-				"/listeners/{listenerID}/users/{userID}/disable",
+				"/nodes/{nodeID}/users/{userID}/disable",
 				handler.disableUser,
 			)
 			mutations.Post(
-				"/listeners/{listenerID}/users/generate-uuid",
+				"/nodes/{nodeID}/users/generate-uuid",
 				handler.generateUUID,
 			)
 
@@ -382,18 +424,7 @@ func (handler managementHandler) completeOnboarding(
 		currentAuthSession(request.Context()).Admin.ID,
 		service.OnboardingSpec{
 			PublicHost: input.PublicHost,
-			Listener: service.ListenerSpec{
-				Name:          input.Listener.Name,
-				ListenAddress: "0.0.0.0",
-				ListenPort:    input.Listener.ListenPort,
-				ServerName:    input.Listener.ServerName,
-				RealityDest:   input.Listener.RealityDest,
-				UDPEnabled:    input.Listener.UDPEnabled,
-			},
-			User: service.UserSpec{
-				Name:      input.User.Name,
-				ExpiresAt: input.User.ExpiresAt,
-			},
+			Node:       input.Node.listenerSpec(),
 		},
 	)
 	if err != nil {
@@ -401,7 +432,7 @@ func (handler managementHandler) completeOnboarding(
 		return
 	}
 	writePrivateJSON(response, http.StatusCreated, onboardingResponse{
-		Listener: newListenerResponse(result.Listener),
+		Node:     newListenerResponse(result.Node),
 		User:     newUserResponse(result.User),
 		Revision: newRevisionResponse(result.Revision),
 		Share: shareResponse{
@@ -410,6 +441,13 @@ func (handler managementHandler) completeOnboarding(
 			ClientYAML: result.Share.ClientYAML,
 		},
 	})
+}
+
+func (handler managementHandler) capabilities(
+	response http.ResponseWriter,
+	request *http.Request,
+) {
+	writePrivateJSON(response, http.StatusOK, handler.manager.Capabilities())
 }
 
 func (handler managementHandler) getCore(
@@ -518,7 +556,7 @@ func (handler managementHandler) listListeners(
 	response http.ResponseWriter,
 	request *http.Request,
 ) {
-	listeners, err := handler.manager.Listeners(request.Context())
+	listeners, err := handler.manager.Nodes(request.Context())
 	if err != nil {
 		handler.writeError(response, request, err)
 		return
@@ -527,16 +565,16 @@ func (handler managementHandler) listListeners(
 	for _, listener := range listeners {
 		result = append(result, newListenerResponse(listener))
 	}
-	writePrivateJSON(response, http.StatusOK, listenersResponse{Listeners: result})
+	writePrivateJSON(response, http.StatusOK, listenersResponse{Nodes: result})
 }
 
 func (handler managementHandler) getListener(
 	response http.ResponseWriter,
 	request *http.Request,
 ) {
-	listener, err := handler.manager.Listener(
+	listener, err := handler.manager.Node(
 		request.Context(),
-		chi.URLParam(request, "listenerID"),
+		chi.URLParam(request, "nodeID"),
 	)
 	if err != nil {
 		handler.writeError(response, request, err)
@@ -554,7 +592,7 @@ func (handler managementHandler) createListener(
 		writeInvalidRequest(response, request)
 		return
 	}
-	listener, revision, err := handler.manager.CreateListener(
+	listener, revision, err := handler.manager.CreateNode(
 		request.Context(),
 		currentAuthSession(request.Context()).Admin.ID,
 		input.listenerSpec(),
@@ -564,7 +602,7 @@ func (handler managementHandler) createListener(
 		return
 	}
 	writePrivateJSON(response, http.StatusCreated, listenerMutationResponse{
-		Listener: newListenerResponse(listener),
+		Node:     newListenerResponse(listener),
 		Revision: newRevisionResponse(revision),
 	})
 }
@@ -578,10 +616,10 @@ func (handler managementHandler) updateListener(
 		writeInvalidRequest(response, request)
 		return
 	}
-	listener, revision, err := handler.manager.UpdateListener(
+	listener, revision, err := handler.manager.UpdateNode(
 		request.Context(),
 		currentAuthSession(request.Context()).Admin.ID,
-		chi.URLParam(request, "listenerID"),
+		chi.URLParam(request, "nodeID"),
 		input.listenerSpec(),
 	)
 	if err != nil {
@@ -589,7 +627,7 @@ func (handler managementHandler) updateListener(
 		return
 	}
 	writePrivateJSON(response, http.StatusOK, listenerMutationResponse{
-		Listener: newListenerResponse(listener),
+		Node:     newListenerResponse(listener),
 		Revision: newRevisionResponse(revision),
 	})
 }
@@ -598,10 +636,10 @@ func (handler managementHandler) deleteListener(
 	response http.ResponseWriter,
 	request *http.Request,
 ) {
-	_, err := handler.manager.DeleteListener(
+	_, err := handler.manager.DeleteNode(
 		request.Context(),
 		currentAuthSession(request.Context()).Admin.ID,
-		chi.URLParam(request, "listenerID"),
+		chi.URLParam(request, "nodeID"),
 	)
 	if err != nil {
 		handler.writeError(response, request, err)
@@ -630,10 +668,10 @@ func (handler managementHandler) setListenerEnabled(
 	request *http.Request,
 	enabled bool,
 ) {
-	listener, revision, err := handler.manager.SetListenerEnabled(
+	listener, revision, err := handler.manager.SetNodeEnabled(
 		request.Context(),
 		currentAuthSession(request.Context()).Admin.ID,
-		chi.URLParam(request, "listenerID"),
+		chi.URLParam(request, "nodeID"),
 		enabled,
 	)
 	if err != nil {
@@ -641,7 +679,7 @@ func (handler managementHandler) setListenerEnabled(
 		return
 	}
 	writePrivateJSON(response, http.StatusOK, listenerMutationResponse{
-		Listener: newListenerResponse(listener),
+		Node:     newListenerResponse(listener),
 		Revision: newRevisionResponse(revision),
 	})
 }
@@ -670,7 +708,7 @@ func (handler managementHandler) listUsers(
 ) {
 	users, err := handler.manager.Users(
 		request.Context(),
-		chi.URLParam(request, "listenerID"),
+		chi.URLParam(request, "nodeID"),
 	)
 	if err != nil {
 		handler.writeError(response, request, err)
@@ -695,12 +733,8 @@ func (handler managementHandler) createUser(
 	user, revision, err := handler.manager.CreateUser(
 		request.Context(),
 		currentAuthSession(request.Context()).Admin.ID,
-		chi.URLParam(request, "listenerID"),
-		service.UserSpec{
-			Name:      input.Name,
-			UUID:      input.UUID,
-			ExpiresAt: input.ExpiresAt,
-		},
+		chi.URLParam(request, "nodeID"),
+		input.userSpec(),
 	)
 	if err != nil {
 		handler.writeError(response, request, err)
@@ -724,13 +758,9 @@ func (handler managementHandler) updateUser(
 	user, revision, err := handler.manager.UpdateUser(
 		request.Context(),
 		currentAuthSession(request.Context()).Admin.ID,
-		chi.URLParam(request, "listenerID"),
+		chi.URLParam(request, "nodeID"),
 		chi.URLParam(request, "userID"),
-		service.UserSpec{
-			Name:      input.Name,
-			UUID:      input.UUID,
-			ExpiresAt: input.ExpiresAt,
-		},
+		input.userSpec(),
 	)
 	if err != nil {
 		handler.writeError(response, request, err)
@@ -749,7 +779,7 @@ func (handler managementHandler) deleteUser(
 	_, err := handler.manager.DeleteUser(
 		request.Context(),
 		currentAuthSession(request.Context()).Admin.ID,
-		chi.URLParam(request, "listenerID"),
+		chi.URLParam(request, "nodeID"),
 		chi.URLParam(request, "userID"),
 	)
 	if err != nil {
@@ -782,7 +812,7 @@ func (handler managementHandler) setUserEnabled(
 	user, revision, err := handler.manager.SetUserEnabled(
 		request.Context(),
 		currentAuthSession(request.Context()).Admin.ID,
-		chi.URLParam(request, "listenerID"),
+		chi.URLParam(request, "nodeID"),
 		chi.URLParam(request, "userID"),
 		enabled,
 	)
@@ -818,10 +848,11 @@ func (handler managementHandler) shareUser(
 	response http.ResponseWriter,
 	request *http.Request,
 ) {
-	share, err := handler.manager.Share(
+	share, err := handler.manager.ShareWithProfile(
 		request.Context(),
-		chi.URLParam(request, "listenerID"),
+		chi.URLParam(request, "nodeID"),
 		chi.URLParam(request, "userID"),
+		request.URL.Query().Get("profile_id"),
 	)
 	if err != nil {
 		handler.writeError(response, request, err)
@@ -1356,57 +1387,183 @@ func (handler managementHandler) writeError(
 	}
 }
 
-func (input listenerRequest) listenerSpec() service.ListenerSpec {
-	return service.ListenerSpec{
-		Name:               input.Name,
-		ListenAddress:      input.ListenAddress,
-		ListenPort:         input.ListenPort,
-		PublicHostOverride: input.PublicHostOverride,
-		PublicPortOverride: input.PublicPortOverride,
-		ServerName:         input.ServerName,
-		RealityDest:        input.RealityDest,
-		RealityPrivateKey:  input.RealityPrivateKey,
-		RealityPublicKey:   input.RealityPublicKey,
-		ShortID:            input.ShortID,
-		UDPEnabled:         input.UDPEnabled,
+func (input listenerRequest) listenerSpec() service.NodeSpec {
+	var users []service.UserSpec
+	if input.Users != nil {
+		users = make([]service.UserSpec, 0, len(input.Users))
+		for _, user := range input.Users {
+			users = append(users, service.UserSpec{
+				Name: user.Name, Enabled: user.Enabled,
+				VLESS: user.VLESS, Hysteria2: user.Hysteria2,
+				VMess: user.VMess, Trojan: user.Trojan,
+				Shadowsocks: user.Shadowsocks,
+				ExpiresAt:   user.ExpiresAt,
+			})
+		}
+	}
+	var profiles []service.AccessProfileSpec
+	if input.AccessProfiles != nil {
+		profiles = make([]service.AccessProfileSpec, 0, len(input.AccessProfiles))
+		for _, profile := range input.AccessProfiles {
+			profiles = append(profiles, service.AccessProfileSpec{
+				ID: profile.ID, Name: profile.Name, Default: profile.Default,
+				PublicHost: profile.PublicHost, PublicPort: profile.PublicPort,
+				ServerName: profile.ServerName, Fingerprint: profile.Fingerprint,
+				PacketEncoding: profile.PacketEncoding,
+				AllowInsecure:  profile.AllowInsecure,
+			})
+		}
+	}
+	return service.NodeSpec{
+		Name: input.Name, Enabled: input.Enabled,
+		ListenAddress: input.ListenAddress, Port: input.Port,
+		Protocol: input.Protocol, VLESS: input.VLESS,
+		Hysteria2: input.Hysteria2, VMess: input.VMess,
+		Trojan: input.Trojan, Shadowsocks: input.Shadowsocks,
+		Generation: input.Generation,
+		Users:      users, AccessProfiles: profiles,
 	}
 }
 
-func newListenerResponse(listener domain.Listener) listenerResponse {
-	users := make([]userResponse, 0, len(listener.Users))
-	for _, user := range listener.Users {
+func newListenerResponse(node domain.Node) listenerResponse {
+	users := make([]userResponse, 0, len(node.Users))
+	for _, user := range node.Users {
 		users = append(users, newUserResponse(user))
 	}
+	profiles := make([]accessProfileResponse, 0, len(node.AccessProfiles))
+	for _, profile := range node.AccessProfiles {
+		profiles = append(profiles, accessProfileResponse{
+			ID: profile.ID, NodeID: profile.NodeID, Name: profile.Name,
+			Default: profile.Default, PublicHost: profile.PublicHost,
+			PublicPort: profile.PublicPort, ServerName: profile.ServerName,
+			Fingerprint:    profile.Fingerprint,
+			PacketEncoding: profile.PacketEncoding,
+			AllowInsecure:  profile.AllowInsecure,
+			CreatedAt:      profile.CreatedAt, UpdatedAt: profile.UpdatedAt,
+		})
+	}
+	vless := cloneJSON(node.VLESS)
+	hysteria2 := cloneJSON(node.Hysteria2)
+	vmess := cloneJSON(node.VMess)
+	trojan := cloneJSON(node.Trojan)
+	shadowsocks := cloneJSON(node.Shadowsocks)
+	secrets := make(map[string]bool)
+	redactNodeSecrets(vless, hysteria2, vmess, trojan, shadowsocks, secrets)
 	return listenerResponse{
-		ID:                   listener.ID,
-		Name:                 listener.Name,
-		Enabled:              listener.Enabled,
-		ListenAddress:        listener.ListenAddress,
-		ListenPort:           listener.ListenPort,
-		PublicHostOverride:   listener.PublicHostOverride,
-		PublicPortOverride:   listener.PublicPortOverride,
-		ServerName:           listener.ServerName,
-		RealityDest:          listener.RealityDest,
-		RealityPublicKey:     listener.RealityPublicKey,
-		RealityPrivateKeySet: listener.RealityPrivateKey != "",
-		ShortID:              listener.ShortID,
-		UDPEnabled:           listener.UDPEnabled,
-		Users:                users,
-		CreatedAt:            listener.CreatedAt,
-		UpdatedAt:            listener.UpdatedAt,
+		ID: node.ID, Name: node.Name, Enabled: node.Enabled,
+		ListenAddress: node.ListenAddress, Port: node.Port,
+		Protocol: node.Protocol, SchemaVersion: node.SchemaVersion,
+		VLESS: vless, Hysteria2: hysteria2, VMess: vmess,
+		Trojan: trojan, Shadowsocks: shadowsocks,
+		Users: users, AccessProfiles: profiles, SecretsSet: secrets,
+		Generation: node.Generation,
+		CreatedAt:  node.CreatedAt, UpdatedAt: node.UpdatedAt,
 	}
 }
 
-func newUserResponse(user domain.User) userResponse {
+func newUserResponse(user domain.NodeUser) userResponse {
 	return userResponse{
-		ID:         user.ID,
-		ListenerID: user.ListenerID,
-		Name:       user.Name,
-		Enabled:    user.Enabled,
-		UUID:       user.UUID,
-		ExpiresAt:  user.ExpiresAt,
-		CreatedAt:  user.CreatedAt,
-		UpdatedAt:  user.UpdatedAt,
+		ID: user.ID, NodeID: user.NodeID, Name: user.Name,
+		Enabled: user.Enabled, VLESS: user.VLESS, Hysteria2: user.Hysteria2,
+		VMess: user.VMess, Trojan: user.Trojan, Shadowsocks: user.Shadowsocks,
+		ExpiresAt: user.ExpiresAt,
+		CreatedAt: user.CreatedAt, UpdatedAt: user.UpdatedAt,
+	}
+}
+
+func cloneJSON[T any](value *T) *T {
+	if value == nil {
+		return nil
+	}
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return nil
+	}
+	var cloned T
+	if json.Unmarshal(encoded, &cloned) != nil {
+		return nil
+	}
+	return &cloned
+}
+
+func redactNodeSecrets(
+	vless *domain.VLESSSpec,
+	hysteria2 *domain.Hysteria2Spec,
+	vmess *domain.VMessSpec,
+	trojan *domain.TrojanSpec,
+	shadowsocks *domain.ShadowsocksSpec,
+	secrets map[string]bool,
+) {
+	if vless != nil {
+		redactSecuritySecrets("vless.security", &vless.Security, secrets)
+	}
+	if hysteria2 != nil {
+		secrets["hysteria2.private_key"] = hysteria2.PrivateKey != ""
+		secrets["hysteria2.ech_key"] = hysteria2.ECHKey != ""
+		secrets["hysteria2.obfs_password"] = hysteria2.ObfsPassword != ""
+		hysteria2.PrivateKey = ""
+		hysteria2.ECHKey = ""
+		hysteria2.ObfsPassword = ""
+		if hysteria2.Realm != nil {
+			secrets["hysteria2.realm.token"] = hysteria2.Realm.Token != ""
+			secrets["hysteria2.realm.private_key"] = hysteria2.Realm.PrivateKey != ""
+			hysteria2.Realm.Token = ""
+			hysteria2.Realm.PrivateKey = ""
+		}
+	}
+	if vmess != nil {
+		redactSecuritySecrets("vmess.security", &vmess.Security, secrets)
+		if vmess.Handler.MKCP != nil {
+			secrets["vmess.handler.mkcp.seed"] = vmess.Handler.MKCP.Seed != ""
+			vmess.Handler.MKCP.Seed = ""
+		}
+	}
+	if trojan != nil {
+		redactSecuritySecrets("trojan.security", &trojan.Security, secrets)
+		secrets["trojan.shadowsocks.password"] = trojan.Shadowsocks.Password != ""
+		trojan.Shadowsocks.Password = ""
+	}
+	if shadowsocks != nil {
+		redactSecuritySecrets("shadowsocks.security", &shadowsocks.Security, secrets)
+	}
+}
+
+func redactSecuritySecrets(
+	prefix string,
+	security *domain.VLESSSecuritySpec,
+	secrets map[string]bool,
+) {
+	if security.TLS != nil {
+		secrets[prefix+".tls.private_key"] = security.TLS.PrivateKey != ""
+		secrets[prefix+".tls.ech_key"] = security.TLS.ECHKey != ""
+		security.TLS.PrivateKey = ""
+		security.TLS.ECHKey = ""
+	}
+	if security.Reality != nil {
+		secrets[prefix+".reality.private_key"] = security.Reality.PrivateKey != ""
+		security.Reality.PrivateKey = ""
+	}
+	if security.ShadowTLS != nil {
+		secrets[prefix+".shadow_tls.password"] = security.ShadowTLS.Password != ""
+		usersSet := false
+		security.ShadowTLS.Password = ""
+		for index := range security.ShadowTLS.Users {
+			usersSet = usersSet || security.ShadowTLS.Users[index].Password != ""
+			security.ShadowTLS.Users[index].Password = ""
+		}
+		secrets[prefix+".shadow_tls.users"] = usersSet
+	}
+	if security.ResTLS != nil {
+		secrets[prefix+".res_tls.password"] = security.ResTLS.Password != ""
+		security.ResTLS.Password = ""
+	}
+	if security.JLS != nil {
+		usersSet := false
+		for index := range security.JLS.Users {
+			usersSet = usersSet || security.JLS.Users[index].Password != ""
+			security.JLS.Users[index].Password = ""
+		}
+		secrets[prefix+".jls.users"] = usersSet
 	}
 }
 

@@ -6,7 +6,7 @@
 
 ## Context
 
-m-ui must provide form-based listener and user management without corrupting a
+m-ui must provide form-based node and user management without corrupting a
 running Mihomo instance. Editing arbitrary YAML in place would make validation,
 redaction, deterministic output, rollback, and database consistency unreliable.
 Separately updating SQLite and `/etc/mihomo/config.yaml` would create failure
@@ -22,7 +22,7 @@ SQLite structured objects are the source of truth. m-ui exclusively owns the
 Mihomo file it generates, and a typed compiler turns `DesiredState` into
 deterministic YAML.
 
-All listener, user, setting, expiry, and rollback mutations pass through one
+All node, user, setting, expiry, and rollback mutations pass through one
 transactional publisher. The publisher serializes changes, starts a SQLite
 `BEGIN IMMEDIATE` transaction, applies the proposed structured mutation,
 compiles and fsyncs a same-filesystem candidate, validates it with a

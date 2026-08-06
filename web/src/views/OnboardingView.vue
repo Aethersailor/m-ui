@@ -66,21 +66,23 @@ async function submit() {
   try {
     result.value = await completeOnboarding(auth.csrfToken, {
       public_host: form.publicHost.trim(),
-      listener: {
-        name: form.listenerName.trim(),
-        listen_port: form.listenPort,
-        server_name: form.serverName.trim(),
-        reality_dest: form.realityDest.trim(),
-        udp_enabled: true,
-      },
-      user: {
-        name: form.userName.trim(),
-        expires_at: form.expiresAt
-          ? new Date(form.expiresAt).toISOString()
-          : null,
+      node: {
+        name: form.listenerName.trim(), enabled: true, listen: '0.0.0.0',
+        port: String(form.listenPort), protocol: 'vless',
+        vless: {
+          decryption: 'none', handler: { type: 'raw' },
+          security: { type: 'reality', reality: {
+            destination: form.realityDest.trim(), private_key: '', public_key: '',
+            short_ids: [], server_names: [form.serverName.trim()],
+          } },
+        },
+        users: [{
+          name: form.userName.trim(), enabled: true,
+          expires_at: form.expiresAt ? new Date(form.expiresAt).toISOString() : null,
+        }],
       },
     })
-    await management.refreshListeners()
+    await management.refreshNodes()
     message.success(t('onboarding.completed'))
   } catch (error) {
     message.error(t(errorTranslationKey(error)))
@@ -174,8 +176,8 @@ async function submit() {
           <NButton
             @click="
               router.push({
-                name: 'listener-detail',
-                params: { id: result.listener.id },
+                name: 'node-detail',
+                params: { id: result.node.id },
               })
             "
           >

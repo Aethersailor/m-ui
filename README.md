@@ -5,7 +5,7 @@
 **面向单台服务器与单个 Mihomo 实例的轻量级管理面板**
 
 通过结构化配置、安全发布和自动回滚，简化  
-**VLESS · TCP · REALITY · XTLS Vision** 节点的部署与维护。
+**VLESS / Hysteria2 / VMess / Trojan / Shadowsocks · 多传输层 · 多安全层** 节点的部署与维护。
 
 <p>
   <a href="https://github.com/Aethersailor/m-ui/releases">
@@ -37,7 +37,15 @@
 
 m-ui 是一个专注于 **单机 Mihomo 服务端管理** 的 Web 面板。
 
-项目使用 SQLite 保存管理员、Listener、用户、设置和配置历史等结构化状态，并据此确定性生成 Mihomo YAML。每次配置变更都会经过真实的 `mihomo -t` 校验、原子发布、运行状态检查和失败回滚，避免将不完整或无效的配置直接投入运行。
+项目使用 SQLite 保存管理员、协议化节点、用户、访问配置、设置和配置历史等结构化状态，并据此确定性生成 Mihomo YAML。每次配置变更都会经过真实的 `mihomo -t` 校验、原子发布、运行状态检查和失败回滚，避免将不完整或无效的配置直接投入运行。
+
+节点参数以 `MetaCubeX/mihomo` 的 **`Meta` 分支**为源码契约，而不是仓库默认分支。节点由服务端协议、处理器/传输层、安全层、用户和公网访问配置组合；当前模块覆盖 VLESS、Hysteria2、VMess、Trojan 与 Shadowsocks，并为继续增加协议保留编译期注册边界。
+
+产品功能丰富度以 [3x-ui](https://github.com/MHSanaei/3x-ui) 为参考，但不照搬其
+Xray 专属字段：**3x-ui 决定面板应该覆盖哪些用户能力，Mihomo `Meta` 源码决定参数
+和能力实际上是什么，组合架构决定未来怎样增加协议。** 第二轮完成机器可读能力
+Schema 和通用节点编辑器，R3 完成五协议覆盖与通用节点/用户操作，详见
+[迭代路线](docs/second-round-roadmap.md)和[功能对齐矩阵](docs/feature-parity-matrix.md)。
 
 后端采用 Go 编写，Vue 前端被嵌入单一可执行文件中，无需额外部署 Web 服务或数据库。
 
@@ -45,9 +53,10 @@ m-ui 是一个专注于 **单机 Mihomo 服务端管理** 的 Web 面板。
 
 | 能力 | 说明 |
 |---|---|
-| Listener 管理 | 创建和管理多个 VLESS + TCP + REALITY + XTLS Vision Listener |
-| 用户管理 | 为每个 Listener 管理多个用户、启用状态和到期时间 |
-| 连接分享 | 生成 UUID、REALITY 密钥、Short ID、VLESS 链接、二维码和客户端 YAML |
+| 节点管理 | 搜索、筛选、复制和管理五种协议节点，支持批量启用与禁用 |
+| 协议组合 | VLESS raw/WebSocket/gRPC/XHTTP；Hysteria2 TLS/混淆/带宽/QUIC；VMess raw/WebSocket/gRPC/mKCP；Trojan；Shadowsocks 传统 AEAD/2022/simple-obfs 及各协议适用的安全层 |
+| 用户与访问配置 | 按节点协议管理凭据、到期时间和公网 Host/Port/SNI/指纹参数，支持批量创建、启用与禁用用户 |
+| 连接分享 | 从同一节点模型生成分享链接、二维码和 Mihomo 客户端 YAML |
 | 安全发布 | 配置生成、真实核心校验、原子替换、健康检查和自动回滚 |
 | 配置历史 | 保存结构化 Revision，并支持经过重新校验的配置回滚 |
 | 核心管理 | 查看、检查、更新和回滚 Mihomo Release 或 Alpha 核心 |
@@ -55,9 +64,12 @@ m-ui 是一个专注于 **单机 Mihomo 服务端管理** 的 Web 面板。
 | 管理界面 | 中文与英文界面、深浅色主题及移动端布局 |
 
 > [!IMPORTANT]
-> m-ui 当前专注于单台服务器上的一个 Mihomo 实例。
+> 当前发布阶段仍专注于单台服务器上的一个 Mihomo 实例。永久订阅、多主机控制、
+> 结构化出站/路由、每用户配额和流量归因等尚未交付能力，属于分阶段对齐项，
+> **不是永久产品边界**。
 >
-> 它不是通用 YAML 编辑器、Mihomo Dashboard、多节点控制器、订阅聚合器或用户计费系统，也不提供任意第三方配置导入、精确用户流量统计、配额和限速功能。
+> m-ui 不会把 Mihomo 无法可靠提供的每用户数据伪装成精确统计或计费依据，也不会
+> 退化成允许任意第三方 YAML 绕过结构化校验和安全 Publisher 的通用编辑器。
 
 ### 支持环境
 
@@ -143,7 +155,7 @@ http://SERVER_IP:2095/
 
 #### 部署生命周期与灾难恢复命令
 
-首次安装完成后，日常管理全部在 Web 完成：管理员密码、Listener、用户、分享、配置校验与
+首次安装完成后，日常管理全部在 Web 完成：管理员密码、节点、用户、分享、配置校验与
 回滚、面板与 Controller 端点、Mihomo 启停与日志、Release/Alpha 核心更新和自动更新都
 不要求 SSH 或容器命令。
 
@@ -306,7 +318,7 @@ sudo docker compose -f /opt/m-ui/compose.yml down
 
 ## 致谢
 
-m-ui 的运行、配置校验和节点能力由 [MetaCubeX/mihomo](https://github.com/MetaCubeX/mihomo) 提供。
+m-ui 的运行、配置校验和节点能力由 [MetaCubeX/mihomo `Meta` 分支](https://github.com/MetaCubeX/mihomo/tree/Meta) 提供。
 
 正式 Release 软件包和容器镜像包含一个经过校验的 Mihomo 二进制文件。其上游仓库、Release ID、Tag、Asset ID、文件名、发布时间和 SHA-256 摘要均记录在随附的 `manifest.json` 中。
 

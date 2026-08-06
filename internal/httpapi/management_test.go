@@ -17,22 +17,55 @@ import (
 	muicrypto "github.com/Aethersailor/m-ui/internal/crypto"
 	"github.com/Aethersailor/m-ui/internal/domain"
 	"github.com/Aethersailor/m-ui/internal/mihomo"
+	"github.com/Aethersailor/m-ui/internal/protocol"
 	"github.com/Aethersailor/m-ui/internal/publisher"
 	"github.com/Aethersailor/m-ui/internal/service"
 	"github.com/Aethersailor/m-ui/internal/store"
 )
 
+func TestCapabilitiesExposeStructuredSchemaWithoutProtocolSecrets(t *testing.T) {
+	t.Parallel()
+	environment := newManagementTestEnvironment(t)
+	sessionCookie, _ := managementLogin(t, environment.handler)
+
+	response := performJSONRequest(
+		t, environment.handler, http.MethodGet, "/api/v1/capabilities", nil, sessionCookie, "",
+	)
+	if response.Code != http.StatusOK {
+		t.Fatalf("capabilities status = %d; body=%s", response.Code, response.Body)
+	}
+	if response.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("capabilities Cache-Control = %q", response.Header().Get("Cache-Control"))
+	}
+	raw := append([]byte(nil), response.Body.Bytes()...)
+	var manifest protocol.CapabilityManifest
+	if err := json.Unmarshal(raw, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	if manifest.SchemaVersion != protocol.CapabilitySchemaVersion || len(manifest.Protocols) != 5 {
+		t.Fatalf("capability manifest = %#v", manifest)
+	}
+	for _, forbidden := range []string{"controller-test-secret", environment.cli.keypair.PrivateKey} {
+		if forbidden != "" && strings.Contains(string(raw), forbidden) {
+			t.Fatalf("capabilities exposed %q", forbidden)
+		}
+	}
+}
+
 func TestOnboardingCreatesReadyListenerUserAndShareOnce(t *testing.T) {
 	t.Parallel()
 	environment := newManagementTestEnvironment(t)
 	sessionCookie, csrfToken := managementLogin(t, environment.handler)
-	payload := onboardingRequest{PublicHost: "node.example.com"}
-	payload.Listener.Name = "default"
-	payload.Listener.ListenPort = 443
-	payload.Listener.ServerName = "www.example.com"
-	payload.Listener.RealityDest = "www.example.com:443"
-	payload.Listener.UDPEnabled = true
-	payload.User.Name = "first-user"
+	payload := onboardingRequest{PublicHost: "node.example.com", Node: listenerRequest{
+		Name: "default", Enabled: true, ListenAddress: "0.0.0.0", Port: "443",
+		Protocol: domain.ProtocolVLESS,
+		VLESS: &domain.VLESSSpec{Decryption: "none", Handler: domain.VLESSHandlerSpec{Type: domain.VLESSHandlerRaw}, Security: domain.VLESSSecuritySpec{
+			Type: domain.VLESSSecurityReality, Reality: &domain.RealityConfig{
+				Destination: "www.example.com:443", ServerNames: []string{"www.example.com"},
+			},
+		}},
+		Users: []userRequest{{Name: "first-user", Enabled: true}},
+	}}
 
 	withoutCSRF := performJSONRequest(
 		t,
@@ -63,7 +96,7 @@ func TestOnboardingCreatesReadyListenerUserAndShareOnce(t *testing.T) {
 	if err := json.NewDecoder(created.Body).Decode(&body); err != nil {
 		t.Fatal(err)
 	}
-	if !body.Listener.Enabled || len(body.Listener.Users) != 1 ||
+	if !body.Node.Enabled || len(body.Node.Users) != 1 ||
 		!body.User.Enabled || body.Share.URI == "" || body.Share.QRContent != body.Share.URI ||
 		!strings.Contains(body.Share.URI, "node.example.com:443") {
 		t.Fatalf("onboarding response = %#v", body)
@@ -81,7 +114,7 @@ func TestOnboardingCreatesReadyListenerUserAndShareOnce(t *testing.T) {
 	if repeated.Code != http.StatusConflict {
 		t.Fatalf("repeated onboarding = %d; body=%s", repeated.Code, repeated.Body)
 	}
-	listeners, err := environment.manager.Listeners(context.Background())
+	listeners, err := environment.manager.Nodes(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,7 +131,7 @@ func TestManagementCRUDUsesAuthenticationCSRFAndPublisher(t *testing.T) {
 		t,
 		environment.handler,
 		http.MethodGet,
-		"/api/v1/listeners",
+		"/api/v1/nodes",
 		nil,
 		nil,
 		"",
@@ -268,18 +301,19 @@ func TestManagementCRUDUsesAuthenticationCSRFAndPublisher(t *testing.T) {
 		t.Fatalf("core update without CSRF status = %d", blockedCoreUpdate.Code)
 	}
 	listenerPayload := listenerRequest{
-		Name:          "edge",
-		ListenAddress: "0.0.0.0",
-		ListenPort:    443,
-		ServerName:    "www.example.com",
-		RealityDest:   "www.example.com:443",
-		UDPEnabled:    true,
+		Name: "edge", Enabled: false, ListenAddress: "0.0.0.0", Port: "443",
+		Protocol: domain.ProtocolVLESS,
+		VLESS: &domain.VLESSSpec{Decryption: "none", Handler: domain.VLESSHandlerSpec{Type: domain.VLESSHandlerRaw}, Security: domain.VLESSSecuritySpec{
+			Type: domain.VLESSSecurityReality, Reality: &domain.RealityConfig{
+				Destination: "www.example.com:443", ServerNames: []string{"www.example.com"},
+			},
+		}},
 	}
 	blocked := performJSONRequest(
 		t,
 		environment.handler,
 		http.MethodPost,
-		"/api/v1/listeners",
+		"/api/v1/nodes",
 		listenerPayload,
 		sessionCookie,
 		"",
@@ -291,7 +325,7 @@ func TestManagementCRUDUsesAuthenticationCSRFAndPublisher(t *testing.T) {
 		t,
 		environment.handler,
 		http.MethodPost,
-		"/api/v1/listeners",
+		"/api/v1/nodes",
 		listenerPayload,
 		sessionCookie,
 		csrfToken,
@@ -322,7 +356,7 @@ func TestManagementCRUDUsesAuthenticationCSRFAndPublisher(t *testing.T) {
 		t,
 		environment.handler,
 		http.MethodPost,
-		"/api/v1/listeners",
+		"/api/v1/nodes",
 		listenerPayload,
 		sessionCookie,
 		csrfToken,
@@ -344,17 +378,34 @@ func TestManagementCRUDUsesAuthenticationCSRFAndPublisher(t *testing.T) {
 	if err := json.NewDecoder(createdListener.Body).Decode(&listenerBody); err != nil {
 		t.Fatal(err)
 	}
-	listenerID := listenerBody.Listener.ID
-	if listenerID == "" || listenerBody.Listener.Enabled {
-		t.Fatalf("created listener = %#v", listenerBody.Listener)
+	listenerID := listenerBody.Node.ID
+	if listenerID == "" || listenerBody.Node.Enabled {
+		t.Fatalf("created node = %#v", listenerBody.Node)
+	}
+	updatedNode := performJSONRequest(
+		t,
+		environment.handler,
+		http.MethodPut,
+		"/api/v1/nodes/"+listenerID,
+		listenerRequest{
+			Name: "edge-updated", Enabled: false,
+			ListenAddress: listenerBody.Node.ListenAddress,
+			Port:          listenerBody.Node.Port, Protocol: listenerBody.Node.Protocol,
+			VLESS: listenerBody.Node.VLESS, Generation: listenerBody.Node.Generation,
+		},
+		sessionCookie,
+		csrfToken,
+	)
+	if updatedNode.Code != http.StatusOK {
+		t.Fatalf("redacted node update status = %d; body=%s", updatedNode.Code, updatedNode.Body)
 	}
 
 	createdUser := performJSONRequest(
 		t,
 		environment.handler,
 		http.MethodPost,
-		"/api/v1/listeners/"+listenerID+"/users",
-		userRequest{Name: "alice"},
+		"/api/v1/nodes/"+listenerID+"/users",
+		userRequest{Name: "alice", Enabled: true},
 		sessionCookie,
 		csrfToken,
 	)
@@ -369,7 +420,7 @@ func TestManagementCRUDUsesAuthenticationCSRFAndPublisher(t *testing.T) {
 	if err := json.NewDecoder(createdUser.Body).Decode(&userBody); err != nil {
 		t.Fatal(err)
 	}
-	if userBody.User.UUID == "" || !userBody.User.Enabled {
+	if userBody.User.VLESS == nil || userBody.User.VLESS.UUID == "" || !userBody.User.Enabled {
 		t.Fatalf("created user = %#v", userBody.User)
 	}
 
@@ -377,7 +428,7 @@ func TestManagementCRUDUsesAuthenticationCSRFAndPublisher(t *testing.T) {
 		t,
 		environment.handler,
 		http.MethodPost,
-		"/api/v1/listeners/"+listenerID+"/enable",
+		"/api/v1/nodes/"+listenerID+"/enable",
 		nil,
 		sessionCookie,
 		csrfToken,
@@ -389,7 +440,7 @@ func TestManagementCRUDUsesAuthenticationCSRFAndPublisher(t *testing.T) {
 		t,
 		environment.handler,
 		http.MethodGet,
-		"/api/v1/listeners/"+listenerID+"/users/"+userBody.User.ID+"/share",
+		"/api/v1/nodes/"+listenerID+"/users/"+userBody.User.ID+"/share",
 		nil,
 		sessionCookie,
 		"",
@@ -414,7 +465,7 @@ func TestManagementCRUDUsesAuthenticationCSRFAndPublisher(t *testing.T) {
 	}
 	for _, secret := range []string{
 		environment.cli.keypair.PrivateKey,
-		userBody.User.UUID,
+		userBody.User.VLESS.UUID,
 	} {
 		if strings.Contains(preview.Body.String(), secret) {
 			t.Fatalf("redacted preview contains %q", secret)
@@ -428,7 +479,7 @@ func TestManagementCRUDUsesAuthenticationCSRFAndPublisher(t *testing.T) {
 		t,
 		environment.handler,
 		http.MethodPost,
-		"/api/v1/listeners/"+listenerID+"/users/"+userBody.User.ID+"/disable",
+		"/api/v1/nodes/"+listenerID+"/users/"+userBody.User.ID+"/disable",
 		nil,
 		sessionCookie,
 		csrfToken,
@@ -444,7 +495,7 @@ func TestManagementCRUDUsesAuthenticationCSRFAndPublisher(t *testing.T) {
 			rejectedDisable.Body,
 		)
 	}
-	storedListener, err := environment.manager.Listener(
+	storedListener, err := environment.manager.Node(
 		context.Background(),
 		listenerID,
 	)
@@ -459,7 +510,7 @@ func TestManagementCRUDUsesAuthenticationCSRFAndPublisher(t *testing.T) {
 		t,
 		environment.handler,
 		http.MethodPost,
-		"/api/v1/listeners/"+listenerID+"/disable",
+		"/api/v1/nodes/"+listenerID+"/disable",
 		nil,
 		sessionCookie,
 		csrfToken,
@@ -475,7 +526,7 @@ func TestManagementCRUDUsesAuthenticationCSRFAndPublisher(t *testing.T) {
 		t,
 		environment.handler,
 		http.MethodPost,
-		"/api/v1/listeners/"+listenerID+"/users/"+userBody.User.ID+"/disable",
+		"/api/v1/nodes/"+listenerID+"/users/"+userBody.User.ID+"/disable",
 		nil,
 		sessionCookie,
 		csrfToken,
@@ -599,7 +650,7 @@ func TestManagementCRUDUsesAuthenticationCSRFAndPublisher(t *testing.T) {
 		"",
 	)
 	if audit.Code != http.StatusOK ||
-		!strings.Contains(audit.Body.String(), "listener.create") {
+		!strings.Contains(audit.Body.String(), "node.create") {
 		t.Fatalf("audit response = %d %q", audit.Code, audit.Body)
 	}
 }

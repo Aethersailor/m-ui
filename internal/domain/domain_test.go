@@ -13,28 +13,28 @@ func TestDesiredStateValidationAndEffectiveUsers(t *testing.T) {
 	t.Parallel()
 	state := validState()
 	expiredAt := state.AsOf
-	state.Listeners[0].Users = append(state.Listeners[0].Users,
-		User{
-			ID:         "73de80e2-1f03-403f-bf58-dd96f82f0979",
-			ListenerID: state.Listeners[0].ID,
-			Name:       "expired",
-			Enabled:    true,
-			UUID:       "3494b4ca-6e48-48a1-8b69-b5d0f148f01b",
-			ExpiresAt:  &expiredAt,
+	state.Nodes[0].Users = append(state.Nodes[0].Users,
+		NodeUser{
+			ID:        "73de80e2-1f03-403f-bf58-dd96f82f0979",
+			NodeID:    state.Nodes[0].ID,
+			Name:      "expired",
+			Enabled:   true,
+			VLESS:     &VLESSCredential{UUID: "3494b4ca-6e48-48a1-8b69-b5d0f148f01b"},
+			ExpiresAt: &expiredAt,
 		},
-		User{
-			ID:         "4049e001-3abe-4609-96a1-4012473ef2df",
-			ListenerID: state.Listeners[0].ID,
-			Name:       "disabled",
-			Enabled:    false,
-			UUID:       "72844a9a-6b70-4adf-a74e-2a8e5190d525",
+		NodeUser{
+			ID:      "4049e001-3abe-4609-96a1-4012473ef2df",
+			NodeID:  state.Nodes[0].ID,
+			Name:    "disabled",
+			Enabled: false,
+			VLESS:   &VLESSCredential{UUID: "72844a9a-6b70-4adf-a74e-2a8e5190d525"},
 		},
 	)
 
 	if err := state.Validate(); err != nil {
 		t.Fatalf("Validate() error = %v", err)
 	}
-	effective := state.Listeners[0].EffectiveUsers(state.AsOf)
+	effective := state.Nodes[0].EffectiveUsers(state.AsOf)
 	if len(effective) != 1 || effective[0].Name != "active" {
 		t.Fatalf("EffectiveUsers() = %#v, want only active user", effective)
 	}
@@ -43,17 +43,21 @@ func TestDesiredStateValidationAndEffectiveUsers(t *testing.T) {
 func TestDesiredStateRejectsPortConflictAndListenerWithoutEffectiveUser(t *testing.T) {
 	t.Parallel()
 	state := validState()
-	second := state.Listeners[0]
+	second := state.Nodes[0]
 	second.ID = "f73e3a5a-f2dd-4c04-bfa3-b99e01c34464"
 	second.Name = "second"
-	second.Users = []User{{
-		ID:         "0ab9ea19-11c0-4ef0-90e0-480371515892",
-		ListenerID: second.ID,
-		Name:       "disabled",
-		Enabled:    false,
-		UUID:       "abdefc62-7632-4e4f-873b-896c6276f2d6",
+	second.Users = []NodeUser{{
+		ID:      "0ab9ea19-11c0-4ef0-90e0-480371515892",
+		NodeID:  second.ID,
+		Name:    "disabled",
+		Enabled: false,
+		VLESS:   &VLESSCredential{UUID: "abdefc62-7632-4e4f-873b-896c6276f2d6"},
 	}}
-	state.Listeners = append(state.Listeners, second)
+	for index := range second.AccessProfiles {
+		second.AccessProfiles[index].ID = "52b3bc0e-3ab2-4ef4-99cb-ec15f5447001"
+		second.AccessProfiles[index].NodeID = second.ID
+	}
+	state.Nodes = append(state.Nodes, second)
 
 	err := state.Validate()
 	if err == nil {
@@ -61,8 +65,8 @@ func TestDesiredStateRejectsPortConflictAndListenerWithoutEffectiveUser(t *testi
 	}
 	message := err.Error()
 	for _, expected := range []string{
-		"listen port conflicts",
-		"enabled listener must have at least one enabled, unexpired user",
+		"port range conflicts",
+		"enabled node must have at least one enabled, unexpired user",
 	} {
 		if !strings.Contains(message, expected) {
 			t.Errorf("Validate() error %q does not contain %q", message, expected)
@@ -73,11 +77,72 @@ func TestDesiredStateRejectsPortConflictAndListenerWithoutEffectiveUser(t *testi
 func TestDesiredStateRejectsNonVersion4UserUUID(t *testing.T) {
 	t.Parallel()
 	state := validState()
-	state.Listeners[0].Users[0].UUID = "00000000-0000-1000-8000-000000000000"
+	state.Nodes[0].Users[0].VLESS.UUID = "00000000-0000-1000-8000-000000000000"
 
 	err := state.Validate()
-	if err == nil || !strings.Contains(err.Error(), "UUID must be version 4") {
+	if err == nil || !strings.Contains(err.Error(), "RFC 4122 version 4 UUID") {
 		t.Fatalf("Validate() error = %v, want UUID version failure", err)
+	}
+}
+
+func TestValidateShadowTLSAndJLSProtocolCredentials(t *testing.T) {
+	t.Parallel()
+
+	shadowTLS := VLESSSpec{
+		Handler: VLESSHandlerSpec{Type: VLESSHandlerRaw},
+		Security: VLESSSecuritySpec{Type: VLESSSecurityShadowTLS, ShadowTLS: &ShadowTLSConfig{
+			Version: 3,
+			Users: []ShadowTLSUser{
+				{Name: "alice", Password: "secret-a"},
+				{Name: "alice", Password: "secret-b"},
+			},
+			Handshake: ShadowTLSHandshake{Destination: "www.example.com:443"},
+		}},
+	}
+	if err := validateVLESS(shadowTLS); err == nil || !strings.Contains(err.Error(), "duplicated") {
+		t.Fatalf("validateVLESS(ShadowTLS) error = %v, want duplicate-user failure", err)
+	}
+
+	jls := VLESSSpec{
+		Handler: VLESSHandlerSpec{Type: VLESSHandlerRaw},
+		Security: VLESSSecuritySpec{Type: VLESSSecurityJLS, JLS: &JLSConfig{
+			Destination: "www.example.com:443",
+			Users:       []JLSUser{{Username: "alice"}},
+			ALPN:        []string{"h2", "h2"},
+		}},
+	}
+	if err := validateVLESS(jls); err == nil ||
+		!strings.Contains(err.Error(), "password is required") ||
+		!strings.Contains(err.Error(), "ALPN value") {
+		t.Fatalf("validateVLESS(JLS) error = %v, want credential and ALPN failures", err)
+	}
+}
+
+func TestValidateHysteria2RealmMatchesRuntimeRequirements(t *testing.T) {
+	t.Parallel()
+
+	spec := Hysteria2Spec{
+		Certificate: "/data/cert.pem",
+		PrivateKey:  "/data/key.pem",
+		Realm: &Hysteria2RealmConfig{
+			Enabled:     true,
+			ServerURL:   "https://realm.example.com",
+			RealmID:     "edge-a",
+			STUNServers: []string{"stun.example.com", "[2001:db8::1]:3478"},
+		},
+	}
+	if err := validateHysteria2(spec); err != nil {
+		t.Fatalf("validateHysteria2() error = %v", err)
+	}
+
+	spec.Realm.ServerURL = "realm.example.com"
+	spec.Realm.RealmID = ""
+	spec.Realm.STUNServers = nil
+	if err := validateHysteria2(spec); err == nil ||
+		!strings.Contains(err.Error(), "absolute HTTP or HTTPS URL") ||
+		!strings.Contains(err.Error(), "Realm ID is required") ||
+		!strings.Contains(err.Error(), "at least one STUN server") {
+		t.Fatalf("validateHysteria2() error = %v, want Realm requirement failures", err)
 	}
 }
 
@@ -254,25 +319,37 @@ func validState() DesiredState {
 		ControllerAddress: "127.0.0.1:9090",
 		ControllerSecret:  "controller-test-secret",
 		PublicHost:        "node.example.com",
-		Listeners: []Listener{{
-			ID:                "bf1f792d-7646-45b1-94b4-9845742d5ad1",
-			Name:              "primary",
-			Enabled:           true,
-			ListenAddress:     "0.0.0.0",
-			ListenPort:        443,
-			ServerName:        "www.example.com",
-			RealityDest:       "www.example.com:443",
-			RealityPrivateKey: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-			RealityPublicKey:  "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
-			ShortID:           "0123456789abcdef",
-			UDPEnabled:        true,
-			Users: []User{{
-				ID:         "e8e65007-0350-48a8-a992-33bc795b8ba3",
-				ListenerID: "bf1f792d-7646-45b1-94b4-9845742d5ad1",
-				Name:       "active",
-				Enabled:    true,
-				UUID:       "1bd44e59-d67d-4af1-9a6d-b9488c8d8a9f",
+		Nodes: []Node{{
+			ID:            "bf1f792d-7646-45b1-94b4-9845742d5ad1",
+			Name:          "primary",
+			Enabled:       true,
+			ListenAddress: "0.0.0.0",
+			Port:          "443",
+			Protocol:      ProtocolVLESS,
+			SchemaVersion: NodeSchemaVersion,
+			VLESS: &VLESSSpec{
+				Decryption: "none",
+				Handler:    VLESSHandlerSpec{Type: VLESSHandlerRaw},
+				Security: VLESSSecuritySpec{Type: VLESSSecurityReality, Reality: &RealityConfig{
+					Destination: "www.example.com:443",
+					PrivateKey:  "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+					PublicKey:   "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
+					ShortIDs:    []string{"0123456789abcdef"}, ServerNames: []string{"www.example.com"},
+				}},
+			},
+			Users: []NodeUser{{
+				ID:      "e8e65007-0350-48a8-a992-33bc795b8ba3",
+				NodeID:  "bf1f792d-7646-45b1-94b4-9845742d5ad1",
+				Name:    "active",
+				Enabled: true,
+				VLESS:   &VLESSCredential{UUID: "1bd44e59-d67d-4af1-9a6d-b9488c8d8a9f", Flow: VLESSFlowVision},
 			}},
+			AccessProfiles: []AccessProfile{{
+				ID: "a3a568b4-46fb-44d9-884e-dcfb72b9f7aa", NodeID: "bf1f792d-7646-45b1-94b4-9845742d5ad1",
+				Name: "default", Default: true, PublicPort: 443, ServerName: "www.example.com",
+				Fingerprint: ClientFingerprint, PacketEncoding: PacketEncodingXUDP,
+			}},
+			Generation: 1,
 		}},
 	}
 }

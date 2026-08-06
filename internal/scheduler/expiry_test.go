@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -24,7 +25,7 @@ func TestExpiryBatchDisablesUsersAndOnlyAffectedEmptyListeners(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunOnce() error = %v", err)
 	}
-	if result.UsersDisabled != 2 || result.ListenersDisabled != 1 {
+	if result.UsersDisabled != 2 || result.NodesDisabled != 1 {
 		t.Fatalf("batch result = %#v", result)
 	}
 	state, err := fixture.store.ReadDesiredState(
@@ -114,7 +115,7 @@ func TestExpiryFailureRollsBackAndRetriesSameBatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("retry RunOnce() error = %v", err)
 	}
-	if result.UsersDisabled != 2 || result.ListenersDisabled != 1 {
+	if result.UsersDisabled != 2 || result.NodesDisabled != 1 {
 		t.Fatalf("retry batch result = %#v", result)
 	}
 }
@@ -249,7 +250,7 @@ func expiryState(batchTime time.Time) domain.DesiredState {
 		ControllerAddress: "127.0.0.1:9090",
 		ControllerSecret:  strings.Repeat("s", 32),
 		PublicHost:        "vpn.example.com",
-		Listeners: []domain.Listener{
+		Nodes: []domain.Node{
 			expiryListener(
 				"11111111-1111-4111-8111-111111111111",
 				"mixed",
@@ -257,7 +258,7 @@ func expiryState(batchTime time.Time) domain.DesiredState {
 				privateKey,
 				publicKey,
 				true,
-				[]domain.User{
+				[]domain.NodeUser{
 					expiryUser(
 						"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
 						"expired",
@@ -282,7 +283,7 @@ func expiryState(batchTime time.Time) domain.DesiredState {
 				privateKey,
 				publicKey,
 				true,
-				[]domain.User{
+				[]domain.NodeUser{
 					expiryUser(
 						"cccccccc-cccc-4ccc-8ccc-cccccccccccc",
 						"last-expired",
@@ -312,27 +313,27 @@ func expiryListener(
 	port uint16,
 	privateKey, publicKey string,
 	enabled bool,
-	users []domain.User,
+	users []domain.NodeUser,
 	now time.Time,
-) domain.Listener {
+) domain.Node {
 	for index := range users {
-		users[index].ListenerID = id
+		users[index].NodeID = id
 	}
-	return domain.Listener{
-		ID:                id,
-		Name:              name,
-		Enabled:           enabled,
-		ListenAddress:     "0.0.0.0",
-		ListenPort:        port,
-		ServerName:        "www.example.com",
-		RealityDest:       "www.example.com:443",
-		RealityPrivateKey: privateKey,
-		RealityPublicKey:  publicKey,
-		ShortID:           "0123456789abcdef",
-		UDPEnabled:        true,
-		Users:             users,
-		CreatedAt:         now.Add(-time.Hour),
-		UpdatedAt:         now.Add(-time.Hour),
+	return domain.Node{
+		ID: id, Name: name, Enabled: enabled, ListenAddress: "0.0.0.0", Port: fmt.Sprint(port),
+		Protocol: domain.ProtocolVLESS, SchemaVersion: domain.NodeSchemaVersion,
+		VLESS: &domain.VLESSSpec{Decryption: "none", Handler: domain.VLESSHandlerSpec{Type: domain.VLESSHandlerRaw}, Security: domain.VLESSSecuritySpec{
+			Type: domain.VLESSSecurityReality, Reality: &domain.RealityConfig{
+				Destination: "www.example.com:443", PrivateKey: privateKey, PublicKey: publicKey,
+				ShortIDs: []string{"0123456789abcdef"}, ServerNames: []string{"www.example.com"},
+			},
+		}},
+		Users: users,
+		AccessProfiles: []domain.AccessProfile{{
+			ID: expiryProfileID(id), NodeID: id, Name: "default", Default: true,
+			PublicPort: port, ServerName: "www.example.com",
+		}},
+		CreatedAt: now.Add(-time.Hour), UpdatedAt: now.Add(-time.Hour), Generation: 1,
 	}
 }
 
@@ -340,15 +341,26 @@ func expiryUser(
 	id, name, protocolUUID string,
 	expiresAt *time.Time,
 	now time.Time,
-) domain.User {
-	return domain.User{
+) domain.NodeUser {
+	return domain.NodeUser{
 		ID:        id,
 		Name:      name,
 		Enabled:   true,
-		UUID:      protocolUUID,
+		VLESS:     &domain.VLESSCredential{UUID: protocolUUID},
 		ExpiresAt: expiresAt,
 		CreatedAt: now.Add(-time.Hour),
 		UpdatedAt: now.Add(-time.Hour),
+	}
+}
+
+func expiryProfileID(nodeID string) string {
+	switch nodeID[0] {
+	case '1':
+		return "91111111-1111-4111-8111-111111111111"
+	case '2':
+		return "92222222-2222-4222-8222-222222222222"
+	default:
+		return "93333333-3333-4333-8333-333333333333"
 	}
 }
 
@@ -356,22 +368,22 @@ func expiryListenerByID(
 	t *testing.T,
 	state domain.DesiredState,
 	id string,
-) domain.Listener {
+) domain.Node {
 	t.Helper()
-	for _, listener := range state.Listeners {
-		if listener.ID == id {
-			return listener
+	for _, node := range state.Nodes {
+		if node.ID == id {
+			return node
 		}
 	}
-	t.Fatalf("listener %s not found", id)
-	return domain.Listener{}
+	t.Fatalf("node %s not found", id)
+	return domain.Node{}
 }
 
 func expiryUserByName(
 	t *testing.T,
-	listener domain.Listener,
+	listener domain.Node,
 	name string,
-) domain.User {
+) domain.NodeUser {
 	t.Helper()
 	for _, user := range listener.Users {
 		if user.Name == name {
@@ -379,7 +391,7 @@ func expiryUserByName(
 		}
 	}
 	t.Fatalf("user %s not found", name)
-	return domain.User{}
+	return domain.NodeUser{}
 }
 
 type expiryCLI struct{}

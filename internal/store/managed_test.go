@@ -151,7 +151,7 @@ func TestManagedStoreRoundTripsEncryptedStateAndRevisionTransitions(t *testing.T
 	}
 	if err := database.db.QueryRowContext(
 		ctx,
-		"SELECT reality_private_key_ciphertext FROM listeners LIMIT 1",
+		"SELECT protocol_secret_ciphertext FROM nodes LIMIT 1",
 	).Scan(&privateCiphertext); err != nil {
 		t.Fatal(err)
 	}
@@ -165,7 +165,7 @@ func TestManagedStoreRoundTripsEncryptedStateAndRevisionTransitions(t *testing.T
 	}
 	databaseBytes := controllerCiphertext + privateCiphertext
 	if strings.Contains(databaseBytes, state.ControllerSecret) ||
-		strings.Contains(databaseBytes, state.Listeners[0].RealityPrivateKey) {
+		strings.Contains(databaseBytes, state.Nodes[0].VLESS.Security.Reality.PrivateKey) {
 		t.Fatal("encrypted database fields contain plaintext secret material")
 	}
 
@@ -181,8 +181,8 @@ func TestManagedStoreRoundTripsEncryptedStateAndRevisionTransitions(t *testing.T
 		t.Fatal(err)
 	}
 	if loaded.ControllerSecret != state.ControllerSecret ||
-		loaded.Listeners[0].RealityPrivateKey != state.Listeners[0].RealityPrivateKey ||
-		loaded.Listeners[0].Users[0].UUID != state.Listeners[0].Users[0].UUID {
+		loaded.Nodes[0].VLESS.Security.Reality.PrivateKey != state.Nodes[0].VLESS.Security.Reality.PrivateKey ||
+		loaded.Nodes[0].Users[0].VLESS.UUID != state.Nodes[0].Users[0].VLESS.UUID {
 		t.Fatalf("round-tripped state differs: %#v", loaded)
 	}
 	storedRevision, err := managed.Revision(ctx, revision.ID)
@@ -192,6 +192,93 @@ func TestManagedStoreRoundTripsEncryptedStateAndRevisionTransitions(t *testing.T
 	if storedRevision.Status != domain.RevisionActive ||
 		storedRevision.ActivatedAt == nil {
 		t.Fatalf("stored revision = %#v", storedRevision)
+	}
+}
+
+func TestManagedStorePersistsR3ProtocolsThroughSQLite(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	database, err := Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = database.Close() }()
+	sealer, err := muicrypto.NewSealer(muicrypto.MasterKey{22, 23, 24})
+	if err != nil {
+		t.Fatal(err)
+	}
+	managed, err := NewManagedStore(database, sealer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := managedTestState()
+	ids := []string{"19d82af5-2630-4495-bea4-d7b15042b306", "a778ec03-705a-43dd-9c2d-d63370924597", "95467761-0588-42db-9f86-16593a23e04f"}
+	userIDs := []string{"5f38aec7-a0ee-4727-a487-eabfc1a29f91", "cc957f54-5354-4510-a342-0a1bef691dc9", "632582e0-34d5-4245-be2f-62e64509a223"}
+	profileIDs := []string{"1bf1e6eb-4ec3-47c9-aa47-cf5d3ca17083", "8f6db035-e8ce-484c-bdfb-0569b88840fa", "0d7419bc-bced-4301-9515-260779d1e04d"}
+	state.Nodes = []domain.Node{
+		{ID: ids[0], Name: "vmess", Enabled: true, ListenAddress: "0.0.0.0", Port: "41001", Protocol: domain.ProtocolVMess, SchemaVersion: domain.NodeSchemaVersion, Generation: 1,
+			VMess:          &domain.VMessSpec{Handler: domain.VLESSHandlerSpec{Type: domain.VMessHandlerMKCP, MKCP: &domain.MKCPConfig{Seed: "sqlite-mkcp-seed"}}, Security: domain.VLESSSecuritySpec{Type: domain.VLESSSecurityNone}},
+			Users:          []domain.NodeUser{{ID: userIDs[0], NodeID: ids[0], Name: "alice", Enabled: true, VMess: &domain.VMessCredential{UUID: "405de9d6-025c-41ed-8033-9b5c0106df18", Cipher: "auto"}}},
+			AccessProfiles: []domain.AccessProfile{{ID: profileIDs[0], NodeID: ids[0], Name: "default", Default: true, PublicPort: 41001}}},
+		{ID: ids[1], Name: "trojan", Enabled: true, ListenAddress: "0.0.0.0", Port: "41002", Protocol: domain.ProtocolTrojan, SchemaVersion: domain.NodeSchemaVersion, Generation: 1,
+			Trojan:         &domain.TrojanSpec{Handler: domain.VLESSHandlerSpec{Type: domain.VLESSHandlerRaw}, Security: domain.VLESSSecuritySpec{Type: domain.VLESSSecurityNone}, Shadowsocks: domain.TrojanShadowsocksSpec{Enabled: true, Method: "aes-128-gcm", Password: "sqlite-wrapper-secret"}},
+			Users:          []domain.NodeUser{{ID: userIDs[1], NodeID: ids[1], Name: "bob", Enabled: true, Trojan: &domain.TrojanCredential{Password: "sqlite-trojan-secret"}}},
+			AccessProfiles: []domain.AccessProfile{{ID: profileIDs[1], NodeID: ids[1], Name: "default", Default: true, PublicPort: 41002}}},
+		{ID: ids[2], Name: "shadowsocks", Enabled: true, ListenAddress: "0.0.0.0", Port: "41003", Protocol: domain.ProtocolShadowsocks, SchemaVersion: domain.NodeSchemaVersion, Generation: 1,
+			Shadowsocks:    &domain.ShadowsocksSpec{Cipher: "aes-128-gcm", UDP: true, Security: domain.VLESSSecuritySpec{Type: domain.VLESSSecurityNone}},
+			Users:          []domain.NodeUser{{ID: userIDs[2], NodeID: ids[2], Name: "carol", Enabled: true, Shadowsocks: &domain.ShadowsocksCredential{Password: "sqlite-ss-secret"}}},
+			AccessProfiles: []domain.AccessProfile{{ID: profileIDs[2], NodeID: ids[2], Name: "default", Default: true, PublicPort: 41003}}},
+	}
+	transaction, err := managed.BeginImmediate(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := transaction.ReplaceDesiredState(ctx, state); err != nil {
+		t.Fatal(err)
+	}
+	if err := transaction.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	read, err := managed.BeginImmediate(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := read.DesiredState(ctx, state.AsOf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := read.Rollback(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded.Nodes) != 3 {
+		t.Fatalf("loaded nodes = %d", len(loaded.Nodes))
+	}
+	byKind := make(map[domain.ProtocolKind]domain.Node)
+	for _, node := range loaded.Nodes {
+		byKind[node.Protocol] = node
+	}
+	if byKind[domain.ProtocolVMess].VMess.Handler.MKCP.Seed != "sqlite-mkcp-seed" ||
+		byKind[domain.ProtocolTrojan].Trojan.Shadowsocks.Password != "sqlite-wrapper-secret" ||
+		byKind[domain.ProtocolShadowsocks].Users[0].Shadowsocks.Password != "sqlite-ss-secret" {
+		t.Fatalf("round-tripped R3 nodes = %#v", byKind)
+	}
+	rows, err := database.db.QueryContext(ctx, "SELECT protocol_config_json FROM nodes")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var plaintext string
+	for rows.Next() {
+		var value string
+		if err := rows.Scan(&value); err != nil {
+			t.Fatal(err)
+		}
+		plaintext += value
+	}
+	for _, secret := range []string{"sqlite-mkcp-seed", "sqlite-wrapper-secret", "sqlite-trojan-secret", "sqlite-ss-secret"} {
+		if strings.Contains(plaintext, secret) {
+			t.Fatalf("protocol config leaked %q", secret)
+		}
 	}
 }
 
@@ -702,31 +789,34 @@ func retentionRevision(
 }
 
 func managedTestState() domain.DesiredState {
-	listenerID := "8070e289-c5b8-418e-af60-42788dc3c16f"
+	nodeID := "8070e289-c5b8-418e-af60-42788dc3c16f"
 	return domain.DesiredState{
 		AsOf:              time.Date(2026, time.July, 28, 12, 0, 0, 0, time.UTC),
 		ControllerAddress: "127.0.0.1:9090",
 		ControllerSecret:  "managed-controller-secret",
 		PublicHost:        "node.example.com",
-		Listeners: []domain.Listener{{
-			ID:                listenerID,
-			Name:              "primary",
-			Enabled:           true,
-			ListenAddress:     "0.0.0.0",
-			ListenPort:        443,
-			ServerName:        "www.example.com",
-			RealityDest:       "www.example.com:443",
-			RealityPrivateKey: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-			RealityPublicKey:  "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
-			ShortID:           "0123456789abcdef",
-			UDPEnabled:        true,
-			Users: []domain.User{{
-				ID:         "67610ca7-773a-4f63-be55-c601059528be",
-				ListenerID: listenerID,
-				Name:       "active",
-				Enabled:    true,
-				UUID:       "8b946508-36e4-43a7-9a2d-d34420bf2ad9",
+		Nodes: []domain.Node{{
+			ID: nodeID, Name: "primary", Enabled: true, ListenAddress: "0.0.0.0", Port: "443",
+			Protocol: domain.ProtocolVLESS, SchemaVersion: domain.NodeSchemaVersion,
+			VLESS: &domain.VLESSSpec{Decryption: "none", Handler: domain.VLESSHandlerSpec{Type: domain.VLESSHandlerRaw}, Security: domain.VLESSSecuritySpec{
+				Type: domain.VLESSSecurityReality, Reality: &domain.RealityConfig{
+					Destination: "www.example.com:443", PrivateKey: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+					PublicKey: "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE",
+					ShortIDs:  []string{"0123456789abcdef"}, ServerNames: []string{"www.example.com"},
+				},
 			}},
+			Users: []domain.NodeUser{{
+				ID:      "67610ca7-773a-4f63-be55-c601059528be",
+				NodeID:  nodeID,
+				Name:    "active",
+				Enabled: true,
+				VLESS:   &domain.VLESSCredential{UUID: "8b946508-36e4-43a7-9a2d-d34420bf2ad9"},
+			}},
+			AccessProfiles: []domain.AccessProfile{{
+				ID: "8896f7f4-c100-4c11-b6d8-e2e2b342322d", NodeID: nodeID,
+				Name: "default", Default: true, PublicPort: 443, ServerName: "www.example.com",
+			}},
+			Generation: 1,
 		}},
 	}
 }

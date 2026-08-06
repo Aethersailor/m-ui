@@ -1,27 +1,33 @@
 import { describe, expect, it, vi } from 'vitest'
 
-import { restartApplication, setListenerEnabled, updateCore } from './management'
+import {
+  cloneNode,
+  createUsers,
+  restartApplication,
+  setNodeEnabled,
+  setNodesEnabled,
+  setUsersEnabled,
+  updateCore,
+} from './management'
 
 describe('management API', () => {
   it('sends authenticated mutations with the CSRF header', async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(
         JSON.stringify({
-          listener: {
-            id: 'listener-1',
-            name: 'Synthetic listener',
+          node: {
+            id: 'node-1',
+            name: 'Synthetic node',
             enabled: true,
-            listen_address: '0.0.0.0',
-            listen_port: 443,
-            public_host_override: '',
-            public_port_override: null,
-            server_name: 'example.invalid',
-            reality_dest: 'example.invalid:443',
-            reality_public_key: 'synthetic-public-key',
-            reality_private_key_set: true,
-            short_id: '0123456789abcdef',
-            udp_enabled: false,
+            listen: '0.0.0.0',
+            port: '443',
+            protocol: 'vless',
+            schema_version: 1,
+            vless: { handler: { type: 'raw' }, security: { type: 'none' } },
             users: [],
+            access_profiles: [],
+            secrets_set: {},
+            generation: 1,
             created_at: '2026-07-28T00:00:00Z',
             updated_at: '2026-07-28T00:00:00Z',
           },
@@ -34,16 +40,16 @@ describe('management API', () => {
     )
     vi.stubGlobal('fetch', fetchMock)
 
-    const listener = await setListenerEnabled(
+    const node = await setNodeEnabled(
       'synthetic-csrf-token',
-      'listener-1',
+      'node-1',
       true,
     )
 
-    expect(listener.enabled).toBe(true)
+    expect(node.enabled).toBe(true)
     expect(fetchMock).toHaveBeenCalledOnce()
     const [path, init] = fetchMock.mock.calls[0] as [string, RequestInit]
-    expect(path).toBe('/api/v1/listeners/listener-1/enable')
+    expect(path).toBe('/api/v1/nodes/node-1/enable')
     expect(init.method).toBe('POST')
     expect(init.credentials).toBe('same-origin')
     expect(new Headers(init.headers).get('X-CSRF-Token')).toBe(
@@ -104,5 +110,32 @@ describe('management API', () => {
     expect(new Headers(init.headers).get('X-CSRF-Token')).toBe(
       'synthetic-restart-csrf',
     )
+  })
+
+  it('uses the stable batch and clone mutation contracts', async () => {
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(
+      new Response(JSON.stringify({ node: {}, nodes: [], users: [], revision: {} }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    ))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await cloneNode('csrf', 'source/node', { name: 'Clone', port: '8443', include_users: true })
+    await setNodesEnabled('csrf', ['node-1', 'node-2'], false)
+    await createUsers('csrf', 'node-1', [{ name: 'alice', enabled: true, expires_at: null, future: { token: '' } }])
+    await setUsersEnabled('csrf', 'node-1', ['user-1'], true)
+
+    const requests = fetchMock.mock.calls.map(([path, init]) => ({
+      path,
+      method: (init as RequestInit).method,
+      body: JSON.parse(String((init as RequestInit).body)),
+    }))
+    expect(requests).toEqual([
+      { path: '/api/v1/nodes/source%2Fnode/clone', method: 'POST', body: { name: 'Clone', port: '8443', include_users: true } },
+      { path: '/api/v1/nodes/batch-enabled', method: 'POST', body: { node_ids: ['node-1', 'node-2'], enabled: false } },
+      { path: '/api/v1/nodes/node-1/users/batch', method: 'POST', body: { users: [{ name: 'alice', enabled: true, expires_at: null, future: { token: '' } }] } },
+      { path: '/api/v1/nodes/node-1/users/batch-enabled', method: 'POST', body: { user_ids: ['user-1'], enabled: true } },
+    ])
   })
 })

@@ -1072,71 +1072,56 @@ func (transaction *ManagedTx) DesiredState(
 
 	rows, err := transaction.conn.QueryContext(
 		ctx,
-		`SELECT id, name, enabled, listen_address, listen_port,
-		        COALESCE(public_host_override, ''), public_port_override,
-		        server_name, reality_dest, reality_private_key_ciphertext,
-		        reality_public_key, short_id, udp_enabled, created_at, updated_at
-		   FROM listeners
+		`SELECT id, name, enabled, listen_address, port, protocol_kind,
+		        protocol_schema_version, protocol_config_json,
+		        protocol_secret_ciphertext, generation, created_at, updated_at
+		   FROM nodes
 		  ORDER BY name, id`,
 	)
 	if err != nil {
-		return domain.DesiredState{}, fmt.Errorf("query listeners: %w", err)
+		return domain.DesiredState{}, fmt.Errorf("query nodes: %w", err)
 	}
 	defer func() {
 		_ = rows.Close()
 	}()
 	for rows.Next() {
-		var listener domain.Listener
-		var enabled, udpEnabled int
-		var listenPort int64
-		var publicPort sql.NullInt64
-		var privateCiphertext, createdAt, updatedAt string
+		var node domain.Node
+		var enabled int
+		var protocolKind string
+		var protocolConfig, protocolCiphertext, createdAt, updatedAt string
 		if err := rows.Scan(
-			&listener.ID,
-			&listener.Name,
+			&node.ID,
+			&node.Name,
 			&enabled,
-			&listener.ListenAddress,
-			&listenPort,
-			&listener.PublicHostOverride,
-			&publicPort,
-			&listener.ServerName,
-			&listener.RealityDest,
-			&privateCiphertext,
-			&listener.RealityPublicKey,
-			&listener.ShortID,
-			&udpEnabled,
+			&node.ListenAddress,
+			&node.Port,
+			&protocolKind,
+			&node.SchemaVersion,
+			&protocolConfig,
+			&protocolCiphertext,
+			&node.Generation,
 			&createdAt,
 			&updatedAt,
 		); err != nil {
-			return domain.DesiredState{}, fmt.Errorf("scan listener: %w", err)
+			return domain.DesiredState{}, fmt.Errorf("scan node: %w", err)
 		}
-		listener.ListenPort = uint16(listenPort)
-		listener.Enabled = enabled == 1
-		listener.UDPEnabled = udpEnabled == 1
-		if publicPort.Valid {
-			value := uint16(publicPort.Int64)
-			listener.PublicPortOverride = &value
-		}
-		if listener.CreatedAt, err = parseTime(createdAt); err != nil {
+		node.Protocol = domain.ProtocolKind(protocolKind)
+		node.Enabled = enabled == 1
+		if node.CreatedAt, err = parseTime(createdAt); err != nil {
 			return domain.DesiredState{}, err
 		}
-		if listener.UpdatedAt, err = parseTime(updatedAt); err != nil {
+		if node.UpdatedAt, err = parseTime(updatedAt); err != nil {
 			return domain.DesiredState{}, err
 		}
-		privateKey, err := transaction.sealer.Decrypt(
-			privateCiphertext,
-			listenerPrivateKeyPurpose(listener.ID),
-		)
-		if err != nil {
-			return domain.DesiredState{}, errors.New("decrypt listener REALITY private key")
+		if err := decodeNodeProtocol(transaction.sealer, &node, protocolConfig, protocolCiphertext); err != nil {
+			return domain.DesiredState{}, fmt.Errorf("decode node %q: %w", node.Name, err)
 		}
-		listener.RealityPrivateKey = string(privateKey)
-		state.Listeners = append(state.Listeners, listener)
+		state.Nodes = append(state.Nodes, node)
 	}
 	if err := rows.Err(); err != nil {
-		return domain.DesiredState{}, fmt.Errorf("iterate listeners: %w", err)
+		return domain.DesiredState{}, fmt.Errorf("iterate nodes: %w", err)
 	}
-	if err := transaction.loadUsers(ctx, &state); err != nil {
+	if err := transaction.loadNodeChildren(ctx, &state); err != nil {
 		return domain.DesiredState{}, err
 	}
 	return state, nil
@@ -1242,52 +1227,49 @@ func (transaction *ManagedTx) ReplaceDesiredState(
 			return fmt.Errorf("clear resolved endpoint settings: %w", err)
 		}
 	}
-	if _, err := transaction.conn.ExecContext(ctx, "DELETE FROM listeners"); err != nil {
-		return fmt.Errorf("replace listeners: %w", err)
+	if _, err := transaction.conn.ExecContext(ctx, "DELETE FROM nodes"); err != nil {
+		return fmt.Errorf("replace nodes: %w", err)
 	}
-	for _, listener := range state.Listeners {
-		privateCiphertext, err := transaction.sealer.Encrypt(
-			[]byte(listener.RealityPrivateKey),
-			listenerPrivateKeyPurpose(listener.ID),
-		)
+	for _, node := range state.Nodes {
+		protocolConfig, protocolCiphertext, err := encodeNodeProtocol(transaction.sealer, node)
 		if err != nil {
-			return errors.New("encrypt listener REALITY private key")
+			return fmt.Errorf("encode node %q: %w", node.Name, err)
 		}
-		createdAt := listener.CreatedAt
+		createdAt := node.CreatedAt
 		if createdAt.IsZero() {
 			createdAt = state.AsOf
 		}
-		updatedAt := listener.UpdatedAt
+		updatedAt := node.UpdatedAt
 		if updatedAt.IsZero() {
 			updatedAt = state.AsOf
 		}
 		if _, err := transaction.conn.ExecContext(
 			ctx,
-			`INSERT INTO listeners(
-				id, name, enabled, listen_address, listen_port,
-				public_host_override, public_port_override, server_name,
-				reality_dest, reality_private_key_ciphertext, reality_public_key,
-				short_id, udp_enabled, created_at, updated_at
-			) VALUES (?, ?, ?, ?, ?, NULLIF(?, ''), ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			listener.ID,
-			listener.Name,
-			boolInt(listener.Enabled),
-			listener.ListenAddress,
-			listener.ListenPort,
-			listener.PublicHostOverride,
-			nullablePort(listener.PublicPortOverride),
-			listener.ServerName,
-			listener.RealityDest,
-			privateCiphertext,
-			listener.RealityPublicKey,
-			listener.ShortID,
-			boolInt(listener.UDPEnabled),
+			`INSERT INTO nodes(
+				id, name, enabled, listen_address, port, protocol_kind,
+				protocol_schema_version, protocol_config_json,
+				protocol_secret_ciphertext, generation, created_at, updated_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			node.ID,
+			node.Name,
+			boolInt(node.Enabled),
+			node.ListenAddress,
+			node.Port,
+			node.Protocol,
+			node.SchemaVersion,
+			protocolConfig,
+			protocolCiphertext,
+			node.Generation,
 			formatTime(createdAt),
 			formatTime(updatedAt),
 		); err != nil {
-			return fmt.Errorf("insert listener: %w", err)
+			return fmt.Errorf("insert node: %w", err)
 		}
-		for _, user := range listener.Users {
+		for _, user := range node.Users {
+			credentialCiphertext, err := encodeUserCredential(transaction.sealer, user, node.Protocol)
+			if err != nil {
+				return fmt.Errorf("encode node user %q: %w", user.Name, err)
+			}
 			userCreatedAt := user.CreatedAt
 			if userCreatedAt.IsZero() {
 				userCreatedAt = state.AsOf
@@ -1298,20 +1280,54 @@ func (transaction *ManagedTx) ReplaceDesiredState(
 			}
 			if _, err := transaction.conn.ExecContext(
 				ctx,
-				`INSERT INTO listener_users(
-					id, listener_id, name, enabled, uuid, expires_at,
+				`INSERT INTO node_users(
+					id, node_id, name, enabled, credential_kind,
+					credential_ciphertext, expires_at,
 					created_at, updated_at
-				) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 				user.ID,
-				listener.ID,
+				node.ID,
 				user.Name,
 				boolInt(user.Enabled),
-				user.UUID,
+				node.Protocol,
+				credentialCiphertext,
 				nullableTime(user.ExpiresAt),
 				formatTime(userCreatedAt),
 				formatTime(userUpdatedAt),
 			); err != nil {
-				return fmt.Errorf("insert listener user: %w", err)
+				return fmt.Errorf("insert node user: %w", err)
+			}
+		}
+		for _, profile := range node.AccessProfiles {
+			profileCreatedAt := profile.CreatedAt
+			if profileCreatedAt.IsZero() {
+				profileCreatedAt = state.AsOf
+			}
+			profileUpdatedAt := profile.UpdatedAt
+			if profileUpdatedAt.IsZero() {
+				profileUpdatedAt = state.AsOf
+			}
+			if _, err := transaction.conn.ExecContext(
+				ctx,
+				`INSERT INTO access_profiles(
+					id, node_id, name, is_default, public_host, public_port,
+					server_name, fingerprint, packet_encoding, allow_insecure,
+					created_at, updated_at
+				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				profile.ID,
+				node.ID,
+				profile.Name,
+				boolInt(profile.Default),
+				profile.PublicHost,
+				profile.PublicPort,
+				profile.ServerName,
+				profile.Fingerprint,
+				profile.PacketEncoding,
+				boolInt(profile.AllowInsecure),
+				formatTime(profileCreatedAt),
+				formatTime(profileUpdatedAt),
+			); err != nil {
+				return fmt.Errorf("insert access profile: %w", err)
 			}
 		}
 	}
@@ -1856,43 +1872,44 @@ func equalStrings(left, right []string) bool {
 	return true
 }
 
-func (transaction *ManagedTx) loadUsers(
+func (transaction *ManagedTx) loadNodeChildren(
 	ctx context.Context,
 	state *domain.DesiredState,
 ) error {
-	listenerIndex := make(map[string]int, len(state.Listeners))
-	for index := range state.Listeners {
-		listenerIndex[state.Listeners[index].ID] = index
+	nodeIndex := make(map[string]int, len(state.Nodes))
+	for index := range state.Nodes {
+		nodeIndex[state.Nodes[index].ID] = index
 	}
 	rows, err := transaction.conn.QueryContext(
 		ctx,
-		`SELECT id, listener_id, name, enabled, uuid, expires_at,
+		`SELECT id, node_id, name, enabled, credential_kind,
+		        credential_ciphertext, expires_at,
 		        created_at, updated_at
-		   FROM listener_users
+		   FROM node_users
 		  ORDER BY name, id`,
 	)
 	if err != nil {
-		return fmt.Errorf("query listener users: %w", err)
+		return fmt.Errorf("query node users: %w", err)
 	}
-	defer func() {
-		_ = rows.Close()
-	}()
+	defer func() { _ = rows.Close() }()
 	for rows.Next() {
-		var user domain.User
+		var user domain.NodeUser
 		var enabled int
+		var credentialKind, credentialCiphertext string
 		var expiresAt sql.NullString
 		var createdAt, updatedAt string
 		if err := rows.Scan(
 			&user.ID,
-			&user.ListenerID,
+			&user.NodeID,
 			&user.Name,
 			&enabled,
-			&user.UUID,
+			&credentialKind,
+			&credentialCiphertext,
 			&expiresAt,
 			&createdAt,
 			&updatedAt,
 		); err != nil {
-			return fmt.Errorf("scan listener user: %w", err)
+			return fmt.Errorf("scan node user: %w", err)
 		}
 		user.Enabled = enabled == 1
 		if expiresAt.Valid {
@@ -1908,13 +1925,71 @@ func (transaction *ManagedTx) loadUsers(
 		if user.UpdatedAt, err = parseTime(updatedAt); err != nil {
 			return err
 		}
-		index, exists := listenerIndex[user.ListenerID]
+		index, exists := nodeIndex[user.NodeID]
 		if !exists {
-			return errors.New("listener user references an unknown listener")
+			return errors.New("node user references an unknown node")
 		}
-		state.Listeners[index].Users = append(state.Listeners[index].Users, user)
+		kind := domain.ProtocolKind(credentialKind)
+		if kind != state.Nodes[index].Protocol {
+			return errors.New("node user credential kind does not match its node protocol")
+		}
+		if err := decodeUserCredential(transaction.sealer, &user, kind, credentialCiphertext); err != nil {
+			return err
+		}
+		state.Nodes[index].Users = append(state.Nodes[index].Users, user)
 	}
-	return rows.Err()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	profiles, err := transaction.conn.QueryContext(
+		ctx,
+		`SELECT id, node_id, name, is_default, public_host, public_port,
+		        server_name, fingerprint, packet_encoding, allow_insecure,
+		        created_at, updated_at
+		   FROM access_profiles
+		  ORDER BY is_default DESC, name, id`,
+	)
+	if err != nil {
+		return fmt.Errorf("query access profiles: %w", err)
+	}
+	defer func() { _ = profiles.Close() }()
+	for profiles.Next() {
+		var profile domain.AccessProfile
+		var isDefault, allowInsecure int
+		var publicPort int64
+		var createdAt, updatedAt string
+		if err := profiles.Scan(
+			&profile.ID,
+			&profile.NodeID,
+			&profile.Name,
+			&isDefault,
+			&profile.PublicHost,
+			&publicPort,
+			&profile.ServerName,
+			&profile.Fingerprint,
+			&profile.PacketEncoding,
+			&allowInsecure,
+			&createdAt,
+			&updatedAt,
+		); err != nil {
+			return fmt.Errorf("scan access profile: %w", err)
+		}
+		profile.Default = isDefault == 1
+		profile.AllowInsecure = allowInsecure == 1
+		profile.PublicPort = uint16(publicPort)
+		if profile.CreatedAt, err = parseTime(createdAt); err != nil {
+			return err
+		}
+		if profile.UpdatedAt, err = parseTime(updatedAt); err != nil {
+			return err
+		}
+		index, exists := nodeIndex[profile.NodeID]
+		if !exists {
+			return errors.New("access profile references an unknown node")
+		}
+		state.Nodes[index].AccessProfiles = append(state.Nodes[index].AccessProfiles, profile)
+	}
+	return profiles.Err()
 }
 
 type rowScanner interface {
@@ -1960,22 +2035,11 @@ func scanRevision(row rowScanner) (domain.Revision, error) {
 	return revision, nil
 }
 
-func listenerPrivateKeyPurpose(id string) string {
-	return "listener:" + id + ":reality_private_key"
-}
-
 func boolInt(value bool) int {
 	if value {
 		return 1
 	}
 	return 0
-}
-
-func nullablePort(value *uint16) any {
-	if value == nil {
-		return nil
-	}
-	return *value
 }
 
 func nullableTime(value *time.Time) any {

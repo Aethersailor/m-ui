@@ -8,6 +8,7 @@ import (
 	"sort"
 
 	"github.com/Aethersailor/m-ui/internal/domain"
+	"github.com/Aethersailor/m-ui/internal/protocol"
 	"gopkg.in/yaml.v3"
 )
 
@@ -15,9 +16,18 @@ type Compiler interface {
 	Compile(ctx context.Context, state domain.DesiredState) ([]byte, error)
 }
 
-type YAMLCompiler struct{}
+type YAMLCompiler struct {
+	Registry protocol.Registry
+}
 
-func (YAMLCompiler) Compile(ctx context.Context, state domain.DesiredState) ([]byte, error) {
+func (compiler YAMLCompiler) registry() protocol.Registry {
+	if compiler.Registry.Empty() {
+		return protocol.DefaultRegistry()
+	}
+	return compiler.Registry
+}
+
+func (compiler YAMLCompiler) Compile(ctx context.Context, state domain.DesiredState) ([]byte, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -30,17 +40,17 @@ func (YAMLCompiler) Compile(ctx context.Context, state domain.DesiredState) ([]b
 		return nil, fmt.Errorf("validate desired state: %w", err)
 	}
 
-	listeners := make([]domain.Listener, 0, len(state.Listeners))
-	for _, listener := range state.Listeners {
-		if listener.Enabled {
-			listeners = append(listeners, listener)
+	nodes := make([]domain.Node, 0, len(state.Nodes))
+	for _, node := range state.Nodes {
+		if node.Enabled {
+			nodes = append(nodes, node)
 		}
 	}
-	sort.SliceStable(listeners, func(left, right int) bool {
-		if listeners[left].Name == listeners[right].Name {
-			return listeners[left].ID < listeners[right].ID
+	sort.SliceStable(nodes, func(left, right int) bool {
+		if nodes[left].Name == nodes[right].Name {
+			return nodes[left].ID < nodes[right].ID
 		}
-		return listeners[left].Name < listeners[right].Name
+		return nodes[left].Name < nodes[right].Name
 	})
 
 	document := configuration{
@@ -49,7 +59,7 @@ func (YAMLCompiler) Compile(ctx context.Context, state domain.DesiredState) ([]b
 		IPv6:               true,
 		ExternalController: state.MihomoExternalControllerBind.Address(),
 		Secret:             state.ControllerSecret,
-		Listeners:          make([]vlessListener, 0, len(listeners)),
+		Listeners:          make([]any, 0, len(nodes)),
 		Rules:              []string{"MATCH,DIRECT"},
 	}
 	if len(state.ExternalControllerCORSOrigins) > 0 {
@@ -57,37 +67,13 @@ func (YAMLCompiler) Compile(ctx context.Context, state domain.DesiredState) ([]b
 			AllowOrigins: append([]string(nil), state.ExternalControllerCORSOrigins...),
 		}
 	}
-	for _, listener := range listeners {
-		users := listener.EffectiveUsers(state.AsOf)
-		sort.SliceStable(users, func(left, right int) bool {
-			if users[left].Name == users[right].Name {
-				return users[left].ID < users[right].ID
-			}
-			return users[left].Name < users[right].Name
-		})
-		compiledUsers := make([]vlessUser, 0, len(users))
-		for _, user := range users {
-			compiledUsers = append(compiledUsers, vlessUser{
-				Username: user.Name,
-				UUID:     user.UUID,
-				Flow:     domain.VLESSFlow,
-			})
+	registry := compiler.registry()
+	for _, node := range nodes {
+		compiled, err := registry.Compile(ctx, node, state.AsOf)
+		if err != nil {
+			return nil, err
 		}
-		document.Listeners = append(document.Listeners, vlessListener{
-			Name:           listener.Name,
-			Type:           "vless",
-			Listen:         listener.ListenAddress,
-			Port:           listener.ListenPort,
-			Users:          compiledUsers,
-			UDP:            listener.UDPEnabled,
-			PacketEncoding: domain.PacketEncoding,
-			Reality: realityConfiguration{
-				Destination: listener.RealityDest,
-				PrivateKey:  listener.RealityPrivateKey,
-				ShortIDs:    []string{listener.ShortID},
-				ServerNames: []string{listener.ServerName},
-			},
-		})
+		document.Listeners = append(document.Listeners, compiled)
 	}
 
 	var output bytes.Buffer
@@ -113,35 +99,11 @@ type configuration struct {
 	ExternalController     string                  `yaml:"external-controller"`
 	ExternalControllerCORS *externalControllerCORS `yaml:"external-controller-cors,omitempty"`
 	Secret                 string                  `yaml:"secret"`
-	Listeners              []vlessListener         `yaml:"listeners"`
+	Listeners              []any                   `yaml:"listeners"`
 	Rules                  []string                `yaml:"rules"`
 }
 
 type externalControllerCORS struct {
 	AllowOrigins        []string `yaml:"allow-origins,omitempty"`
 	AllowPrivateNetwork bool     `yaml:"allow-private-network,omitempty"`
-}
-
-type vlessListener struct {
-	Name           string               `yaml:"name"`
-	Type           string               `yaml:"type"`
-	Listen         string               `yaml:"listen"`
-	Port           uint16               `yaml:"port"`
-	Users          []vlessUser          `yaml:"users"`
-	UDP            bool                 `yaml:"udp"`
-	PacketEncoding string               `yaml:"packet-encoding"`
-	Reality        realityConfiguration `yaml:"reality-config"`
-}
-
-type vlessUser struct {
-	Username string `yaml:"username"`
-	UUID     string `yaml:"uuid"`
-	Flow     string `yaml:"flow"`
-}
-
-type realityConfiguration struct {
-	Destination string   `yaml:"dest"`
-	PrivateKey  string   `yaml:"private-key"`
-	ShortIDs    []string `yaml:"short-id"`
-	ServerNames []string `yaml:"server-names"`
 }
