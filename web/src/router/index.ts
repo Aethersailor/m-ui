@@ -105,10 +105,16 @@ router.beforeEach(async (to) => {
     preferences.initialize()
   }
   theme.initialize()
-  await auth.initialize()
-  if (setupAvailable && setup.required && to.name !== 'setup') {
-    return { name: 'setup' }
+  if (setupAvailable && setup.required) {
+    if (to.name !== 'setup') {
+      return { name: 'setup' }
+    }
+    // A fresh instance cannot have an authenticated session yet. Avoid an
+    // expected 401 from /auth/me so the one-time setup page remains a clean,
+    // self-contained public flow.
+    return true
   }
+  await auth.initialize()
   if (setupAvailable && setup.complete && to.name === 'setup') {
     return auth.authenticated ? { name: 'dashboard' } : { name: 'login' }
   }

@@ -646,7 +646,16 @@ func securityHeaders(next http.Handler) http.Handler {
 				"img-src 'self' data:; connect-src 'self'; object-src 'none'; "+
 				"base-uri 'none'; frame-ancestors 'none'; form-action 'self'",
 		)
-		response.Header().Set("Cross-Origin-Opener-Policy", "same-origin")
+		// Browsers ignore COOP on insecure origins and report it as a console
+		// error. Emit it only when the request is directly TLS-protected or the
+		// reverse proxy reports an HTTPS origin.
+		forwardedProto, _, _ := strings.Cut(
+			request.Header.Get("X-Forwarded-Proto"),
+			",",
+		)
+		if request.TLS != nil || strings.EqualFold(strings.TrimSpace(forwardedProto), "https") {
+			response.Header().Set("Cross-Origin-Opener-Policy", "same-origin")
+		}
 		response.Header().Set("Cross-Origin-Resource-Policy", "same-origin")
 		response.Header().Set(
 			"Permissions-Policy",

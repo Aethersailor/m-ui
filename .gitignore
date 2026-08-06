@@ -1,5 +1,6 @@
 # Local caches and dependencies
 .cache/
+.playwright-cli/
 web/node_modules/
 
 # Generated frontend and application builds

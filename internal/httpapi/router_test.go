@@ -38,12 +38,14 @@ func TestHealth(t *testing.T) {
 		t.Fatalf("Content-Type = %q, want application/json", got)
 	}
 	expectedHeaders := map[string]string{
-		"Cross-Origin-Opener-Policy":   "same-origin",
 		"Cross-Origin-Resource-Policy": "same-origin",
 		"Permissions-Policy":           "camera=(), geolocation=(), microphone=()",
 		"Referrer-Policy":              "no-referrer",
 		"X-Content-Type-Options":       "nosniff",
 		"X-Frame-Options":              "DENY",
+	}
+	if actual := response.Header().Get("Cross-Origin-Opener-Policy"); actual != "" {
+		t.Errorf("insecure Cross-Origin-Opener-Policy = %q, want empty", actual)
 	}
 	for name, expected := range expectedHeaders {
 		if actual := response.Header().Get(name); actual != expected {
@@ -59,6 +61,31 @@ func TestHealth(t *testing.T) {
 	}
 	if body.Time.IsZero() {
 		t.Fatal("health time is zero")
+	}
+}
+
+func TestHealthUsesCrossOriginOpenerPolicyForSecureOrigins(t *testing.T) {
+	t.Parallel()
+	handler := New(Options{Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+	for _, testCase := range []struct {
+		name    string
+		request *http.Request
+	}{
+		{name: "direct-tls", request: httptest.NewRequest(http.MethodGet, "https://panel.example/healthz", nil)},
+		{name: "forwarded-https", request: func() *http.Request {
+			request := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+			request.Header.Set("X-Forwarded-Proto", "https, http")
+			return request
+		}()},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, testCase.request)
+			if actual := response.Header().Get("Cross-Origin-Opener-Policy"); actual != "same-origin" {
+				t.Fatalf("Cross-Origin-Opener-Policy = %q, want same-origin", actual)
+			}
+		})
 	}
 }
 
