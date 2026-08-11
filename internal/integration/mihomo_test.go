@@ -72,10 +72,7 @@ func TestGeneratedServerAndClientConfigurationsWithRealMihomo(t *testing.T) {
 			scenarioContext, scenarioCancel := context.WithTimeout(ctx, 30*time.Second)
 			defer scenarioCancel()
 			controllerPort := availableTCPPortForHost(t, scenario.bindHost)
-			listenerPort := availableTCPPortForHost(t, scenario.bindHost)
-			for listenerPort == controllerPort {
-				listenerPort = availableTCPPortForHost(t, scenario.bindHost)
-			}
+			listenerPort := availableDistinctTCPPortForHost(t, scenario.bindHost, controllerPort)
 			nodeID := "f8bb1f0d-a396-42fd-a221-c382c8ef9526"
 			userID := "eeed3560-deb6-453c-8d56-9a2f5b66defc"
 			state := domain.DesiredState{
@@ -639,8 +636,8 @@ func TestR3ProtocolsTransferDataWithRealMihomo(t *testing.T) {
 			if current.udpListener {
 				nodePort = availableUDPPortForHost(t, "127.0.0.1")
 			}
-			controllerPort := availableTCPPortForHost(t, "127.0.0.1")
-			clientPort := availableTCPPortForHost(t, "127.0.0.1")
+			controllerPort := availableDistinctTCPPortForHost(t, "127.0.0.1", nodePort)
+			clientPort := availableDistinctTCPPortForHost(t, "127.0.0.1", nodePort, controllerPort)
 			node, credential := current.build(certificatePath, privateKeyPath)
 			nodeID := "0cf1da53-6d60-476e-ab1c-643aebfbc94b"
 			userID := "c7485528-c75a-471f-9e82-52485535885e"
@@ -766,7 +763,7 @@ func TestR3CutoverReloadsEmptyBaselineAndClosesLegacyListenerWithRealMihomo(t *t
 	defer cancel()
 	directory := t.TempDir()
 	controllerPort := availableTCPPortForHost(t, "127.0.0.1")
-	legacyPort := availableTCPPortForHost(t, "127.0.0.1")
+	legacyPort := availableDistinctTCPPortForHost(t, "127.0.0.1", controllerPort)
 	controllerSecret := "r3-cutover-controller-secret"
 	nodeID := "1d66931d-c7ee-4028-bdbd-e9aa97a48013"
 	state := domain.DesiredState{
@@ -1104,6 +1101,23 @@ func availableTCPPortForHost(t *testing.T, host string) int {
 		t.Fatalf("release TCP port: %v", err)
 	}
 	return port
+}
+
+func availableDistinctTCPPortForHost(t *testing.T, host string, excluded ...int) int {
+	t.Helper()
+	for {
+		port := availableTCPPortForHost(t, host)
+		distinct := true
+		for _, excludedPort := range excluded {
+			if port == excludedPort {
+				distinct = false
+				break
+			}
+		}
+		if distinct {
+			return port
+		}
+	}
 }
 
 func availableUDPPortForHost(t *testing.T, host string) int {
