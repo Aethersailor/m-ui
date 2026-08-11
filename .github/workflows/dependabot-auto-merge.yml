@@ -45,7 +45,11 @@ jobs:
               ;;
           esac
 
-          test "$(jq -r '.state' <<<"$pr_json")" = open
+          if [ "$(jq -r '.state' <<<"$pr_json")" != open ]; then
+            echo "PR #$pr_number is no longer open; no merge action is needed."
+            exit 0
+          fi
+
           test "$(jq -r '.draft' <<<"$pr_json")" = false
           test "$(jq -r '.base.ref' <<<"$pr_json")" = "$DEFAULT_BRANCH"
           test "$(jq -r '.head.repo.full_name' <<<"$pr_json")" = "$REPOSITORY"
