@@ -11,6 +11,7 @@ permissions:
   actions: write
   contents: write
   pull-requests: write
+  security-events: read
 
 concurrency:
   group: trusted-security-bot-auto-merge-${{ github.event.workflow_run.head_sha }}
@@ -41,6 +42,28 @@ jobs:
 
           case "$author" in
             "dependabot[bot]"|"github-advanced-security[bot]") ;;
+            Copilot)
+              head_ref="$(jq -r '.head.ref' <<<"$pr_json")"
+              case "$head_ref" in
+                copilot/fix-code-scanning-alerts-[0-9]*)
+                  alert_number="${head_ref##*-}"
+                  if ! [[ "$alert_number" =~ ^[0-9]+$ ]]; then
+                    echo "Skipping Copilot PR with an invalid CodeQL alert reference."
+                    exit 0
+                  fi
+                  alert_json="$(gh api "repos/$REPOSITORY/code-scanning/alerts/$alert_number")"
+                  if [ "$(jq -r '.tool.name' <<<"$alert_json")" != CodeQL ] ||
+                     [ "$(jq -r '.state' <<<"$alert_json")" != open ]; then
+                    echo "Skipping Copilot PR without a matching open CodeQL alert."
+                    exit 0
+                  fi
+                  ;;
+                *)
+                  echo "Skipping Copilot PR outside the CodeQL autofix branch namespace."
+                  exit 0
+                  ;;
+              esac
+              ;;
             *)
               echo "Skipping untrusted PR author: $author"
               exit 0
