@@ -1,38 +1,55 @@
-name: Dependabot Auto Merge
+name: Trusted Security Bot Auto Merge
 
 on:
-  pull_request_target:
+  workflow_run:
+    workflows:
+      - Smart Build & Release
     types:
-      - opened
-      - reopened
-      - synchronize
-      - ready_for_review
+      - completed
 
 permissions:
   contents: write
   pull-requests: write
 
 concurrency:
-  group: dependabot-auto-merge-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
+  group: trusted-security-bot-auto-merge-${{ github.event.workflow_run.head_sha }}
+  cancel-in-progress: false
 
 jobs:
   enable:
-    name: Enable after required checks
+    name: Enable verified bot PR auto-merge
     if: >-
-      github.event.pull_request.user.login == 'dependabot[bot]' &&
-      github.event.pull_request.base.ref == 'master' &&
-      github.event.pull_request.head.repo.full_name == github.repository
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - name: Verify Dependabot metadata
-        uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98 # v3.1.0
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Enable squash auto-merge
+      - name: Verify the live PR and enable squash auto-merge
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PR_URL: ${{ github.event.pull_request.html_url }}
-        run: gh pr merge --auto --squash "$PR_URL"
+          GH_TOKEN: ${{ github.token }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          PULL_REQUESTS_JSON: ${{ toJSON(github.event.workflow_run.pull_requests) }}
+          REPOSITORY: ${{ github.repository }}
+          RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          pr_number="$(jq -er '.[0].number' <<<"$PULL_REQUESTS_JSON")"
+          pr_json="$(gh api "repos/$REPOSITORY/pulls/$pr_number")"
+          author="$(jq -r '.user.login' <<<"$pr_json")"
+
+          case "$author" in
+            "dependabot[bot]"|"github-advanced-security[bot]") ;;
+            *)
+              echo "Skipping untrusted PR author: $author"
+              exit 0
+              ;;
+          esac
+
+          test "$(jq -r '.state' <<<"$pr_json")" = open
+          test "$(jq -r '.draft' <<<"$pr_json")" = false
+          test "$(jq -r '.base.ref' <<<"$pr_json")" = "$DEFAULT_BRANCH"
+          test "$(jq -r '.head.repo.full_name' <<<"$pr_json")" = "$REPOSITORY"
+          test "$(jq -r '.head.sha' <<<"$pr_json")" = "$RUN_HEAD_SHA"
+
+          pr_url="$(jq -r '.html_url' <<<"$pr_json")"
+          gh pr merge --auto --squash "$pr_url"
