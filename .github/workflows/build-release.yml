@@ -992,27 +992,93 @@ jobs:
           repository="ghcr.io/${GITHUB_REPOSITORY,,}"
           echo "$GH_TOKEN" |
             docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
-          removed=0
-          while IFS= read -r tag; do
-            [ -n "$tag" ] || continue
-            if [ "$tag" = latest ] ||
-               [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-              continue
-            fi
-            regctl tag delete "$repository:$tag"
-            removed=$((removed + 1))
-          done < <(regctl tag ls "$repository" \
-            --format '{{range .Tags}}{{println .}}{{end}}')
 
+          archive="$RUNNER_TEMP/m-ui-ghcr-retained"
+          snapshot="$RUNNER_TEMP/m-ui-ghcr-retained.tsv"
+          versions="$RUNNER_TEMP/m-ui-ghcr-versions.json"
+          rm -rf "$archive"
+          : >"$snapshot"
+          mapfile -t retained_tags < <(regctl tag ls "$repository" \
+            --format '{{range .Tags}}{{println .}}{{end}}' |
+            awk '$0 == "latest" || $0 ~ /^v[0-9]+\.[0-9]+\.[0-9]+$/')
+          ((${#retained_tags[@]} > 0))
+          printf '%s\n' "${retained_tags[@]}" | grep -qx latest
+          for tag in "${retained_tags[@]}"; do
+            digest="$(docker buildx imagetools inspect \
+              "$repository:$tag" --format '{{ .Manifest.Digest }}')"
+            [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+            regctl image copy --force-recursive "$repository:$tag" \
+              "ocidir://${archive}:${tag}"
+            printf '%s\t%s\n' "$tag" "$digest" >>"$snapshot"
+          done
+
+          owner_type="$(gh api "users/$GITHUB_REPOSITORY_OWNER" --jq .type)"
+          package_name="${GITHUB_REPOSITORY#*/}"
+          case "$owner_type" in
+            Organization)
+              package_api="orgs/${GITHUB_REPOSITORY_OWNER}/packages/container/${package_name}"
+              ;;
+            User)
+              package_api="users/${GITHUB_REPOSITORY_OWNER}/packages/container/${package_name}"
+              ;;
+            *)
+              echo "unsupported GitHub owner type: ${owner_type}" >&2
+              exit 1
+              ;;
+          esac
+          gh api --paginate --slurp "${package_api}/versions?per_page=100" |
+            jq 'flatten' >"$versions"
+
+          cleanup_status=success
+          removed_versions=0
+          while IFS=$'\t' read -r id digest tags; do
+            [ -n "$id" ] || continue
+            echo "removing legacy GHCR package version ${digest} (${tags})"
+            if gh api --method DELETE "${package_api}/versions/${id}" --silent; then
+              removed_versions=$((removed_versions + 1))
+            else
+              cleanup_status=blocked
+            fi
+          done < <(jq -r '
+            .[] |
+            .metadata.container.tags as $tags |
+            select(any($tags[]?;
+              . != "latest" and
+              (test("^v[0-9]+\\.[0-9]+\\.[0-9]+$") | not))) |
+            [.id, .name, ($tags | join(","))] | @tsv
+          ' "$versions")
+
+          while IFS=$'\t' read -r tag digest; do
+            if ! regctl image copy --force-recursive \
+              "ocidir://${archive}:${tag}" "$repository:$tag"; then
+              cleanup_status=blocked
+            fi
+          done <"$snapshot"
+
+          while IFS=$'\t' read -r tag digest; do
+            current="$(docker buildx imagetools inspect \
+              "$repository:$tag" --format '{{ .Manifest.Digest }}' \
+              2>/dev/null || printf %s -)"
+            if [ "$current" != "$digest" ]; then
+              cleanup_status=blocked
+              echo "::error::GHCR tag ${tag} was not restored to ${digest}"
+            fi
+          done <"$snapshot"
           unexpected="$(regctl tag ls "$repository" \
             --format '{{range .Tags}}{{println .}}{{end}}' |
             awk '$0 != "latest" && $0 !~ /^v[0-9]+\.[0-9]+\.[0-9]+$/')"
-          test -z "$unexpected"
+          if [ -n "$unexpected" ]; then
+            cleanup_status=blocked
+            echo "::error::Unexpected GHCR tags remain:"
+            printf '%s\n' "$unexpected"
+          fi
           {
             echo '### GHCR tag policy'
-            echo "- removed legacy tags: ${removed}"
+            echo "- removed legacy package versions: ${removed_versions}"
             echo '- retained tags: latest and exact vX.Y.Z releases'
+            echo "- cleanup status: ${cleanup_status}"
           } >>"$GITHUB_STEP_SUMMARY"
+          test "$cleanup_status" = success
 
       - name: Attest the Docker Hub mirror
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
