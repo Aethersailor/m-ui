@@ -210,6 +210,7 @@ jobs:
 
   verify:
     needs: validate
+    if: needs.validate.outputs.mode != 'mirror'
     runs-on: ubuntu-24.04
     timeout-minutes: 35
 
@@ -320,6 +321,7 @@ jobs:
 
   policy:
     needs: validate
+    if: needs.validate.outputs.mode != 'mirror'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
 
@@ -379,6 +381,7 @@ jobs:
 
   golangci-lint:
     needs: validate
+    if: needs.validate.outputs.mode != 'mirror'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
 
@@ -763,9 +766,6 @@ jobs:
     if: needs.validate.outputs.mode == 'mirror'
     needs:
       - validate
-      - verify
-      - policy
-      - golangci-lint
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -1766,11 +1766,11 @@ jobs:
         run: |
           set -euo pipefail
           test "$VALIDATE" = success
-          test "$VERIFY" = success
-          test "$POLICY" = success
-          test "$GOLANGCI" = success
           case "$MODE" in
             test)
+              test "$VERIFY" = success
+              test "$POLICY" = success
+              test "$GOLANGCI" = success
               test "$BOOTSTRAP" = skipped
               test "$ASSETS" = skipped
               test "$IMAGE" = skipped
@@ -1779,6 +1779,9 @@ jobs:
               test "$PUBLISH" = skipped
               ;;
             build)
+              test "$VERIFY" = success
+              test "$POLICY" = success
+              test "$GOLANGCI" = success
               test "$BOOTSTRAP" = success
               test "$ASSETS" = success
               test "$IMAGE" = success
@@ -1787,6 +1790,9 @@ jobs:
               test "$PUBLISH" = skipped
               ;;
             mirror)
+              test "$VERIFY" = skipped
+              test "$POLICY" = skipped
+              test "$GOLANGCI" = skipped
               test "$BOOTSTRAP" = skipped
               test "$ASSETS" = skipped
               test "$IMAGE" = skipped
@@ -1795,6 +1801,9 @@ jobs:
               test "$PUBLISH" = skipped
               ;;
             release)
+              test "$VERIFY" = success
+              test "$POLICY" = success
+              test "$GOLANGCI" = success
               test "$BOOTSTRAP" = success
               test "$ASSETS" = success
               test "$IMAGE" = success
