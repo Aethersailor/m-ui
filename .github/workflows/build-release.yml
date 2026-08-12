@@ -70,6 +70,7 @@ jobs:
       target_sha: ${{ steps.guard.outputs.target_sha }}
       target_ref: ${{ steps.guard.outputs.target_ref }}
       prerelease: ${{ steps.guard.outputs.prerelease }}
+      latest_version: ${{ steps.guard.outputs.latest_version }}
       sha8: ${{ steps.guard.outputs.sha8 }}
 
     steps:
@@ -183,6 +184,7 @@ jobs:
             printf 'target_sha=%s\n' "$TARGET_SHA"
             printf 'target_ref=%s\n' "$TARGET_REF"
             printf 'prerelease=%s\n' "$PRERELEASE"
+            printf 'latest_version=%s\n' "$latest"
             printf 'sha8=%s\n' "$SHA8"
           } >>"$GITHUB_OUTPUT"
           {
@@ -794,6 +796,7 @@ jobs:
           DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
           EXPECTED_VERSION: ${{ needs.validate.outputs.full_version }}
+          LATEST_VERSION: ${{ needs.validate.outputs.latest_version }}
           PRERELEASE: ${{ needs.validate.outputs.prerelease }}
           TARGET_SHA: ${{ needs.validate.outputs.target_sha }}
           VERSION: ${{ needs.validate.outputs.version }}
@@ -924,19 +927,21 @@ jobs:
 
           version_before="$(tag_digest "$VERSION")"
           latest_before=-
-          if [ "$PRERELEASE" != true ]; then
+          updates_latest=false
+          if [ "$PRERELEASE" != true ] && [ "$VERSION" = "$LATEST_VERSION" ]; then
+            updates_latest=true
             latest_before="$(tag_digest latest)"
           fi
           printf '%s\t%s\n' "$VERSION" "$version_before" \
             >"$state_dir/tag-snapshot"
-          if [ "$PRERELEASE" != true ]; then
+          if [ "$updates_latest" = true ]; then
             printf '%s\t%s\n' latest "$latest_before" \
               >>"$state_dir/tag-snapshot"
           fi
 
           if [ "$version_before" != - ]; then
             test "$version_before" = "$source_digest"
-            if [ "$PRERELEASE" = true ] ||
+            if [ "$updates_latest" = false ] ||
                [ "$latest_before" = "$source_digest" ]; then
               echo "Docker Hub already contains the verified release."
               mutation_needed=false
@@ -953,14 +958,14 @@ jobs:
               regctl image copy "${source_repository}@${source_digest}" \
                 "${target_repository}:${VERSION}"
             fi
-            if [ "$PRERELEASE" != true ]; then
+            if [ "$updates_latest" = true ]; then
               regctl image copy "${target_repository}:${VERSION}" \
                 "${target_repository}:latest"
             fi
           fi
 
           verify_tags=("$VERSION")
-          if [ "$PRERELEASE" != true ]; then
+          if [ "$updates_latest" = true ]; then
             verify_tags+=(latest)
           fi
           for tag in "${verify_tags[@]}"; do
@@ -979,7 +984,7 @@ jobs:
             echo '### Docker Hub mirror'
             echo "- source: ${source_repository}@${source_digest}"
             echo "- target: ${target_repository}:${VERSION}"
-            if [ "$PRERELEASE" != true ]; then
+            if [ "$updates_latest" = true ]; then
               echo "- stable tag: ${target_repository}:latest"
             fi
           } >>"$GITHUB_STEP_SUMMARY"

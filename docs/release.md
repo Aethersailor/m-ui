@@ -120,6 +120,9 @@ also removes legacy GHCR tags outside `latest` and exact `vX.Y.Z` releases;
 digest-addressed platform manifests required by retained indexes remain stored,
 while unreferenced historical manifests are removed.
 
+Mirror mode updates `latest` only when mirroring the repository's highest
+stable version tag, so backfilling an older release cannot roll users back.
+
 ## Dispatching
 
 A formal release is manual and requires `mode=release`, a version strategy,
