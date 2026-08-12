@@ -117,7 +117,8 @@ Linux amd64 and arm64, and verifies the OCI revision and version labels on both
 platform manifests. GitHub provenance remains in the GitHub attestation store
 instead of being pushed as a synthetic `sha256-*` registry tag. Mirror mode
 also removes legacy GHCR tags outside `latest` and exact `vX.Y.Z` releases;
-digest-addressed platform manifests required by retained indexes remain stored.
+digest-addressed platform manifests required by retained indexes remain stored,
+while unreferenced historical manifests are removed.
 
 ## Dispatching
 

@@ -1055,6 +1055,32 @@ jobs:
             fi
           done <"$snapshot"
 
+          reachable="$RUNNER_TEMP/m-ui-ghcr-reachable.txt"
+          cut -f2 "$snapshot" >"$reachable"
+          while IFS=$'\t' read -r tag digest; do
+            docker buildx imagetools inspect "$repository:$tag" --raw |
+              jq -r '.manifests[]?.digest' >>"$reachable"
+          done <"$snapshot"
+          sort -u -o "$reachable" "$reachable"
+
+          gh api --paginate --slurp "${package_api}/versions?per_page=100" |
+            jq 'flatten' >"$versions"
+          while IFS=$'\t' read -r id digest; do
+            [ -n "$id" ] || continue
+            echo "removing unreachable GHCR package version ${digest}"
+            if gh api --method DELETE "${package_api}/versions/${id}" --silent; then
+              removed_versions=$((removed_versions + 1))
+            else
+              cleanup_status=blocked
+            fi
+          done < <(jq --rawfile reachable "$reachable" -r '
+            ($reachable | split("\n") | map(select(length > 0))) as $keep |
+            .[] as $version |
+            select(($version.metadata.container.tags | length) == 0) |
+            select(($keep | index($version.name)) == null) |
+            [$version.id, $version.name] | @tsv
+          ' "$versions")
+
           while IFS=$'\t' read -r tag digest; do
             current="$(docker buildx imagetools inspect \
               "$repository:$tag" --format '{{ .Manifest.Digest }}' \
@@ -1071,6 +1097,23 @@ jobs:
             cleanup_status=blocked
             echo "::error::Unexpected GHCR tags remain:"
             printf '%s\n' "$unexpected"
+          fi
+          gh api --paginate --slurp "${package_api}/versions?per_page=100" |
+            jq 'flatten' >"$versions"
+          actual_digests="$(mktemp)"
+          jq -r '.[].name' "$versions" | sort -u >"$actual_digests"
+          missing="$(comm -23 "$reachable" "$actual_digests")"
+          unreachable="$(comm -13 "$reachable" "$actual_digests")"
+          if [ -n "$missing" ] || [ -n "$unreachable" ]; then
+            cleanup_status=blocked
+            [ -z "$missing" ] || {
+              echo '::error::Required GHCR package versions are missing:'
+              printf '%s\n' "$missing"
+            }
+            [ -z "$unreachable" ] || {
+              echo '::error::Unreachable GHCR package versions remain:'
+              printf '%s\n' "$unreachable"
+            }
           fi
           {
             echo '### GHCR tag policy'
