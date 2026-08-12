@@ -772,6 +772,7 @@ jobs:
       contents: read
       id-token: write
       attestations: write
+      packages: write
 
     steps:
       - name: Set up Docker Buildx
@@ -981,6 +982,36 @@ jobs:
             if [ "$PRERELEASE" != true ]; then
               echo "- stable tag: ${target_repository}:latest"
             fi
+          } >>"$GITHUB_STEP_SUMMARY"
+
+      - name: Remove legacy GHCR tags
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          repository="ghcr.io/${GITHUB_REPOSITORY,,}"
+          echo "$GH_TOKEN" |
+            docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          removed=0
+          while IFS= read -r tag; do
+            [ -n "$tag" ] || continue
+            if [ "$tag" = latest ] ||
+               [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              continue
+            fi
+            regctl tag delete "$repository:$tag"
+            removed=$((removed + 1))
+          done < <(regctl tag ls "$repository" \
+            --format '{{range .Tags}}{{println .}}{{end}}')
+
+          unexpected="$(regctl tag ls "$repository" \
+            --format '{{range .Tags}}{{println .}}{{end}}' |
+            awk '$0 != "latest" && $0 !~ /^v[0-9]+\.[0-9]+\.[0-9]+$/')"
+          test -z "$unexpected"
+          {
+            echo '### GHCR tag policy'
+            echo "- removed legacy tags: ${removed}"
+            echo '- retained tags: latest and exact vX.Y.Z releases'
           } >>"$GITHUB_STEP_SUMMARY"
 
       - name: Attest the Docker Hub mirror

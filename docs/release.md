@@ -115,7 +115,9 @@ exist, and refuses to publish if an existing repository is private.
 The workflow compares the complete GHCR and Docker Hub indexes, requires only
 Linux amd64 and arm64, and verifies the OCI revision and version labels on both
 platform manifests. GitHub provenance remains in the GitHub attestation store
-instead of being pushed as a synthetic `sha256-*` registry tag.
+instead of being pushed as a synthetic `sha256-*` registry tag. Mirror mode
+also removes legacy GHCR tags outside `latest` and exact `vX.Y.Z` releases;
+digest-addressed platform manifests required by retained indexes remain stored.
 
 ## Dispatching
 
