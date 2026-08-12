@@ -3,7 +3,9 @@
 The image includes m-ui and a verified Mihomo bootstrap. Both long-running
 processes use UID/GID `10001:10001`; the container never starts a root
 initializer. The default and every formal Release Compose file use
-`ghcr.io/aethersailor/m-ui:latest`.
+`ghcr.io/aethersailor/m-ui:latest`. The identical release is also available as
+`aethersailor/m-ui:latest` on Docker Hub; replace only the image name when that
+registry is preferred.
 
 ## Quick start
 

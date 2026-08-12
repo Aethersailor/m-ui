@@ -17,6 +17,9 @@
   <a href="https://github.com/Aethersailor/m-ui/pkgs/container/m-ui">
     <img src="https://img.shields.io/badge/container-GHCR-2496ED?logo=docker&logoColor=white" alt="GHCR">
   </a>
+  <a href="https://hub.docker.com/r/aethersailor/m-ui">
+    <img src="https://img.shields.io/docker/v/aethersailor/m-ui?sort=semver&label=Docker%20Hub" alt="Docker Hub">
+  </a>
   <a href="https://github.com/Aethersailor/m-ui/actions/workflows/build-release.yml">
     <img src="https://github.com/Aethersailor/m-ui/actions/workflows/build-release.yml/badge.svg?branch=master" alt="Build">
   </a>
@@ -203,11 +206,16 @@ sudo m-ui purge
 
 ### 方式二：Docker Compose 部署
 
-Docker 镜像通过 GHCR 发布：
+Docker 镜像同时发布到 GHCR 和 Docker Hub，内容与标签保持一致：
 
 ```text
 ghcr.io/aethersailor/m-ui
+aethersailor/m-ui
 ```
+
+正式版本提供 `latest` 和对应的 `vX.Y.Z` 标签。默认安装脚本和 Compose 使用
+GHCR；需要从 Docker Hub 拉取时，将镜像地址改为
+`aethersailor/m-ui:latest`。
 
 容器以 UID/GID `10001:10001` 非 root 身份运行，内部直接监督 Mihomo，不运行 systemd 或 OpenRC。
 

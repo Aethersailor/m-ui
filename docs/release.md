@@ -3,7 +3,7 @@
 m-ui has one GitHub Actions workflow:
 `.github/workflows/build-release.yml` (`Smart Build & Release`). The same
 workflow owns source verification, native packages, Docker images, workflow
-artifacts, GHCR publication, and GitHub Releases.
+artifacts, GHCR and Docker Hub publication, and GitHub Releases.
 
 ## Modes
 
@@ -17,9 +17,13 @@ dispatch selects one mode:
   deb, apk, SBOM, checksum, Mihomo bootstrap, and Docker-image artifacts.
   Artifacts are uploaded to the workflow run; no registry tag, Git tag, or
   GitHub Release is created.
+- `mirror`: verify one existing public GitHub Release and its GHCR image, then
+  copy that exact multi-architecture digest to Docker Hub. This mode does not
+  rebuild artifacts, create a tag, or change the GitHub Release.
 - `release`: run the complete `build` graph, attest the exact artifacts,
-  publish GHCR, create the annotated source tag and draft Release, and expose
-  the Release only after every identity check succeeds.
+  publish identical GHCR and Docker Hub images, create the annotated source tag
+  and draft Release, and expose the Release only after every identity check
+  succeeds.
 
 The final `complete` job checks that required jobs succeeded and that jobs
 which must not run in the selected mode were skipped.
@@ -30,13 +34,14 @@ Every run resolves one strict base tag `vX.Y.Z` and the exact target commit.
 The complete product version is:
 
 ```text
-vX.Y.Z.g<12-character-commit-id>
+vX.Y.Z.g<8-character-commit-id>
 ```
 
 For non-release runs, `auto` uses the latest strict semantic-version tag. For
 release runs, `auto` increments the patch version; explicit, patch, minor, and
 major modes are also available. A release refuses an existing Git tag, GitHub
-Release, or GHCR version tag.
+Release, GHCR version tag, or Docker Hub version tag. Mirror mode requires the
+exact existing release tag as both the version and target ref.
 
 The complete version is injected into the Go binary, package metadata, Web UI
 (via the health API), health JSON, and OCI image version label. The full
@@ -80,10 +85,14 @@ those BuildKit caches.
 
 ## Registry policy
 
-GHCR retains only these public image tags:
+GHCR and Docker Hub retain only these public image tags:
 
 - the exact release tag, for example `v0.2.0`;
 - `latest` for the newest stable release.
+
+The registries still store untagged platform manifests and layers behind each
+multi-architecture index. Those digest-addressed objects are required by the
+version and `latest` tags; they are not additional user-facing image tags.
 
 A prerelease publishes only its exact version tag. Push and `build` runs never
 publish `edge`, commit, architecture, major, minor, candidate, or other
@@ -93,15 +102,20 @@ auto-update deployment entrypoint, not an immutable release-identity artifact.
 
 The multi-architecture image is pushed directly with its final tags, so no
 temporary registry tags are required. Before publication, the workflow
-enumerates GHCR package versions through the paginated GitHub Packages API and
-snapshots every tag it will change. On failure it restores prior digests and
-deletes only newly-created package versions whose complete tag set is proven
-safe. Ambiguous API data fails closed.
+authenticates to both registries, checks that the Docker Hub token grants pull,
+push, and delete access to `aethersailor/m-ui`, and snapshots every tag it will
+change. On failure it restores prior digests and removes only tags created by
+the failed attempt. Ambiguous registry data fails closed.
 
-Docker Hub is deliberately disabled today. The workflow reserves
-`vars.DOCKERHUB_IMAGE` as the future registry target at the same Buildx tag
-boundary; adding credentials and parity rollback does not require another
-compile workflow.
+Docker Hub publication requires the repository secrets `DOCKERHUB_USERNAME`
+and `DOCKERHUB_TOKEN`. The token must grant read, write, and delete access. The
+workflow creates the public `aethersailor/m-ui` repository when it does not yet
+exist, and refuses to publish if an existing repository is private.
+
+The workflow compares the complete GHCR and Docker Hub indexes, requires only
+Linux amd64 and arm64, and verifies the OCI revision and version labels on both
+platform manifests. GitHub provenance remains in the GitHub attestation store
+instead of being pushed as a synthetic `sha256-*` registry tag.
 
 ## Dispatching
 

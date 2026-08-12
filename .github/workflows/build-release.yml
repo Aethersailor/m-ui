@@ -8,13 +8,14 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: Test only, build downloadable artifacts, or publish a release
+        description: Test, build artifacts, mirror an existing release, or publish a release
         required: true
         default: test
         type: choice
         options:
           - test
           - build
+          - mirror
           - release
       version_mode:
         description: Use the latest tag, an explicit version, or bump the latest tag
@@ -52,8 +53,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: smart-build-${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'release' && 'release' || github.ref }}
-  cancel-in-progress: ${{ !(github.event_name == 'workflow_dispatch' && inputs.mode == 'release') }}
+  group: smart-build-${{ github.event_name == 'workflow_dispatch' && (inputs.mode == 'release' || inputs.mode == 'mirror') && 'registry' || github.ref }}
+  cancel-in-progress: ${{ !(github.event_name == 'workflow_dispatch' && (inputs.mode == 'release' || inputs.mode == 'mirror')) }}
 
 jobs:
   validate:
@@ -103,7 +104,7 @@ jobs:
             PRERELEASE="false"
           fi
           case "$MODE" in
-            test|build|release) ;;
+            test|build|mirror|release) ;;
             *) echo "unsupported workflow mode: $MODE" >&2; exit 1 ;;
           esac
           [[ "$TARGET_REF" =~ ^[A-Za-z0-9._/-]+$ ]]
@@ -151,6 +152,16 @@ jobs:
           FULL_VERSION="${VERSION}.g${SHA8}"
           PACKAGE_VERSION="${VERSION#v}.g${SHA8}"
           CREATED="$(git show -s --format=%cI "$TARGET_SHA")"
+          if [ "$MODE" = mirror ]; then
+            test "$EVENT_NAME" = workflow_dispatch
+            test "$TARGET_REF" = "$VERSION"
+            test "$(git rev-parse "${VERSION}^{commit}")" = "$TARGET_SHA"
+            release_json="$(gh release view "$VERSION" \
+              --json isDraft,isPrerelease,tagName)"
+            test "$(jq -r .tagName <<<"$release_json")" = "$VERSION"
+            test "$(jq -r .isDraft <<<"$release_json")" = false
+            test "$(jq -r .isPrerelease <<<"$release_json")" = "$PRERELEASE"
+          fi
           if [ "$MODE" = release ]; then
             test "$CONFIRM" = RELEASE
             if git ls-remote --exit-code --tags origin "refs/tags/$VERSION"; then
@@ -183,13 +194,13 @@ jobs:
           } >>"$GITHUB_STEP_SUMMARY"
 
       - name: Lock official Mihomo release identity
-        if: steps.guard.outputs.mode != 'test'
+        if: steps.guard.outputs.mode == 'build' || steps.guard.outputs.mode == 'release'
         env:
           M_UI_GITHUB_TOKEN: ${{ github.token }}
         run: bash scripts/resolve-mihomo.sh --output packaging/bootstrap
 
       - name: Upload locked bootstrap identity
-        if: steps.guard.outputs.mode != 'test'
+        if: steps.guard.outputs.mode == 'build' || steps.guard.outputs.mode == 'release'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-identity-${{ steps.guard.outputs.sha8 }}
@@ -249,14 +260,14 @@ jobs:
           grep -F "date=${BUILD_DATE}" <<<"$build_output"
 
       - name: Download the locked Mihomo identity for artifact builds
-        if: needs.validate.outputs.mode != 'test'
+        if: needs.validate.outputs.mode == 'build' || needs.validate.outputs.mode == 'release'
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: release-identity-${{ needs.validate.outputs.sha8 }}
           path: packaging/bootstrap
 
       - name: Prepare the exact locked Mihomo used by the image
-        if: needs.validate.outputs.mode != 'test'
+        if: needs.validate.outputs.mode == 'build' || needs.validate.outputs.mode == 'release'
         run: bash scripts/resolve-mihomo.sh --output packaging/bootstrap --architecture amd64
 
       - name: Run locked real Mihomo smoke test
@@ -389,7 +400,7 @@ jobs:
           version: v2.12.2
 
   bootstrap:
-    if: needs.validate.outputs.mode != 'test'
+    if: needs.validate.outputs.mode == 'build' || needs.validate.outputs.mode == 'release'
     needs:
       - validate
       - verify
@@ -748,6 +759,287 @@ jobs:
               test -f /var/lib/m-ui/package-test-marker
             '
 
+  mirror:
+    if: needs.validate.outputs.mode == 'mirror'
+    needs:
+      - validate
+      - verify
+      - policy
+      - golangci-lint
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+
+    steps:
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      - name: Install verified registry client
+        run: |
+          curl --fail --location --proto '=https' --proto-redir '=https' \
+            --output regctl \
+            https://github.com/regclient/regclient/releases/download/v0.11.5/regctl-linux-amd64
+          echo 'c93aa7638749f5aaac1a8e01787321889c78f0101809bb2880343478d0ba0467  regctl' |
+            sha256sum --check
+          chmod 0755 regctl
+          sudo install -m 0755 regctl /usr/local/bin/regctl
+
+      - name: Mirror the verified GHCR release to Docker Hub
+        id: mirror-images
+        env:
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          EXPECTED_VERSION: ${{ needs.validate.outputs.full_version }}
+          PRERELEASE: ${{ needs.validate.outputs.prerelease }}
+          TARGET_SHA: ${{ needs.validate.outputs.target_sha }}
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          set -euo pipefail
+          state_dir="$RUNNER_TEMP/m-ui-mirror-state"
+          rm -rf "$state_dir"
+          mkdir -p "$state_dir"
+
+          namespace="${GITHUB_REPOSITORY_OWNER,,}"
+          test -n "$DOCKERHUB_USERNAME"
+          test -n "$DOCKERHUB_TOKEN"
+          test "${DOCKERHUB_USERNAME,,}" = "$namespace"
+          registry_path="${namespace}/m-ui"
+          source_repository="ghcr.io/${GITHUB_REPOSITORY,,}"
+          target_repository="docker.io/${registry_path}"
+          printf '%s\n' "$target_repository" >"$state_dir/repository"
+
+          hub_auth_payload="$(jq -nc \
+            --arg identifier "$DOCKERHUB_USERNAME" \
+            --arg secret "$DOCKERHUB_TOKEN" \
+            '{identifier: $identifier, secret: $secret}')"
+          hub_token="$(curl --fail --silent --show-error \
+            --request POST --header 'Content-Type: application/json' \
+            --data "$hub_auth_payload" \
+            'https://hub.docker.com/v2/auth/token' |
+            jq -er .access_token)"
+          repository_json="$(mktemp)"
+          repository_status="$(curl --silent --show-error \
+            --output "$repository_json" --write-out '%{http_code}' \
+            --header "Authorization: Bearer ${hub_token}" \
+            "https://hub.docker.com/v2/namespaces/${namespace}/repositories/m-ui")"
+          case "$repository_status" in
+            200)
+              jq -e '.is_private == false' "$repository_json" >/dev/null
+              ;;
+            404)
+              create_payload="$(jq -nc --arg namespace "$namespace" '{
+                name: "m-ui",
+                namespace: $namespace,
+                description: "Lightweight Web UI for one Mihomo instance",
+                registry: "docker.io",
+                is_private: false
+              }')"
+              create_status="$(curl --silent --show-error \
+                --output "$repository_json" --write-out '%{http_code}' \
+                --request POST --header 'Content-Type: application/json' \
+                --header "Authorization: Bearer ${hub_token}" \
+                --data "$create_payload" \
+                "https://hub.docker.com/v2/namespaces/${namespace}/repositories")"
+              test "$create_status" = 201
+              jq -e '.name == "m-ui" and .is_private == false' \
+                "$repository_json" >/dev/null
+              ;;
+            *)
+              echo "unexpected Docker Hub repository status: ${repository_status}" >&2
+              exit 1
+              ;;
+          esac
+
+          auth_json="$(curl --fail --silent --show-error \
+            --user "${DOCKERHUB_USERNAME}:${DOCKERHUB_TOKEN}" \
+            --get 'https://auth.docker.io/token' \
+            --data-urlencode 'service=registry.docker.io' \
+            --data-urlencode "scope=repository:${registry_path}:pull,push,delete")"
+          registry_token="$(jq -er '.token // .access_token' <<<"$auth_json")"
+          jwt_payload="${registry_token#*.}"
+          jwt_payload="${jwt_payload%%.*}"
+          jwt_payload="$(tr '_-' '/+' <<<"$jwt_payload")"
+          case $((${#jwt_payload} % 4)) in
+            2) jwt_payload+='==' ;;
+            3) jwt_payload+='=' ;;
+          esac
+          token_claims="$(base64 --decode <<<"$jwt_payload")"
+          jq -e --arg repository "$registry_path" '
+            any(.access[]?;
+              .type == "repository" and .name == $repository and
+              (.actions | index("pull")) != null and
+              (.actions | index("push")) != null and
+              (.actions | index("delete")) != null)
+          ' <<<"$token_claims" >/dev/null
+          echo "$DOCKERHUB_TOKEN" |
+            docker login docker.io -u "$DOCKERHUB_USERNAME" --password-stdin
+
+          source_digest="$(docker buildx imagetools inspect \
+            "${source_repository}:${VERSION}" \
+            --format '{{ .Manifest.Digest }}')"
+          [[ "$source_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          source_index="$(docker buildx imagetools inspect \
+            "${source_repository}@${source_digest}" --raw)"
+          jq -e '
+            (.manifests | length) == 2 and
+            ([.manifests[] | [.platform.os, .platform.architecture]] | sort) ==
+              [["linux", "amd64"], ["linux", "arm64"]]
+          ' <<<"$source_index" >/dev/null
+          while IFS=$'\t' read -r architecture platform_digest; do
+            labels="$(docker buildx imagetools inspect \
+              "${source_repository}@${platform_digest}" \
+              --format '{{json .Image.Config.Labels}}')"
+            jq -e --arg revision "$TARGET_SHA" --arg version "$EXPECTED_VERSION" '
+              .["org.opencontainers.image.revision"] == $revision and
+              .["org.opencontainers.image.version"] == $version
+            ' <<<"$labels" >/dev/null
+            echo "verified source identity for linux/${architecture}"
+          done < <(jq -r '.manifests[] |
+            [.platform.architecture, .digest] | @tsv' <<<"$source_index")
+
+          tag_digest() {
+            local tag="$1"
+            local status digest
+            status="$(curl --silent --show-error --output /dev/null \
+              --write-out '%{http_code}' \
+              --header "Authorization: Bearer ${registry_token}" \
+              --header 'Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json' \
+              "https://registry-1.docker.io/v2/${registry_path}/manifests/${tag}")"
+            case "$status" in
+              200)
+                digest="$(docker buildx imagetools inspect \
+                  "${target_repository}:${tag}" \
+                  --format '{{ .Manifest.Digest }}')"
+                [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+                printf '%s\n' "$digest"
+                ;;
+              404) printf '%s\n' - ;;
+              *) echo "unexpected Docker Hub status ${status} for ${tag}" >&2; return 1 ;;
+            esac
+          }
+
+          version_before="$(tag_digest "$VERSION")"
+          latest_before=-
+          if [ "$PRERELEASE" != true ]; then
+            latest_before="$(tag_digest latest)"
+          fi
+          printf '%s\t%s\n' "$VERSION" "$version_before" \
+            >"$state_dir/tag-snapshot"
+          if [ "$PRERELEASE" != true ]; then
+            printf '%s\t%s\n' latest "$latest_before" \
+              >>"$state_dir/tag-snapshot"
+          fi
+
+          if [ "$version_before" != - ]; then
+            test "$version_before" = "$source_digest"
+            if [ "$PRERELEASE" = true ] ||
+               [ "$latest_before" = "$source_digest" ]; then
+              echo "Docker Hub already contains the verified release."
+              mutation_needed=false
+            else
+              mutation_needed=true
+            fi
+          else
+            mutation_needed=true
+          fi
+
+          if [ "$mutation_needed" = true ]; then
+            touch "$state_dir/mutation-started"
+            if [ "$version_before" = - ]; then
+              regctl image copy "${source_repository}@${source_digest}" \
+                "${target_repository}:${VERSION}"
+            fi
+            if [ "$PRERELEASE" != true ]; then
+              regctl image copy "${target_repository}:${VERSION}" \
+                "${target_repository}:latest"
+            fi
+          fi
+
+          verify_tags=("$VERSION")
+          if [ "$PRERELEASE" != true ]; then
+            verify_tags+=(latest)
+          fi
+          for tag in "${verify_tags[@]}"; do
+            test "$(tag_digest "$tag")" = "$source_digest"
+            target_index="$(docker buildx imagetools inspect \
+              "${target_repository}:${tag}" --raw)"
+            jq -e '
+              (.manifests | length) == 2 and
+              ([.manifests[] | [.platform.os, .platform.architecture]] | sort) ==
+                [["linux", "amd64"], ["linux", "arm64"]]
+            ' <<<"$target_index" >/dev/null
+          done
+          printf 'subject_name=%s\n' "$target_repository" >>"$GITHUB_OUTPUT"
+          printf 'subject_digest=%s\n' "$source_digest" >>"$GITHUB_OUTPUT"
+          {
+            echo '### Docker Hub mirror'
+            echo "- source: ${source_repository}@${source_digest}"
+            echo "- target: ${target_repository}:${VERSION}"
+            if [ "$PRERELEASE" != true ]; then
+              echo "- stable tag: ${target_repository}:latest"
+            fi
+          } >>"$GITHUB_STEP_SUMMARY"
+
+      - name: Attest the Docker Hub mirror
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ${{ steps.mirror-images.outputs.subject_name }}
+          subject-digest: ${{ steps.mirror-images.outputs.subject_digest }}
+
+      - name: Complete the verified Docker Hub mirror
+        run: touch "$RUNNER_TEMP/m-ui-mirror-state/mirror-complete"
+
+      - name: Roll back an incomplete Docker Hub mirror
+        if: ${{ always() }}
+        env:
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+        run: |
+          set +e
+          state_dir="$RUNNER_TEMP/m-ui-mirror-state"
+          if [ -f "$state_dir/mirror-complete" ] ||
+             [ ! -f "$state_dir/mutation-started" ]; then
+            exit 0
+          fi
+
+          cleanup_status=success
+          repository="$(cat "$state_dir/repository")"
+          if ! echo "$DOCKERHUB_TOKEN" | docker login docker.io \
+            -u "$DOCKERHUB_USERNAME" --password-stdin; then
+            cleanup_status=blocked
+          fi
+          declare -A prior=()
+          while IFS=$'\t' read -r tag digest; do
+            prior[$tag]="$digest"
+            if [ "$digest" = - ]; then
+              if ! regctl tag delete --ignore-missing \
+                "${repository}:${tag}"; then
+                cleanup_status=blocked
+              fi
+            elif ! docker buildx imagetools create \
+              --tag "${repository}:${tag}" "${repository}@${digest}"; then
+              cleanup_status=blocked
+            fi
+          done <"$state_dir/tag-snapshot"
+
+          for tag in "${!prior[@]}"; do
+            current="$(docker buildx imagetools inspect \
+              "${repository}:${tag}" --format '{{ .Manifest.Digest }}' \
+              2>/dev/null || printf %s -)"
+            if [ "$current" != "${prior[$tag]}" ]; then
+              cleanup_status=blocked
+              echo "::warning::Docker Hub tag ${tag} was not restored"
+            fi
+          done
+          {
+            echo '### Docker Hub mirror cleanup'
+            echo "- rollback cleanup status: ${cleanup_status}"
+          } >>"$GITHUB_STEP_SUMMARY"
+          test "$cleanup_status" = success
+
   publish:
     if: needs.validate.outputs.mode == 'release'
     needs:
@@ -796,8 +1088,20 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
 
-      - name: Snapshot protected GHCR tags
+      - name: Install verified registry client
+        run: |
+          curl --fail --location --proto '=https' --proto-redir '=https' \
+            --output regctl \
+            https://github.com/regclient/regclient/releases/download/v0.11.5/regctl-linux-amd64
+          echo 'c93aa7638749f5aaac1a8e01787321889c78f0101809bb2880343478d0ba0467  regctl' |
+            sha256sum --check
+          chmod 0755 regctl
+          sudo install -m 0755 regctl /usr/local/bin/regctl
+
+      - name: Authenticate and snapshot protected registry tags
         env:
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.validate.outputs.version }}
           TARGET_SHA: ${{ needs.validate.outputs.target_sha }}
@@ -875,25 +1179,138 @@ jobs:
           if [ "$PRERELEASE" != true ]; then
             snapshot_tag latest
           fi
+
+          echo "$GH_TOKEN" |
+            docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          namespace="${GITHUB_REPOSITORY_OWNER,,}"
+          test -n "$DOCKERHUB_USERNAME"
+          test -n "$DOCKERHUB_TOKEN"
+          test "${DOCKERHUB_USERNAME,,}" = "$namespace"
+          registry_path="${namespace}/m-ui"
+          dockerhub_repository="docker.io/${registry_path}"
+          printf '%s\n' "$dockerhub_repository" \
+            >"$state_dir/dockerhub-repository"
+          printf 'DOCKERHUB_REPOSITORY=%s\n' "$dockerhub_repository" \
+            >>"$GITHUB_ENV"
+
+          hub_auth_payload="$(jq -nc \
+            --arg identifier "$DOCKERHUB_USERNAME" \
+            --arg secret "$DOCKERHUB_TOKEN" \
+            '{identifier: $identifier, secret: $secret}')"
+          hub_token="$(curl --fail --silent --show-error \
+            --request POST --header 'Content-Type: application/json' \
+            --data "$hub_auth_payload" \
+            'https://hub.docker.com/v2/auth/token' |
+            jq -er .access_token)"
+          repository_json="$(mktemp)"
+          repository_status="$(curl --silent --show-error \
+            --output "$repository_json" --write-out '%{http_code}' \
+            --header "Authorization: Bearer ${hub_token}" \
+            "https://hub.docker.com/v2/namespaces/${namespace}/repositories/m-ui")"
+          case "$repository_status" in
+            200)
+              jq -e '.is_private == false' "$repository_json" >/dev/null
+              ;;
+            404)
+              create_payload="$(jq -nc --arg namespace "$namespace" '{
+                name: "m-ui",
+                namespace: $namespace,
+                description: "Lightweight Web UI for one Mihomo instance",
+                registry: "docker.io",
+                is_private: false
+              }')"
+              create_status="$(curl --silent --show-error \
+                --output "$repository_json" --write-out '%{http_code}' \
+                --request POST --header 'Content-Type: application/json' \
+                --header "Authorization: Bearer ${hub_token}" \
+                --data "$create_payload" \
+                "https://hub.docker.com/v2/namespaces/${namespace}/repositories")"
+              test "$create_status" = 201
+              jq -e '.name == "m-ui" and .is_private == false' \
+                "$repository_json" >/dev/null
+              ;;
+            *)
+              echo "unexpected Docker Hub repository status: ${repository_status}" >&2
+              exit 1
+              ;;
+          esac
+
+          auth_json="$(curl --fail --silent --show-error \
+            --user "${DOCKERHUB_USERNAME}:${DOCKERHUB_TOKEN}" \
+            --get 'https://auth.docker.io/token' \
+            --data-urlencode 'service=registry.docker.io' \
+            --data-urlencode "scope=repository:${registry_path}:pull,push,delete")"
+          registry_token="$(jq -er '.token // .access_token' <<<"$auth_json")"
+          jwt_payload="${registry_token#*.}"
+          jwt_payload="${jwt_payload%%.*}"
+          jwt_payload="$(tr '_-' '/+' <<<"$jwt_payload")"
+          case $((${#jwt_payload} % 4)) in
+            2) jwt_payload+='==' ;;
+            3) jwt_payload+='=' ;;
+          esac
+          token_claims="$(base64 --decode <<<"$jwt_payload")"
+          jq -e --arg repository "$registry_path" '
+            any(.access[]?;
+              .type == "repository" and .name == $repository and
+              (.actions | index("pull")) != null and
+              (.actions | index("push")) != null and
+              (.actions | index("delete")) != null)
+          ' <<<"$token_claims" >/dev/null
+          echo "$DOCKERHUB_TOKEN" |
+            docker login docker.io -u "$DOCKERHUB_USERNAME" --password-stdin
+
+          dockerhub_tag_digest() {
+            local tag="$1"
+            local status digest
+            status="$(curl --silent --show-error --output /dev/null \
+              --write-out '%{http_code}' \
+              --header "Authorization: Bearer ${registry_token}" \
+              --header 'Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json' \
+              "https://registry-1.docker.io/v2/${registry_path}/manifests/${tag}")"
+            case "$status" in
+              200)
+                digest="$(docker buildx imagetools inspect \
+                  "${dockerhub_repository}:${tag}" \
+                  --format '{{ .Manifest.Digest }}')"
+                [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+                printf '%s\n' "$digest"
+                ;;
+              404) printf '%s\n' - ;;
+              *) echo "unexpected Docker Hub status ${status} for ${tag}" >&2; return 1 ;;
+            esac
+          }
+
+          dockerhub_snapshot="$state_dir/dockerhub-tag-snapshot"
+          dockerhub_version_digest="$(dockerhub_tag_digest "$VERSION")"
+          test "$dockerhub_version_digest" = -
+          printf '%s\t%s\n' "$VERSION" "$dockerhub_version_digest" \
+            >"$dockerhub_snapshot"
+          if [ "$PRERELEASE" != true ]; then
+            dockerhub_latest_digest="$(dockerhub_tag_digest latest)"
+            printf '%s\t%s\n' latest "$dockerhub_latest_digest" \
+              >>"$dockerhub_snapshot"
+          fi
           touch "$state_dir/promotion-started"
 
-      - name: Publish the exact multi-architecture GHCR image
+      - name: Publish the exact multi-architecture images
         env:
-          GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.validate.outputs.version }}
           FULL_VERSION: ${{ needs.validate.outputs.full_version }}
           TARGET_SHA: ${{ needs.validate.outputs.target_sha }}
           CREATED: ${{ needs.validate.outputs.created }}
           PRERELEASE: ${{ needs.validate.outputs.prerelease }}
-          DOCKERHUB_IMAGE: ${{ vars.DOCKERHUB_IMAGE }}
         run: |
           set -euo pipefail
-          echo "$GH_TOKEN" |
-            docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
-          repository="ghcr.io/${GITHUB_REPOSITORY,,}"
-          tags=(--tag "${repository}:${VERSION}")
+          ghcr_repository="ghcr.io/${GITHUB_REPOSITORY,,}"
+          tags=(
+            --tag "${ghcr_repository}:${VERSION}"
+            --tag "${DOCKERHUB_REPOSITORY}:${VERSION}"
+          )
           if [ "$PRERELEASE" != true ]; then
-            tags+=(--tag "${repository}:latest")
+            tags+=(
+              --tag "${ghcr_repository}:latest"
+              --tag "${DOCKERHUB_REPOSITORY}:latest"
+            )
           fi
           # Keep the runnable index to the two supported platforms. The exact
           # verified index receives GitHub provenance in the attestation step.
@@ -908,23 +1325,40 @@ jobs:
             --cache-from type=gha,scope=m-ui-image-arm64 \
             "${tags[@]}" \
             --push .
-          if [ -n "$DOCKERHUB_IMAGE" ]; then
-            echo "::notice::Docker Hub target ${DOCKERHUB_IMAGE} is reserved; GHCR-only publication remains active"
-          fi
 
       - name: Verify image identity and prepare release evidence
         id: formal-images
         env:
+          FULL_VERSION: ${{ needs.validate.outputs.full_version }}
+          TARGET_SHA: ${{ needs.validate.outputs.target_sha }}
           VERSION: ${{ needs.validate.outputs.version }}
         run: |
           set -euo pipefail
-          repository="ghcr.io/${GITHUB_REPOSITORY,,}"
-          docker buildx imagetools inspect "${repository}:${VERSION}" \
+          ghcr_repository="ghcr.io/${GITHUB_REPOSITORY,,}"
+          docker buildx imagetools inspect "${ghcr_repository}:${VERSION}" \
             --raw >release/IMAGE_MANIFEST.json
           jq -e '
-            [.manifests[].platform.architecture] |
-            sort == ["amd64", "arm64"]
+            (.manifests | length) == 2 and
+            ([.manifests[] | [.platform.os, .platform.architecture]] | sort) ==
+              [["linux", "amd64"], ["linux", "arm64"]]
           ' release/IMAGE_MANIFEST.json
+          dockerhub_manifest="$(mktemp)"
+          docker buildx imagetools inspect \
+            "${DOCKERHUB_REPOSITORY}:${VERSION}" --raw \
+            >"$dockerhub_manifest"
+          cmp release/IMAGE_MANIFEST.json "$dockerhub_manifest"
+          while IFS=$'\t' read -r architecture platform_digest; do
+            labels="$(docker buildx imagetools inspect \
+              "${ghcr_repository}@${platform_digest}" \
+              --format '{{json .Image.Config.Labels}}')"
+            jq -e --arg revision "$TARGET_SHA" --arg version "$FULL_VERSION" '
+              .["org.opencontainers.image.revision"] == $revision and
+              .["org.opencontainers.image.version"] == $version
+            ' <<<"$labels" >/dev/null
+            echo "verified published identity for linux/${architecture}"
+          done < <(jq -r '.manifests[] |
+            [.platform.architecture, .digest] | @tsv' \
+            release/IMAGE_MANIFEST.json)
           cp images/m-ui-image-*.sbom.spdx.json release/
           (
             cd release
@@ -932,13 +1366,22 @@ jobs:
               m-ui-image-*.sbom.spdx.json >>SHA256SUMS
             sha256sum --check SHA256SUMS
           )
-          digest="$(
-            docker buildx imagetools inspect "${repository}:${VERSION}" \
+          ghcr_digest="$(
+            docker buildx imagetools inspect "${ghcr_repository}:${VERSION}" \
               --format '{{ .Manifest.Digest }}'
           )"
-          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
-          printf 'subject_name=%s\n' "$repository" >>"$GITHUB_OUTPUT"
-          printf 'subject_digest=%s\n' "$digest" >>"$GITHUB_OUTPUT"
+          dockerhub_digest="$(
+            docker buildx imagetools inspect \
+              "${DOCKERHUB_REPOSITORY}:${VERSION}" \
+              --format '{{ .Manifest.Digest }}'
+          )"
+          [[ "$ghcr_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          test "$dockerhub_digest" = "$ghcr_digest"
+          {
+            printf 'ghcr_subject_name=%s\n' "$ghcr_repository"
+            printf 'dockerhub_subject_name=%s\n' "$DOCKERHUB_REPOSITORY"
+            printf 'subject_digest=%s\n' "$ghcr_digest"
+          } >>"$GITHUB_OUTPUT"
 
       - name: Attest release assets
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
@@ -958,12 +1401,17 @@ jobs:
             release/IMAGE_MANIFEST.json
             release/MIHOMO_BOOTSTRAP_IDENTITY.json
 
-      - name: Attest multi-architecture image
+      - name: Attest the GHCR multi-architecture image
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
-          subject-name: ${{ steps.formal-images.outputs.subject_name }}
+          subject-name: ${{ steps.formal-images.outputs.ghcr_subject_name }}
           subject-digest: ${{ steps.formal-images.outputs.subject_digest }}
-          push-to-registry: true
+
+      - name: Attest the Docker Hub multi-architecture image
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ${{ steps.formal-images.outputs.dockerhub_subject_name }}
+          subject-digest: ${{ steps.formal-images.outputs.subject_digest }}
 
       - name: Create exact source tag and draft GitHub Release
         env:
@@ -1005,6 +1453,8 @@ jobs:
       - name: Clean up failed release state
         if: ${{ always() }}
         env:
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.validate.outputs.version }}
           TARGET_SHA: ${{ needs.validate.outputs.target_sha }}
@@ -1214,6 +1664,53 @@ jobs:
               note_cleanup "refs/tags/$VERSION identity was not safe to roll back"
             fi
           fi
+
+          if [ -f "$state_dir/promotion-started" ] &&
+              [ ! -f "$state_dir/release-complete" ] &&
+              [ -r "$state_dir/dockerhub-tag-snapshot" ]; then
+            dockerhub_repository="$(cat "$state_dir/dockerhub-repository")"
+            if ! echo "$DOCKERHUB_TOKEN" | docker login docker.io \
+              -u "$DOCKERHUB_USERNAME" --password-stdin; then
+              cleanup_status=blocked
+              note_cleanup "Docker Hub authentication failed during rollback"
+            else
+              dockerhub_tag_digest() {
+                local tag="$1"
+                docker buildx imagetools inspect \
+                  "${dockerhub_repository}:${tag}" \
+                  --format '{{ .Manifest.Digest }}' 2>/dev/null || printf %s -
+              }
+
+              declare -A dockerhub_prior=()
+              dockerhub_restore_verified=true
+              while IFS=$'\t' read -r tag digest; do
+                dockerhub_prior[$tag]="$digest"
+                if [ "$digest" = - ]; then
+                  if ! regctl tag delete --ignore-missing \
+                    "${dockerhub_repository}:${tag}"; then
+                    dockerhub_restore_verified=false
+                  fi
+                elif ! docker buildx imagetools create \
+                  --tag "${dockerhub_repository}:${tag}" \
+                  "${dockerhub_repository}@${digest}"; then
+                  dockerhub_restore_verified=false
+                fi
+              done <"$state_dir/dockerhub-tag-snapshot"
+
+              if [ "$dockerhub_restore_verified" != true ]; then
+                cleanup_status=blocked
+                note_cleanup "Docker Hub prior tags were not restored"
+              fi
+
+              for tag in "${!dockerhub_prior[@]}"; do
+                current="$(dockerhub_tag_digest "$tag")"
+                if [ "$current" != "${dockerhub_prior[$tag]}" ]; then
+                  cleanup_status=blocked
+                  note_cleanup "Docker Hub tag ${tag} was not restored"
+                fi
+              done
+            fi
+          fi
           {
             echo '### Release cleanup'
             if [ "$cleanup_status" = success ]; then
@@ -1247,6 +1744,7 @@ jobs:
       - assets
       - image
       - package-test
+      - mirror
       - publish
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -1263,6 +1761,7 @@ jobs:
           ASSETS: ${{ needs.assets.result }}
           IMAGE: ${{ needs.image.result }}
           PACKAGE_TEST: ${{ needs.package-test.result }}
+          MIRROR: ${{ needs.mirror.result }}
           PUBLISH: ${{ needs.publish.result }}
         run: |
           set -euo pipefail
@@ -1276,6 +1775,7 @@ jobs:
               test "$ASSETS" = skipped
               test "$IMAGE" = skipped
               test "$PACKAGE_TEST" = skipped
+              test "$MIRROR" = skipped
               test "$PUBLISH" = skipped
               ;;
             build)
@@ -1283,6 +1783,15 @@ jobs:
               test "$ASSETS" = success
               test "$IMAGE" = success
               test "$PACKAGE_TEST" = success
+              test "$MIRROR" = skipped
+              test "$PUBLISH" = skipped
+              ;;
+            mirror)
+              test "$BOOTSTRAP" = skipped
+              test "$ASSETS" = skipped
+              test "$IMAGE" = skipped
+              test "$PACKAGE_TEST" = skipped
+              test "$MIRROR" = success
               test "$PUBLISH" = skipped
               ;;
             release)
@@ -1290,6 +1799,7 @@ jobs:
               test "$ASSETS" = success
               test "$IMAGE" = success
               test "$PACKAGE_TEST" = success
+              test "$MIRROR" = skipped
               test "$PUBLISH" = success
               ;;
             *)
@@ -1301,10 +1811,13 @@ jobs:
             echo '### Smart workflow result'
             echo "- mode: $MODE"
             echo '- source verification: passed'
-            if [ "$MODE" != test ]; then
+            if [ "$MODE" = build ] || [ "$MODE" = release ]; then
               echo '- native assets and Docker images: passed'
             fi
+            if [ "$MODE" = mirror ]; then
+              echo '- verified Docker Hub mirror: passed'
+            fi
             if [ "$MODE" = release ]; then
-              echo '- GitHub Release and GHCR publication: passed'
+              echo '- GitHub Release, GHCR, and Docker Hub publication: passed'
             fi
           } >>"$GITHUB_STEP_SUMMARY"
