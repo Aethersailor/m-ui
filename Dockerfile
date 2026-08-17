@@ -7,7 +7,7 @@ RUN npm --prefix web ci
 COPY web ./web
 RUN npm --prefix web run build
 
-FROM golang:1.26.5-alpine3.24 AS go-builder
+FROM golang:1.26.6-alpine3.24 AS go-builder
 ARG VERSION=dev
 ARG COMMIT=unknown
 ARG REVISION=unknown
