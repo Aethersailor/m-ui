@@ -14,7 +14,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "naive-ui": "^2.45.1",
+    "naive-ui": "^2.45.2",
     "pinia": "^4.0.3",
     "qrcode.vue": "^3.10.0",
     "vue": "^3.5.41",
