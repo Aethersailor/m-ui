@@ -26,7 +26,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
       -X github.com/Aethersailor/m-ui/internal/version.dirty=false" \
     -o /out/m-ui ./cmd/m-ui
 
-FROM alpine:3.24.1
+FROM alpine:3.24.2
 ARG TARGETARCH
 ARG VERSION=dev
 ARG REVISION=unknown
